@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeBox Asset Alert</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <strong>DeBox Asset Alert</strong>
+      <span>链上资产订阅通知 Demo</span>
+    </div>
+    <span id="health" class="status">检查中</span>
+  </header>
+
+  <main>
+    <section class="intro">
+      <p class="eyebrow">BSC Asset Monitor</p>
+      <h1>创建资产监控，变化时通过 DeBox Bot 通知</h1>
+      <p>输入钱包地址即可监控 BNB；填写代币合约地址后，可监控对应 ERC20 余额。</p>
+    </section>
+
+    <section class="tool">
+      <div class="tool-heading">
+        <div>
+          <h2>创建监控规则</h2>
+          <p>首次检查会记录当前余额作为基线，后续余额变化才会通知。</p>
+        </div>
+      </div>
+
+      <form id="watch-form">
+        <label>
+          钱包地址
+          <input id="wallet-address" name="wallet_address" placeholder="0x..." required>
+        </label>
+        <label>
+          代币合约地址（可选）
+          <input id="token-address" name="token_address" placeholder="留空则监控 BNB">
+        </label>
+        <label>
+          监控类型
+          <select id="rule-type" name="rule_type">
+            <option value="balance_change">余额变化</option>
+            <option value="incoming">转入</option>
+            <option value="outgoing">转出</option>
+            <option value="balance_threshold">余额阈值</option>
+          </select>
+        </label>
+        <label>
+          金额阈值
+          <input id="threshold" name="threshold" type="number" min="0" step="any" value="0" required>
+        </label>
+        <div class="form-actions">
+          <button id="query-balance" class="secondary" type="button">查询余额</button>
+          <button type="submit">创建监控</button>
+        </div>
+      </form>
+      <p id="action-result" class="result" aria-live="polite"></p>
+    </section>
+
+    <section class="tool">
+      <div class="tool-heading">
+        <div>
+          <h2>订阅支付</h2>
+          <p>在 DeBox 中连接钱包并直接支付至配置的收款地址。交易成功并通过后端链上验证后，订阅自动生效。</p>
+        </div>
+        <button id="connect-wallet" class="secondary" type="button">连接 DeBox 钱包</button>
+      </div>
+      <div id="payment-breakdown" class="payment-breakdown"></div>
+      <button id="pay-subscription" type="button" disabled>支付并开通订阅</button>
+      <p id="payment-result" class="result" aria-live="polite"></p>
+    </section>
+
+    <section>
+      <div class="tool-heading">
+        <div>
+          <h2>套餐与当前权限</h2>
+          <p id="entitlement-summary">正在读取当前套餐。</p>
+        </div>
+      </div>
+      <div id="plan-cards" class="plan-cards"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
