@@ -22,7 +22,6 @@ class Settings:
     app_port: int = int(env("APP_PORT", env("PORT", "8000")))
     public_app_url: str = env("PUBLIC_APP_URL")
     database_url: str = env("DATABASE_URL")
-    database_path: Path = ROOT_DIR / env("DATABASE_PATH", "data/debox_asset_alert.db")
 
     debox_bot_api_key: str = env("DEBOX_BOT_API_KEY")
     debox_bot_api_secret: str = env("DEBOX_BOT_API_SECRET")
