@@ -87,7 +87,7 @@ def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineK
     if private_url:
         buttons.append(boxbotapi.NewInlineKeyboardButtonURL("私聊 Bot", private_url))
     if app_url:
-        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("打开个人监控面板", app_url))
+        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("个人监控面板", app_url))
     if not buttons:
         return boxbotapi.NewInlineKeyboardMarkup()
     return boxbotapi.NewInlineKeyboardMarkup(boxbotapi.NewInlineKeyboardRow(*buttons))
