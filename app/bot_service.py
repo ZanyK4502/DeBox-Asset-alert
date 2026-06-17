@@ -47,9 +47,6 @@ def menu_markup() -> boxbotapi.InlineKeyboardMarkup:
             boxbotapi.NewInlineKeyboardButtonData("监控能力", "alert:features"),
             boxbotapi.NewInlineKeyboardButtonData("订阅方案", "alert:plans"),
         ),
-        boxbotapi.NewInlineKeyboardRow(
-            boxbotapi.NewInlineKeyboardButtonData("项目状态", "alert:status"),
-        ),
     ]
     if app_url:
         rows.append(
@@ -64,7 +61,7 @@ def menu_text() -> str:
     return (
         "<b>DeBox Asset Alert</b><br/>"
         "订阅钱包地址或代币资产变化，并通过 DeBox 接收实时通知。<br/><br/>"
-        "当前 Demo 将展示：监控规则、订阅支付、链上监控和 Bot 通知闭环。"
+        "当前支持：创建监控规则、链上余额查询、订阅支付和 Bot 通知。"
     )
 
 
@@ -72,10 +69,10 @@ def callback_text(data: str) -> str:
     if data == "alert:features":
         return (
             "<b>监控能力</b><br/>"
-            "• 钱包原生币余额变化<br/>"
-            "• ERC20 余额变化<br/>"
-            "• 转入、转出与金额阈值<br/>"
-            "• 私聊或群聊通知"
+            "- 钱包原生币余额变化<br/>"
+            "- ERC20 余额变化<br/>"
+            "- 转入、转出与金额阈值<br/>"
+            "- 私聊或群聊通知"
         )
     if data == "alert:plans":
         return (
@@ -84,10 +81,7 @@ def callback_text(data: str) -> str:
             f"{settings.subscription_days} 天<br/>"
             "支付完成并通过链上验证后，订阅自动生效。"
         )
-    return (
-        "<b>项目状态</b><br/>"
-        "Bot、链上监控与订阅支付均已接通。"
-    )
+    return menu_text()
 
 
 def send_menu(bot: boxbotapi.BotAPI, chat_id: str, chat_type: str) -> None:
@@ -223,7 +217,11 @@ def run() -> None:
                         )
                         handle_message(bot, update.Message)
                     elif update.CallbackQuery is not None:
-                        logging.info("Received callback update=%s data=%r", update.Id, update.CallbackQuery.Data)
+                        logging.info(
+                            "Received callback update=%s data=%r",
+                            update.Id,
+                            update.CallbackQuery.Data,
+                        )
                         handle_callback(bot, update.CallbackQuery)
                 except Exception:
                     logging.exception("Failed to handle update=%s", update.Id)
