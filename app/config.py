@@ -25,6 +25,7 @@ class Settings:
 
     debox_bot_api_key: str = env("DEBOX_BOT_API_KEY")
     debox_bot_api_secret: str = env("DEBOX_BOT_API_SECRET")
+    debox_bot_user_id: str = env("DEBOX_BOT_USER_ID")
     debox_bot_receive_mode: str = env("DEBOX_BOT_RECEIVE_MODE", "polling").lower()
     debox_webhook_key: str = env("DEBOX_WEBHOOK_KEY")
     debox_notification_chat_id: str = env("DEBOX_NOTIFICATION_CHAT_ID")

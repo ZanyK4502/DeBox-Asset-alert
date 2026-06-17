@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 import json
 import logging
 from pathlib import Path
@@ -24,6 +25,21 @@ def public_app_url() -> str:
         if url.startswith("https://"):
             return url
     return settings.public_app_url
+
+
+def bot_private_chat_url(bot: boxbotapi.BotAPI | None = None) -> str:
+    bot_user_id = settings.debox_bot_user_id
+    if not bot_user_id and bot is not None:
+        bot_user_id = bot.Self.UserId
+    if not bot_user_id and STATUS_PATH.exists():
+        try:
+            status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            bot_user_id = str(status.get("bot_user_id", "") or "").strip()
+        except json.JSONDecodeError:
+            bot_user_id = ""
+    if not bot_user_id:
+        return ""
+    return f"https://m.debox.pro/user/chat?id={bot_user_id}&start="
 
 
 def write_status(state: str, detail: str = "", bot: boxbotapi.BotAPI | None = None) -> None:
@@ -64,12 +80,37 @@ def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
     return boxbotapi.NewInlineKeyboardMarkup(*rows)
 
 
+def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineKeyboardMarkup:
+    buttons = []
+    private_url = bot_private_chat_url(bot)
+    app_url = public_app_url()
+    if private_url:
+        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("私聊 Bot", private_url))
+    if app_url:
+        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("打开个人监控面板", app_url))
+    if not buttons:
+        return boxbotapi.NewInlineKeyboardMarkup()
+    return boxbotapi.NewInlineKeyboardMarkup(boxbotapi.NewInlineKeyboardRow(*buttons))
+
+
 def menu_text() -> str:
     return (
         "<b>DeBox Asset Alert</b><br/>"
         "订阅钱包地址或代币资产变化，并通过 DeBox 接收实时通知。<br/><br/>"
         "当前支持：创建监控规则、链上余额查询、订阅支付和 Bot 通知。"
     )
+
+
+def group_entry_text(message: boxbotapi.Message) -> str:
+    user_name = ""
+    if message.From is not None:
+        user_name = message.From.Name or message.From.UserId
+    if user_name:
+        return (
+            f"@{escape(user_name)} 我是 DeBox Asset Alert 链上监控助理，"
+            "请私聊 Bot 或打开个人监控面板。"
+        )
+    return "我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。"
 
 
 def callback_text(data: str) -> str:
@@ -81,7 +122,7 @@ def callback_text(data: str) -> str:
             "- 钱包原生币余额变化<br/>"
             "- ERC20 余额变化<br/>"
             "- 转入、转出与金额阈值<br/>"
-            "- 私聊或群聊通知"
+            "- 私聊通知"
         )
     if data == "alert:plans":
         return (
@@ -104,11 +145,23 @@ def send_menu(bot: boxbotapi.BotAPI, chat_id: str, chat_type: str) -> None:
     bot.Send(message)
 
 
+def send_group_entry(bot: boxbotapi.BotAPI, message: boxbotapi.Message) -> None:
+    if message.Chat is None:
+        return
+    response = boxbotapi.NewMessage(message.Chat.ID, message.Chat.Type, group_entry_text(message))
+    response.ParseMode = boxbotapi.ModeHTML
+    response.ReplyMarkup = group_entry_markup(bot)
+    bot.Send(response)
+
+
 def handle_message(bot: boxbotapi.BotAPI, message: boxbotapi.Message) -> None:
     if message.Chat is None:
         return
     text = (message.Text or "").strip().lower()
     if text in {"/start", "start", "菜单", "menu"}:
+        if message.Chat.Type == "group":
+            send_group_entry(bot, message)
+            return
         send_menu(bot, message.Chat.ID, message.Chat.Type)
 
 
@@ -165,7 +218,17 @@ def handle_webhook_payload(payload: dict[str, Any]) -> dict:
         return {"ok": True, "kind": "ignored"}
 
     if text.lower() in {"/start", "start", "菜单", "menu"}:
-        send_menu(bot, group_id or sender_id, "group" if group_id else "private")
+        if group_id:
+            pseudo_message = boxbotapi.Message(
+                Chat=boxbotapi.Chat(ID=group_id, Type="group"),
+                From=boxbotapi.User(
+                    UserId=sender_id,
+                    Name=str(payload.get("from_name", "") or payload.get("sender_name", "") or ""),
+                ),
+            )
+            send_group_entry(bot, pseudo_message)
+        else:
+            send_menu(bot, sender_id, "private")
         return {"ok": True, "kind": "message", "command": text.lower()}
 
     return {"ok": True, "kind": "ignored"}
