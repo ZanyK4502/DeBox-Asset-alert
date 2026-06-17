@@ -2,4 +2,5 @@ fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
 python-dotenv>=1.0,<2
 web3>=7.0,<8
+psycopg[binary]>=3.2,<4
 debox-chat-python-sdk @ git+https://github.com/debox-pro/debox-chat-python-sdk.git
