@@ -40,14 +40,21 @@ def write_status(state: str, detail: str = "", bot: boxbotapi.BotAPI | None = No
     temporary.replace(STATUS_PATH)
 
 
-def menu_markup() -> boxbotapi.InlineKeyboardMarkup:
+def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
     app_url = public_app_url()
-    rows = [
+    rows = []
+    if show_intro:
+        rows.append(
+            boxbotapi.NewInlineKeyboardRow(
+                boxbotapi.NewInlineKeyboardButtonData("介绍", "alert:intro"),
+            )
+        )
+    rows.append(
         boxbotapi.NewInlineKeyboardRow(
             boxbotapi.NewInlineKeyboardButtonData("监控能力", "alert:features"),
             boxbotapi.NewInlineKeyboardButtonData("订阅方案", "alert:plans"),
-        ),
-    ]
+        )
+    )
     if app_url:
         rows.append(
             boxbotapi.NewInlineKeyboardRow(
@@ -66,6 +73,8 @@ def menu_text() -> str:
 
 
 def callback_text(data: str) -> str:
+    if data == "alert:intro":
+        return menu_text()
     if data == "alert:features":
         return (
             "<b>监控能力</b><br/>"
@@ -82,6 +91,10 @@ def callback_text(data: str) -> str:
             "支付完成并通过链上验证后，订阅自动生效。"
         )
     return menu_text()
+
+
+def callback_markup(data: str) -> boxbotapi.InlineKeyboardMarkup:
+    return menu_markup(show_intro=data in {"alert:features", "alert:plans"})
 
 
 def send_menu(bot: boxbotapi.BotAPI, chat_id: str, chat_type: str) -> None:
@@ -107,7 +120,7 @@ def handle_callback(bot: boxbotapi.BotAPI, query: boxbotapi.CallbackQuery) -> No
         query.Message.Chat.Type,
         query.Message.MessageID,
         callback_text(query.Data),
-        menu_markup(),
+        callback_markup(query.Data),
     )
     message.ParseMode = boxbotapi.ModeHTML
     bot.Send(message)
@@ -141,7 +154,7 @@ def handle_webhook_payload(payload: dict[str, Any]) -> dict:
             chat_type,
             message_id,
             callback_text(callback_data),
-            menu_markup(),
+            callback_markup(callback_data),
         )
         message.ParseMode = boxbotapi.ModeHTML
         bot.Send(message)
