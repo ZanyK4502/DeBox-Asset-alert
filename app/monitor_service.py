@@ -26,7 +26,11 @@ def notification_reason(rule_type: str, previous: Decimal, current: Decimal, thr
 
 
 def check_rule(rule: dict) -> dict:
-    current = balance(rule["wallet_address"], rule["token_address"] or None)
+    current = balance(
+        rule["wallet_address"],
+        rule["token_address"] or None,
+        rule.get("chain_key") or "bsc",
+    )
     current_value = current["value"]
     previous_value = rule["last_value"]
 

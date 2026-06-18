@@ -33,10 +33,13 @@ class Settings:
 
     chain_id: int = int(env("CHAIN_ID", "56"))
     chain_name: str = env("CHAIN_NAME", "BSC")
-    chain_rpc_url: str = env("CHAIN_RPC_URL")
+    chain_key: str = env("CHAIN_KEY", "bsc").lower()
+    nodit_api_key: str = env("NODIT_API_KEY")
+    nodit_base_url: str = env("NODIT_BASE_URL", "https://web3.nodit.io/v1")
 
     subscription_token_address: str = env("SUBSCRIPTION_TOKEN_ADDRESS")
     subscription_token_symbol: str = env("SUBSCRIPTION_TOKEN_SYMBOL", "USDT")
+    subscription_token_decimals: int = int(env("SUBSCRIPTION_TOKEN_DECIMALS", "18"))
     subscription_price: Decimal = Decimal(env("SUBSCRIPTION_PRICE", "10"))
     subscription_days: int = int(env("SUBSCRIPTION_DAYS", "30"))
     payment_recipient_address: str = env("PAYMENT_RECIPIENT_ADDRESS")

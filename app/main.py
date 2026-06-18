@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
-from app.chain_service import balance
+from app.chain_service import balance, supported_chains
 from app.bot_service import (
     handle_webhook_payload,
     public_app_url,
@@ -36,6 +36,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class WatchRuleInput(BaseModel):
+    chain_key: str = "bsc"
     wallet_address: str
     token_address: str | None = None
     rule_type: str = "balance_change"
@@ -125,6 +126,11 @@ def get_plans() -> list[dict]:
     return public_plans()
 
 
+@app.get("/api/chains")
+def get_chains() -> list[dict]:
+    return supported_chains()
+
+
 @app.get("/api/subscription/current")
 def current_subscription(debox_user_id: str = "") -> dict:
     return entitlement(debox_user_id or settings.debox_notification_chat_id)
@@ -143,9 +149,13 @@ def start_free_trial(debox_user_id: str = "") -> dict:
 
 
 @app.get("/api/chain/balance")
-def get_balance(address: str, token_address: str | None = None) -> dict:
+def get_balance(
+    address: str,
+    token_address: str | None = None,
+    chain_key: str = "bsc",
+) -> dict:
     try:
-        return balance(address, token_address)
+        return balance(address, token_address, chain_key)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -157,9 +167,11 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
         chat_id = notification_chat_id(payload.notification_chat_type, payload.notification_chat_id)
         user_id = payload.debox_user_id or settings.debox_notification_chat_id
         require_rule_creation(user_id, payload.notification_chat_type)
-        current = balance(payload.wallet_address, payload.token_address)
+        current = balance(payload.wallet_address, payload.token_address, payload.chain_key)
         rule = create_watch_rule(
             debox_user_id=user_id,
+            chain_key=current["chain_key"],
+            chain_id=current["chain_id"],
             wallet_address=current["wallet_address"],
             token_address=current["token_address"],
             rule_type=payload.rule_type,

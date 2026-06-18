@@ -108,6 +108,7 @@ document.querySelector("#plan-cards").addEventListener("click", async (event) =>
 
 function formValues() {
   return {
+    chain_key: document.querySelector("#chain-key").value,
     wallet_address: document.querySelector("#wallet-address").value.trim(),
     token_address: document.querySelector("#token-address").value.trim() || null,
     rule_type: document.querySelector("#rule-type").value,
@@ -124,7 +125,10 @@ document.querySelector("#query-balance").addEventListener("click", async (event)
   if (!values.wallet_address) return showResult("请先输入钱包地址。", true);
   button.disabled = true;
   try {
-    const params = new URLSearchParams({ address: values.wallet_address });
+    const params = new URLSearchParams({
+      address: values.wallet_address,
+      chain_key: values.chain_key,
+    });
     if (values.token_address) params.set("token_address", values.token_address);
     const data = await request(`/api/chain/balance?${params}`);
     showResult(`当前余额：${data.value} ${data.symbol}`);

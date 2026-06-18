@@ -17,7 +17,7 @@
 
   <main>
     <section class="intro">
-      <p class="eyebrow">BSC Asset Monitor</p>
+      <p class="eyebrow">Multi-chain Asset Monitor</p>
       <h1>创建资产监控，变化时通过 DeBox Bot 通知</h1>
       <p>输入钱包地址即可监控 BNB；填写代币合约地址后，可监控对应 ERC20 余额。</p>
     </section>
@@ -31,6 +31,17 @@
       </div>
 
       <form id="watch-form">
+        <label>
+          监控网络
+          <select id="chain-key" name="chain_key">
+            <option value="bsc">BNB Chain</option>
+            <option value="ethereum">Ethereum</option>
+            <option value="base">Base</option>
+            <option value="polygon">Polygon</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="optimism">Optimism</option>
+          </select>
+        </label>
         <label>
           钱包地址
           <input id="wallet-address" name="wallet_address" placeholder="0x..." required>

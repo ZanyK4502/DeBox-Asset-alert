@@ -2,25 +2,15 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.chain_service import ERC20_ABI, validate_address, web3
+from app.chain_service import (
+    amount_to_units,
+    encode_erc20_transfer,
+    transaction_by_hash,
+    validate_address,
+)
 from app.config import settings
 from app.db import activate_subscription, complete_order, create_order, get_order
 from app.plans import get_plan
-
-
-TRANSFER_ABI = [
-    *ERC20_ABI,
-    {
-        "type": "function",
-        "name": "transfer",
-        "inputs": [
-            {"name": "recipient", "type": "address"},
-            {"name": "amount", "type": "uint256"},
-        ],
-        "outputs": [{"name": "", "type": "bool"}],
-        "stateMutability": "nonpayable",
-    },
-]
 
 
 def payment_configuration(plan_code: str = "standard") -> dict:
@@ -56,13 +46,6 @@ def _require_configuration(plan_code: str) -> dict:
     return config
 
 
-def _units(value: Decimal, decimals: int) -> int:
-    units = value * (Decimal(10) ** decimals)
-    if units != units.to_integral_value():
-        raise ValueError("Payment amount has too many decimal places")
-    return int(units)
-
-
 def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str) -> dict:
     if settings.payment_mode != "live":
         raise ValueError(
@@ -70,31 +53,26 @@ def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str) -> d
         )
     config = _require_configuration(plan_code)
     total_amount = Decimal(config["total_amount"])
-    client = web3()
     payer = validate_address(payer_address)
     recipient = validate_address(config["recipient_address"])
 
     if config["token_address"]:
         token_address = validate_address(config["token_address"])
-        token = client.eth.contract(address=token_address, abi=TRANSFER_ABI)
-        decimals = int(token.functions.decimals().call())
-        total_units = _units(total_amount, decimals)
+        total_units = amount_to_units(total_amount, settings.subscription_token_decimals)
         transaction = {
             "kind": "payment",
             "label": f"支付 {config['asset']}",
             "request": {
                 "from": payer,
                 "to": token_address,
-                "data": token.functions.transfer(
-                    recipient, total_units
-                )._encode_transaction_data(),
+                "data": encode_erc20_transfer(recipient, total_units),
                 "value": "0x0",
             },
         }
         payment_contract_address = token_address
     else:
         token_address = None
-        total_units = _units(total_amount, 18)
+        total_units = amount_to_units(total_amount, 18)
         transaction = {
             "kind": "payment",
             "label": f"支付 {config['asset']}",
@@ -119,6 +97,22 @@ def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str) -> d
     return {"order": order, "plan": config, "transactions": [transaction]}
 
 
+def _field(data: dict, *names: str):
+    for name in names:
+        if name in data and data[name] is not None:
+            return data[name]
+    return None
+
+
+def _decode_transfer_input(data: str) -> tuple[str, int]:
+    value = (data or "").lower()
+    if not value.startswith("0xa9059cbb") or len(value) < 138:
+        raise ValueError("Unexpected payment method")
+    recipient = "0x" + value[34:74]
+    amount = int(value[74:138], 16)
+    return validate_address(recipient), amount
+
+
 def verify_payment(order_id: int, tx_hash: str) -> dict:
     order = get_order(order_id)
     if not order:
@@ -126,37 +120,40 @@ def verify_payment(order_id: int, tx_hash: str) -> dict:
     if order["status"] == "paid":
         return {"order": order, "already_verified": True}
 
-    client = web3()
-    receipt = client.eth.wait_for_transaction_receipt(
-        tx_hash, timeout=120, poll_latency=2
-    )
-    transaction = client.eth.get_transaction(tx_hash)
-    if receipt["status"] != 1:
+    transaction = transaction_by_hash(tx_hash, settings.chain_key)
+    if transaction.get("success") is False or transaction.get("status") in {0, "0", "failed"}:
         raise ValueError("Transaction failed")
-    if validate_address(transaction["from"]) != validate_address(order["payer_address"]):
+
+    payer = _field(transaction, "from", "fromAddress", "sender", "senderAddress")
+    if not payer:
+        raise ValueError("Nodit response does not include transaction sender")
+    if validate_address(payer) != validate_address(order["payer_address"]):
         raise ValueError("Transaction payer does not match order")
 
     token_address = order["token_address"]
     recipient = validate_address(order["recipient_address"])
+    tx_to = _field(transaction, "to", "toAddress", "recipient", "recipientAddress")
+    tx_input = _field(transaction, "input", "data", "inputData") or "0x"
+
     if token_address:
         token_address = validate_address(token_address)
-        if validate_address(transaction["to"]) != token_address:
+        if not tx_to or validate_address(tx_to) != token_address:
             raise ValueError("Payment token does not match order")
-        token = client.eth.contract(address=token_address, abi=TRANSFER_ABI)
-        decimals = int(token.functions.decimals().call())
-        expected_total = _units(Decimal(order["total_amount"]), decimals)
-        function, params = token.decode_function_input(transaction["input"])
-        if function.fn_name != "transfer":
-            raise ValueError("Unexpected payment method")
-        if validate_address(params["recipient"]) != recipient:
+        expected_total = amount_to_units(
+            Decimal(order["total_amount"]),
+            settings.subscription_token_decimals,
+        )
+        decoded_recipient, decoded_amount = _decode_transfer_input(tx_input)
+        if decoded_recipient != recipient:
             raise ValueError("Payment recipient does not match order")
-        if params["amount"] != expected_total:
+        if decoded_amount != expected_total:
             raise ValueError("Payment amount does not match order")
     else:
-        expected_total = _units(Decimal(order["total_amount"]), 18)
-        if validate_address(transaction["to"]) != recipient:
+        expected_total = amount_to_units(Decimal(order["total_amount"]), 18)
+        tx_value = int(str(_field(transaction, "value", "amount", "nativeValue") or "0"), 0)
+        if not tx_to or validate_address(tx_to) != recipient:
             raise ValueError("Payment recipient does not match order")
-        if transaction["value"] != expected_total:
+        if tx_value != expected_total:
             raise ValueError("Payment amount does not match order")
 
     paid_order = complete_order(order_id, tx_hash)
