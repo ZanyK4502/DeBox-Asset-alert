@@ -10,7 +10,10 @@ from typing import Any
 import boxbotapi
 from boxbotapi import configs as bot_config
 
+from app.chain_service import balance
 from app.config import ROOT_DIR, settings
+from app.openapi_service import user_info
+from app.subscription_service import entitlement
 
 
 STATUS_PATH = ROOT_DIR / "data" / "bot_status.json"
@@ -23,60 +26,99 @@ def public_app_url() -> str:
     if PUBLIC_URL_PATH.exists():
         url = PUBLIC_URL_PATH.read_text(encoding="utf-8").strip()
         if url.startswith("https://"):
-            return url
-    return settings.public_app_url
+            return url.rstrip("/")
+    return settings.public_app_url.rstrip("/")
 
 
 def bot_private_chat_url(bot: boxbotapi.BotAPI | None = None) -> str:
     bot_user_id = settings.debox_bot_user_id
     if not bot_user_id and bot is not None:
-        bot_user_id = bot.Self.UserId
+        bot_user_id = getattr(bot.Self, "UserId", "") or ""
     if not bot_user_id and STATUS_PATH.exists():
         try:
             status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
             bot_user_id = str(status.get("bot_user_id", "") or "").strip()
         except json.JSONDecodeError:
             bot_user_id = ""
-    if not bot_user_id:
-        return ""
-    return f"https://m.debox.pro/user/chat?id={bot_user_id}&start="
+    return f"https://m.debox.pro/user/chat?id={bot_user_id}&start=" if bot_user_id else ""
 
 
 def write_status(state: str, detail: str = "", bot: boxbotapi.BotAPI | None = None) -> None:
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    self_info = getattr(bot, "Self", None)
     payload = {
         "state": state,
         "detail": detail,
         "updated_at": int(time.time()),
-        "bot_user_id": bot.Self.UserId if bot else "",
-        "bot_name": bot.Self.Name if bot else "",
+        "bot_user_id": getattr(self_info, "UserId", "") if self_info else "",
+        "bot_name": getattr(self_info, "Name", "") if self_info else "",
     }
     temporary = STATUS_PATH.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(STATUS_PATH)
 
 
+def _button_data(text: str, data: str) -> Any:
+    return boxbotapi.NewInlineKeyboardButtonData(text, data)
+
+
+def _button_url(text: str, url: str) -> Any:
+    return boxbotapi.NewInlineKeyboardButtonURL(text, url)
+
+
+def _button_chain(text: str, payload: str, sub_text: str = "BNB Chain") -> Any:
+    try:
+        return boxbotapi.NewInlineKeyboardButtonDataWithColor(
+            text,
+            payload,
+            "debox://wallet/request",
+            sub_text,
+            "#16C784",
+        )
+    except Exception:
+        return _button_url(text, "debox://wallet/request")
+
+
+def swap_payload() -> str:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 106,
+            "method": "swap",
+            "params": [
+                {
+                    "fromAddress": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+                    "toAddress": settings.subscription_token_address,
+                    "fromChainId": "0x38",
+                    "toChainId": "0x38",
+                }
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
     app_url = public_app_url()
-    rows = []
-    if show_intro:
-        rows.append(
-            boxbotapi.NewInlineKeyboardRow(
-                boxbotapi.NewInlineKeyboardButtonData("介绍", "alert:intro"),
-            )
-        )
-    rows.append(
+    rows = [
         boxbotapi.NewInlineKeyboardRow(
-            boxbotapi.NewInlineKeyboardButtonData("监控能力", "alert:features"),
-            boxbotapi.NewInlineKeyboardButtonData("订阅方案", "alert:plans"),
-        )
-    )
+            _button_data("监控能力", "alert:features"),
+            _button_data("订阅方案", "alert:plans"),
+        ),
+        boxbotapi.NewInlineKeyboardRow(
+            _button_data("订阅有效期", "alert:subscription"),
+            _button_data("余额查询", "alert:balance"),
+        ),
+        boxbotapi.NewInlineKeyboardRow(
+            _button_chain("闪兑 USDT", swap_payload()),
+            _button_url("快捷续费", f"{app_url}#renew") if app_url else _button_data("快捷续费", "alert:renew"),
+        ),
+    ]
     if app_url:
-        rows.append(
-            boxbotapi.NewInlineKeyboardRow(
-                boxbotapi.NewInlineKeyboardButtonURL("打开监控面板", app_url),
-            )
-        )
+        rows.append(boxbotapi.NewInlineKeyboardRow(_button_url("个人监控面板", app_url)))
+    if show_intro:
+        rows.append(boxbotapi.NewInlineKeyboardRow(_button_data("介绍", "alert:intro")))
     return boxbotapi.NewInlineKeyboardMarkup(*rows)
 
 
@@ -85,9 +127,9 @@ def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineK
     private_url = bot_private_chat_url(bot)
     app_url = public_app_url()
     if private_url:
-        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("私聊 Bot", private_url))
+        buttons.append(_button_url("私聊 Bot", private_url))
     if app_url:
-        buttons.append(boxbotapi.NewInlineKeyboardButtonURL("个人监控面板", app_url))
+        buttons.append(_button_url("个人监控面板", app_url))
     if not buttons:
         return boxbotapi.NewInlineKeyboardMarkup()
     return boxbotapi.NewInlineKeyboardMarkup(boxbotapi.NewInlineKeyboardRow(*buttons))
@@ -96,8 +138,8 @@ def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineK
 def menu_text() -> str:
     return (
         "<b>DeBox Asset Alert</b><br/>"
-        "订阅钱包地址或代币资产变化，并通过 DeBox 接收实时通知。<br/><br/>"
-        "当前支持：创建监控规则、链上余额查询、订阅支付和 Bot 通知。"
+        "订阅钱包地址或代币资产变化，并通过 DeBox Bot 接收通知。<br/><br/>"
+        "可用能力：多链余额监控、代币识别、私聊通知、专业版群通知、订阅续费。"
     )
 
 
@@ -105,37 +147,110 @@ def group_entry_text(message: boxbotapi.Message) -> str:
     user_name = ""
     if message.From is not None:
         user_name = message.From.Name or message.From.UserId
-    if user_name:
-        return (
-            f"@{escape(user_name)} 我是 DeBox Asset Alert 链上监控助理，"
-            "请私聊 Bot 或打开个人监控面板。"
-        )
-    return "我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。"
+    prefix = f"@{escape(user_name)} " if user_name else ""
+    return f"{prefix}我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或个人监控面板。"
 
 
-def callback_text(data: str) -> str:
-    if data == "alert:intro":
-        return menu_text()
-    if data == "alert:features":
-        return (
-            "<b>监控能力</b><br/>"
-            "- 钱包原生币余额变化<br/>"
-            "- ERC20 余额变化<br/>"
-            "- 转入、转出与金额阈值<br/>"
-            "- 私聊通知"
-        )
-    if data == "alert:plans":
-        return (
-            "<b>标准订阅</b><br/>"
-            f"{settings.subscription_price} {settings.subscription_token_symbol} / "
-            f"{settings.subscription_days} 天<br/>"
-            "支付完成并通过链上验证后，订阅自动生效。"
-        )
+def features_text() -> str:
+    return (
+        "<b>监控能力</b><br/>"
+        "- 支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/>"
+        "- 可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/>"
+        "- 支持余额变化、转入、转出、余额阈值。<br/>"
+        "- 标准版和专业版支持每日订阅摘要，专业版可把通知发送到已绑定的 DeBox 群。"
+    )
+
+
+def plans_text() -> str:
+    return (
+        "<b>订阅方案</b><br/>"
+        "免费体验：1 条规则，24 小时，仅支持私聊通知。<br/>"
+        f"标准订阅：{settings.subscription_price} {settings.subscription_token_symbol} / "
+        f"{settings.subscription_days} 天，最多 10 条规则。<br/>"
+        "专业订阅：25 USDT / 30 天，最多 50 条规则，可绑定 3 个群。<br/><br/>"
+        "同一时间只能有一个有效套餐；同套餐可以提前续费并顺延到期时间。"
+    )
+
+
+def user_id_from_query(query: boxbotapi.CallbackQuery) -> str:
+    user = getattr(query, "From", None) or getattr(query, "User", None)
+    if user is None:
+        return ""
+    return str(
+        getattr(user, "UserId", "")
+        or getattr(user, "ID", "")
+        or getattr(user, "Id", "")
+        or ""
+    ).strip()
+
+
+def _extract_address(payload: dict) -> str:
+    candidates = [payload]
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.append(data)
+    for item in candidates:
+        for key in ("address", "walletAddress", "wallet_address"):
+            value = item.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def subscription_text(debox_user_id: str) -> str:
+    if not debox_user_id:
+        return "暂时无法识别你的 DeBox 用户 ID，请打开个人监控面板查看订阅。"
+    current = entitlement(debox_user_id)
+    plan = current.get("plan") or {}
+    subscription = current.get("subscription") or {}
+    return (
+        "<b>订阅有效期</b><br/>"
+        f"当前方案：{escape(plan.get('name', '未开通'))}<br/>"
+        f"剩余天数：{escape(str(current.get('days_remaining', '0')))} 天<br/>"
+        f"到期时间：{escape(str(subscription.get('expires_at', '-')))}<br/>"
+        f"监控规则：{current.get('rule_count', 0)} / {plan.get('rule_limit', 0)}<br/>"
+        f"群通知：{current.get('group_count', 0)} / {plan.get('group_limit', 0)}"
+    )
+
+
+def balance_text(debox_user_id: str) -> str:
+    if not debox_user_id:
+        return "暂时无法识别你的 DeBox 用户 ID，请打开个人监控面板查询余额。"
+    profile = user_info(user_id=debox_user_id)
+    address = _extract_address(profile).strip()
+    if not address:
+        return "没有从 DeBox 用户资料中识别到钱包地址，请在个人监控面板连接钱包后查询。"
+    current = balance(address, settings.subscription_token_address, "bsc")
+    return (
+        "<b>余额查询</b><br/>"
+        f"钱包：{escape(address[:8])}...{escape(address[-6:])}<br/>"
+        f"网络：{escape(current['chain_name'])}<br/>"
+        f"余额：{escape(current['value'])} {escape(current['symbol'])}"
+    )
+
+
+def callback_text(data: str, debox_user_id: str = "") -> str:
+    try:
+        if data == "alert:intro":
+            return menu_text()
+        if data == "alert:features":
+            return features_text()
+        if data == "alert:plans":
+            return plans_text()
+        if data == "alert:subscription":
+            return subscription_text(debox_user_id)
+        if data == "alert:balance":
+            return balance_text(debox_user_id)
+        if data == "alert:renew":
+            app_url = public_app_url()
+            return f"请打开个人监控面板续费：{escape(app_url)}" if app_url else "请在 H5 中续费。"
+    except Exception as exc:
+        return f"操作失败：{escape(str(exc))}"
     return menu_text()
 
 
 def callback_markup(data: str) -> boxbotapi.InlineKeyboardMarkup:
-    return menu_markup(show_intro=data in {"alert:features", "alert:plans"})
+    return menu_markup(show_intro=data != "alert:intro")
 
 
 def send_menu(bot: boxbotapi.BotAPI, chat_id: str, chat_type: str) -> None:
@@ -172,7 +287,7 @@ def handle_callback(bot: boxbotapi.BotAPI, query: boxbotapi.CallbackQuery) -> No
         query.Message.Chat.ID,
         query.Message.Chat.Type,
         query.Message.MessageID,
-        callback_text(query.Data),
+        callback_text(query.Data, user_id_from_query(query)),
         callback_markup(query.Data),
     )
     message.ParseMode = boxbotapi.ModeHTML
@@ -181,56 +296,16 @@ def handle_callback(bot: boxbotapi.BotAPI, query: boxbotapi.CallbackQuery) -> No
 
 def handle_webhook_payload(payload: dict[str, Any]) -> dict:
     bot = boxbotapi.NewBotAPI(settings.debox_bot_api_key, settings.debox_bot_api_secret)
-
-    update = boxbotapi.Update.from_dict(payload)
+    factory = getattr(boxbotapi.Update, "from_dict", None)
+    if factory is None:
+        return {"ok": True, "kind": "unsupported"}
+    update = factory(payload)
     if update is not None and (update.Message is not None or update.CallbackQuery is not None):
         if update.Message is not None:
             handle_message(bot, update.Message)
             return {"ok": True, "kind": "message", "update_id": update.Id}
         handle_callback(bot, update.CallbackQuery)
         return {"ok": True, "kind": "callback", "update_id": update.Id}
-
-    callback_data = str(
-        payload.get("callback_data")
-        or payload.get("data")
-        or payload.get("callback")
-        or ""
-    ).strip()
-    message_id = str(payload.get("message_id", "") or "").strip()
-    sender_id = str(payload.get("from_user_id", "") or "").strip()
-    group_id = str(payload.get("group_id", "") or "").strip()
-    if callback_data and message_id and (group_id or sender_id):
-        chat_id = group_id or sender_id
-        chat_type = "group" if group_id else "private"
-        message = boxbotapi.NewEditMessageTextAndMarkup(
-            chat_id,
-            chat_type,
-            message_id,
-            callback_text(callback_data),
-            callback_markup(callback_data),
-        )
-        message.ParseMode = boxbotapi.ModeHTML
-        bot.Send(message)
-        return {"ok": True, "kind": "flat_callback", "data": callback_data}
-
-    text = str(payload.get("message", "") or "").strip()
-    if not text or not sender_id:
-        return {"ok": True, "kind": "ignored"}
-
-    if text.lower() in {"/start", "start", "菜单", "menu"}:
-        if group_id:
-            pseudo_message = boxbotapi.Message(
-                Chat=boxbotapi.Chat(ID=group_id, Type="group"),
-                From=boxbotapi.User(
-                    UserId=sender_id,
-                    Name=str(payload.get("from_name", "") or payload.get("sender_name", "") or ""),
-                ),
-            )
-            send_group_entry(bot, pseudo_message)
-        else:
-            send_menu(bot, sender_id, "private")
-        return {"ok": True, "kind": "message", "command": text.lower()}
-
     return {"ok": True, "kind": "ignored"}
 
 
@@ -254,9 +329,7 @@ def run() -> None:
     if not settings.debox_bot_api_key:
         raise RuntimeError("DEBOX_BOT_API_KEY is required")
     if settings.debox_bot_receive_mode != "polling":
-        raise RuntimeError(
-            "Long Polling is disabled. Run the FastAPI service and configure /bot/webhook."
-        )
+        raise RuntimeError("Long Polling is disabled. Run the FastAPI service and configure /bot/webhook.")
 
     bot_config.Debug = False
     bot_config.MessageListener = True
@@ -284,20 +357,8 @@ def run() -> None:
                 update_config.Offset = max(update_config.Offset, update.Id + 1)
                 try:
                     if update.Message is not None:
-                        logging.info(
-                            "Received message update=%s chat=%s type=%s text=%r",
-                            update.Id,
-                            update.Message.Chat.ID if update.Message.Chat else "",
-                            update.Message.Chat.Type if update.Message.Chat else "",
-                            update.Message.Text,
-                        )
                         handle_message(bot, update.Message)
                     elif update.CallbackQuery is not None:
-                        logging.info(
-                            "Received callback update=%s data=%r",
-                            update.Id,
-                            update.CallbackQuery.Data,
-                        )
                         handle_callback(bot, update.CallbackQuery)
                 except Exception:
                     logging.exception("Failed to handle update=%s", update.Id)

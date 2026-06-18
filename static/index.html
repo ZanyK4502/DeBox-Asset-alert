@@ -1,100 +1,139 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DeBox Asset Alert</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body>
-  <header>
-    <div>
-      <strong>DeBox Asset Alert</strong>
-      <span>链上资产订阅通知 Demo</span>
-    </div>
-    <span id="health" class="status">检查中</span>
-  </header>
-
-  <main>
-    <section class="intro">
-      <p class="eyebrow">Multi-chain Asset Monitor</p>
-      <h1>创建资产监控，变化时通过 DeBox Bot 通知</h1>
-      <p>输入钱包地址即可监控 BNB；填写代币合约地址后，可监控对应 ERC20 余额。</p>
-    </section>
-
-    <section class="tool">
-      <div class="tool-heading">
-        <div>
-          <h2>创建监控规则</h2>
-          <p>首次检查会记录当前余额作为基线，后续余额变化才会通知。</p>
-        </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeBox Asset Alert</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <strong>DeBox Asset Alert</strong>
+        <span>链上资产订阅通知</span>
       </div>
+      <span id="healthBadge" class="badge">连接中</span>
+    </header>
 
-      <form id="watch-form">
-        <label>
-          监控网络
-          <select id="chain-key" name="chain_key">
-            <option value="bsc">BNB Chain</option>
-            <option value="ethereum">Ethereum</option>
-            <option value="base">Base</option>
-            <option value="polygon">Polygon</option>
-            <option value="arbitrum">Arbitrum</option>
-            <option value="optimism">Optimism</option>
-          </select>
-        </label>
-        <label>
-          钱包地址
-          <input id="wallet-address" name="wallet_address" placeholder="0x..." required>
-        </label>
-        <label>
-          代币合约地址（可选）
-          <input id="token-address" name="token_address" placeholder="留空则监控 BNB">
-        </label>
-        <label>
-          监控类型
-          <select id="rule-type" name="rule_type">
-            <option value="balance_change">余额变化</option>
-            <option value="incoming">转入</option>
-            <option value="outgoing">转出</option>
-            <option value="balance_threshold">余额阈值</option>
-          </select>
-        </label>
-        <label>
-          金额阈值
-          <input id="threshold" name="threshold" type="number" min="0" step="any" value="0" required>
-        </label>
-        <div class="form-actions">
-          <button id="query-balance" class="secondary" type="button">查询余额</button>
-          <button type="submit">创建监控</button>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Multi-chain Asset Monitor</p>
+        <h1>创建资产监控，变化时通过 DeBox Bot 通知</h1>
+        <p class="lead">连接钱包后创建地址或代币监控规则。订阅生效后，后端会持续检查链上余额变化，并通过 DeBox Bot 推送通知。</p>
+        <div class="hero-actions">
+          <button id="connectWalletBtn" class="primary">连接 DeBox 钱包</button>
+          <a class="secondary" href="#rules">创建监控</a>
+          <a class="secondary" href="#renew">订阅续费</a>
         </div>
-      </form>
-      <p id="action-result" class="result" aria-live="polite"></p>
-    </section>
+      </section>
 
-    <section class="tool">
-      <div class="tool-heading">
-        <div>
-          <h2>订阅支付</h2>
-          <p>在 DeBox 中连接钱包并直接支付至配置的收款地址。交易成功并通过后端链上验证后，订阅自动生效。</p>
+      <section class="grid two">
+        <div class="panel">
+          <h2>个人账户</h2>
+          <div id="profileBox" class="profile muted">尚未连接钱包</div>
         </div>
-        <button id="connect-wallet" class="secondary" type="button">连接 DeBox 钱包</button>
-      </div>
-      <div id="payment-breakdown" class="payment-breakdown"></div>
-      <button id="pay-subscription" type="button" disabled>支付并开通订阅</button>
-      <p id="payment-result" class="result" aria-live="polite"></p>
-    </section>
-
-    <section>
-      <div class="tool-heading">
-        <div>
-          <h2>套餐与当前权限</h2>
-          <p id="entitlement-summary">正在读取当前套餐。</p>
+        <div class="panel">
+          <h2>当前订阅</h2>
+          <div id="subscriptionBox" class="stack muted">连接钱包后查看订阅状态</div>
         </div>
-      </div>
-      <div id="plan-cards" class="plan-cards"></div>
-    </section>
-  </main>
+      </section>
 
-  <script src="/static/app.js"></script>
-</body>
+      <section id="renew" class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Plans</p>
+            <h2>订阅方案</h2>
+          </div>
+          <button id="freeTrialBtn" class="ghost">开启免费体验</button>
+        </div>
+        <div id="plansGrid" class="plans"></div>
+        <div class="payment-line">
+          <button id="payBtn" class="primary">支付并开通 / 续费</button>
+          <span id="paymentStatus" class="muted"></span>
+        </div>
+      </section>
+
+      <section id="rules" class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Watch Rules</p>
+            <h2>创建监控规则</h2>
+          </div>
+          <button id="refreshRulesBtn" class="ghost">刷新</button>
+        </div>
+
+        <form id="ruleForm" class="form-grid">
+          <label>
+            网络
+            <select id="chainSelect"></select>
+          </label>
+          <label>
+            钱包地址
+            <input id="walletAddressInput" placeholder="0x..." autocomplete="off" />
+          </label>
+          <label>
+            代币合约地址（可选）
+            <input id="tokenAddressInput" placeholder="留空则监控原生资产" autocomplete="off" />
+          </label>
+          <label>
+            监控类型
+            <select id="ruleTypeSelect">
+              <option value="balance_change">余额变化</option>
+              <option value="incoming">转入</option>
+              <option value="outgoing">转出</option>
+              <option value="balance_threshold">余额阈值</option>
+            </select>
+          </label>
+          <label>
+            金额阈值
+            <input id="thresholdInput" type="number" min="0" step="0.000001" value="0" />
+          </label>
+          <label>
+            通知目标
+            <select id="targetTypeSelect">
+              <option value="private">私聊通知</option>
+              <option value="group">群通知（专业版）</option>
+            </select>
+          </label>
+          <label id="groupTargetWrap">
+            选择群
+            <select id="groupTargetSelect"></select>
+          </label>
+          <div id="tokenInfoBox" class="info-box muted">输入代币合约后会自动识别代币信息。</div>
+          <div class="form-actions">
+            <button id="queryBalanceBtn" class="secondary" type="button">查询余额</button>
+            <button class="primary" type="submit">创建监控</button>
+          </div>
+        </form>
+
+        <div id="balanceBox" class="info-box muted">还没有查询余额。</div>
+        <div id="rulesList" class="list"></div>
+      </section>
+
+      <section id="groups" class="panel">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Professional</p>
+            <h2>群通知设置</h2>
+          </div>
+          <span class="badge">专业版最多 3 个群</span>
+        </div>
+        <form id="groupForm" class="form-grid compact">
+          <label>
+            DeBox 群 ID
+            <input id="groupIdInput" placeholder="例如 8c6yo6hf" autocomplete="off" />
+          </label>
+          <label>
+            群备注
+            <input id="groupLabelInput" placeholder="例如 Alpha 群" autocomplete="off" />
+          </label>
+          <button class="primary" type="submit">绑定群通知</button>
+        </form>
+        <div id="groupsList" class="list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

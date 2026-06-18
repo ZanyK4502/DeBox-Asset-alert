@@ -1,243 +1,423 @@
-let deboxUser = null;
-let paymentConfig = null;
-let currentEntitlement = null;
-let selectedPlanCode = "standard";
+const state = {
+  walletAddress: "",
+  deboxUserId: "",
+  profile: null,
+  plans: [],
+  chains: [],
+  selectedPlan: "standard",
+  entitlement: null,
+  groups: [],
+};
 
-const BSC_CHAIN_ID = "0x38";
+const $ = (id) => document.getElementById(id);
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function toast(message) {
+  const node = $("toast");
+  node.textContent = message;
+  node.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => {
+    node.hidden = true;
+  }, 4200);
 }
 
-function showResult(message, error = false) {
-  const result = document.querySelector("#action-result");
-  result.textContent = message;
-  result.classList.toggle("error", error);
-}
-
-function showPaymentResult(message, error = false) {
-  const result = document.querySelector("#payment-result");
-  result.textContent = message;
-  result.classList.toggle("error", error);
-}
-
-async function request(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.detail || "请求失败");
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || "请求失败");
+  }
   return data;
 }
 
-async function ensureBscNetwork() {
-  const chainId = await window.deboxWallet.request({ method: "eth_chainId" });
-  if (String(chainId).toLowerCase() === BSC_CHAIN_ID) return;
-
-  await window.deboxWallet.request({
-    method: "wallet_switchEthereumChain",
-    params: [{ chainId: BSC_CHAIN_ID }],
-  });
-
-  const switchedChainId = await window.deboxWallet.request({ method: "eth_chainId" });
-  if (String(switchedChainId).toLowerCase() !== BSC_CHAIN_ID) {
-    throw new Error("请切换到 BNB Chain 后继续。");
-  }
+function walletProvider() {
+  return window.deboxWallet || window.ethereum || null;
 }
 
-async function loadPayment(planCode = selectedPlanCode) {
-  paymentConfig = await request(`/api/payment/config?plan_code=${encodeURIComponent(planCode)}`);
-  selectedPlanCode = paymentConfig.plan_code;
-  document.querySelector("#payment-breakdown").innerHTML = `
-    <div><strong>${escapeHtml(paymentConfig.total_amount)} ${escapeHtml(paymentConfig.asset)}</strong><span>用户支付总额</span></div>
-    <div><strong>${escapeHtml(paymentConfig.recipient_address)}</strong><span>收款地址</span></div>
-  `;
-  if (!paymentConfig.ready) {
-    showPaymentResult(`支付尚未配置：${paymentConfig.missing.join("、")}`, true);
-  }
+function shortAddress(address) {
+  if (!address) return "-";
+  return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }
 
-function currentDeBoxUserId() {
-  return deboxUser?.uid || "";
+function deboxUserIdFromProfile(profile, fallback) {
+  if (!profile) return fallback;
+  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  return data.user_id || data.userId || data.uid || data.id || fallback;
 }
 
-async function loadPlans() {
-  const userParam = currentDeBoxUserId()
-    ? `?debox_user_id=${encodeURIComponent(currentDeBoxUserId())}`
-    : "";
-  const [plans, current] = await Promise.all([
-    request("/api/plans"),
-    request(`/api/subscription/current${userParam}`),
-  ]);
-  currentEntitlement = current;
-  const summary = document.querySelector("#entitlement-summary");
-  summary.textContent = current.plan
-    ? `${current.plan.name}：已使用 ${current.rule_count} / ${current.plan.rule_limit} 条规则，到期时间 ${current.subscription.expires_at}`
-    : "当前没有有效订阅，无法继续创建监控规则。";
-  document.querySelector("#plan-cards").innerHTML = plans.map((plan) => `
-    <div class="plan-card ${plan.code === selectedPlanCode ? "selected" : ""}">
-      <strong>${escapeHtml(plan.name)}</strong>
-      <span class="price">${plan.price === "0" ? "免费" : `${escapeHtml(plan.price)} ${escapeHtml(plan.asset)}`}</span>
-      <span>${escapeHtml(plan.description)}</span>
-      <span>规则上限：${escapeHtml(plan.rule_limit)}</span>
-      <span>群通知：${plan.group_notifications ? "支持" : "不支持"}</span>
-      ${plan.code === "free"
-        ? ""
-        : `<button class="${plan.code === selectedPlanCode ? "" : "secondary"}" type="button" data-plan-code="${escapeHtml(plan.code)}">${plan.code === selectedPlanCode ? "已选择" : "选择套餐"}</button>`}
-    </div>
-  `).join("");
+function profileName(profile) {
+  if (!profile) return "DeBox 用户";
+  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  return data.name || data.nickname || data.user_name || "DeBox 用户";
 }
 
-document.querySelector("#plan-cards").addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-plan-code]");
+function profileAvatar(profile) {
+  if (!profile) return "";
+  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  return data.pic || data.avatar || data.avatar_url || "";
+}
+
+function setLoading(button, loading) {
   if (!button) return;
-  button.disabled = true;
-  try {
-    selectedPlanCode = button.dataset.planCode;
-    await Promise.all([loadPayment(selectedPlanCode), loadPlans()]);
-    showPaymentResult(`已选择${paymentConfig.plan_name}。`);
-  } catch (error) {
-    showPaymentResult(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-});
-
-function formValues() {
-  return {
-    chain_key: document.querySelector("#chain-key").value,
-    wallet_address: document.querySelector("#wallet-address").value.trim(),
-    token_address: document.querySelector("#token-address").value.trim() || null,
-    rule_type: document.querySelector("#rule-type").value,
-    threshold: document.querySelector("#threshold").value.trim() || "0",
-    notification_chat_type: "private",
-    notification_chat_id: currentDeBoxUserId(),
-    debox_user_id: currentDeBoxUserId(),
-  };
+  button.disabled = loading;
+  if (loading) button.dataset.text = button.textContent;
+  button.textContent = loading ? "处理中..." : button.dataset.text || button.textContent;
 }
 
-document.querySelector("#query-balance").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
-  const values = formValues();
-  if (!values.wallet_address) return showResult("请先输入钱包地址。", true);
-  button.disabled = true;
-  try {
-    const params = new URLSearchParams({
-      address: values.wallet_address,
-      chain_key: values.chain_key,
-    });
-    if (values.token_address) params.set("token_address", values.token_address);
-    const data = await request(`/api/chain/balance?${params}`);
-    showResult(`当前余额：${data.value} ${data.symbol}`);
-  } catch (error) {
-    showResult(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-});
+async function loadBootData() {
+  const [health, plans, chains] = await Promise.all([
+    api("/api/health"),
+    api("/api/plans"),
+    api("/api/chains"),
+  ]);
+  $("healthBadge").textContent = health.ok ? "服务正常" : "服务异常";
+  state.plans = plans;
+  state.chains = chains;
+  renderPlans();
+  renderChains();
+}
 
-document.querySelector("#watch-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const button = event.submitter;
-  button.disabled = true;
-  try {
-    const data = await request("/api/watch-rules", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formValues()),
-    });
-    showResult(`监控已创建，当前余额：${data.current_balance.value} ${data.current_balance.symbol}`);
-    await loadPlans();
-  } catch (error) {
-    showResult(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-});
+function renderChains() {
+  $("chainSelect").innerHTML = state.chains
+    .map((chain) => `<option value="${chain.key}">${chain.name}</option>`)
+    .join("");
+}
 
-document.querySelector("#connect-wallet").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
-  if (!window.deboxWallet) {
-    return showPaymentResult("请在 DeBox App 内打开部署后的 H5 页面。", true);
-  }
-  button.disabled = true;
-  try {
-    await window.deboxWallet.request({
-      method: "wallet_requestPermissions",
-      params: [{ eth_accounts: { debox_getUserInfo: {} } }],
+function renderPlans() {
+  $("plansGrid").innerHTML = state.plans
+    .map((plan) => {
+      const active = plan.code === state.selectedPlan ? " active" : "";
+      const price = plan.price === "0" ? "免费" : `${plan.price} ${plan.asset || "USDT"}`;
+      return `
+        <button class="plan-card${active}" type="button" data-plan="${plan.code}">
+          <strong>${plan.name}</strong>
+          <p>${price} / ${plan.days} 天</p>
+          <p class="muted">${plan.description}</p>
+        </button>
+      `;
+    })
+    .join("");
+  document.querySelectorAll("[data-plan]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedPlan = button.dataset.plan;
+      renderPlans();
+      loadPaymentConfig();
     });
-    deboxUser = await window.deboxWallet.request({
-      method: "debox_getUserInfo",
-      params: [],
-    });
-    await ensureBscNetwork();
-    button.textContent = `${deboxUser.name || "DeBox 用户"} 已连接`;
-    document.querySelector("#pay-subscription").disabled =
-      !(paymentConfig.ready && paymentConfig.payment_enabled);
-    showPaymentResult(`钱包已连接并切换至 BNB Chain：${deboxUser.address}`);
-    await loadPlans();
-  } catch (error) {
-    showPaymentResult(error.message || "钱包连接失败", true);
-  } finally {
-    button.disabled = false;
-  }
-});
-
-document.querySelector("#pay-subscription").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
-  if (!deboxUser) return showPaymentResult("请先连接 DeBox 钱包。", true);
-  if (!paymentConfig.payment_enabled) return showPaymentResult("支付暂未开放。", true);
-  button.disabled = true;
-  try {
-    const confirmed = window.confirm(
-      `即将发起链上交易：支付 ${paymentConfig.total_amount} ${paymentConfig.asset} 至配置的收款地址。是否继续？`
-    );
-    if (!confirmed) {
-      showPaymentResult("已取消，未创建订单，也未发起链上授权。");
-      return;
-    }
-    await ensureBscNetwork();
-    const prepared = await request("/api/payment/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        payer_address: deboxUser.address,
-        debox_user_id: deboxUser.uid,
-        plan_code: selectedPlanCode,
-      }),
-    });
-    let paymentHash = "";
-    for (const transaction of prepared.transactions) {
-      showPaymentResult(`请在钱包中确认：${transaction.label}`);
-      const hash = await window.deboxWallet.request({
-        method: "eth_sendTransaction",
-        params: [transaction.request],
-      });
-      if (transaction.kind === "payment") paymentHash = hash;
-    }
-    showPaymentResult("交易已提交，正在进行链上验证...");
-    const verified = await request("/api/payment/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order_id: prepared.order.id, tx_hash: paymentHash }),
-    });
-    showPaymentResult(`订阅已生效，到期时间：${verified.subscription.expires_at}`);
-    await loadPlans();
-  } catch (error) {
-    showPaymentResult(error.message || "支付未完成", true);
-  } finally {
-    button.disabled = false;
-  }
-});
-
-Promise.all([loadPayment(), loadPlans()])
-  .then(() => {
-    document.querySelector("#health").textContent = "服务正常";
-  })
-  .catch((error) => {
-    document.querySelector("#health").textContent = "服务异常";
-    showResult(error.message, true);
   });
+}
+
+function renderProfile() {
+  if (!state.walletAddress) {
+    $("profileBox").innerHTML = "尚未连接钱包";
+    return;
+  }
+  const avatar = profileAvatar(state.profile);
+  $("profileBox").innerHTML = `
+    ${avatar ? `<img src="${avatar}" alt="">` : ""}
+    <div>
+      <strong>${profileName(state.profile)}</strong>
+      <div class="muted">${shortAddress(state.walletAddress)}</div>
+      <div class="muted">DeBox ID: ${state.deboxUserId || "-"}</div>
+    </div>
+  `;
+}
+
+function renderSubscription() {
+  const box = $("subscriptionBox");
+  if (!state.entitlement || !state.entitlement.plan) {
+    box.innerHTML = "还没有有效订阅";
+    return;
+  }
+  const plan = state.entitlement.plan;
+  const sub = state.entitlement.subscription || {};
+  box.innerHTML = `
+    <strong>${plan.name}</strong>
+    <span>剩余 ${state.entitlement.days_remaining} 天</span>
+    <span>规则 ${state.entitlement.rule_count} / ${plan.rule_limit}</span>
+    <span>群通知 ${state.entitlement.group_count} / ${plan.group_limit}</span>
+    <span class="muted">到期：${sub.expires_at || "-"}</span>
+  `;
+}
+
+function renderGroups() {
+  const groupSelect = $("groupTargetSelect");
+  if (!state.groups.length) {
+    groupSelect.innerHTML = `<option value="">暂无已绑定群</option>`;
+    $("groupsList").innerHTML = `<div class="info-box muted">专业版可绑定群 ID，用于把监控通知发送到群里。</div>`;
+    return;
+  }
+  groupSelect.innerHTML = state.groups
+    .map((group) => `<option value="${group.gid}">${group.name || group.gid}</option>`)
+    .join("");
+  $("groupsList").innerHTML = state.groups
+    .map(
+      (group) => `
+      <div class="list-item">
+        <div>
+          <strong>${group.name || group.gid}</strong>
+          <span class="muted">GID: ${group.gid}</span>
+        </div>
+        <button class="ghost" type="button" data-delete-group="${group.id}">删除</button>
+      </div>
+    `
+    )
+    .join("");
+  document.querySelectorAll("[data-delete-group]").forEach((button) => {
+    button.addEventListener("click", () => deleteGroup(button.dataset.deleteGroup));
+  });
+}
+
+function renderRules() {
+  const rules = (state.entitlement && state.entitlement.rules) || [];
+  if (!rules.length) {
+    $("rulesList").innerHTML = `<div class="info-box muted">还没有监控规则。</div>`;
+    return;
+  }
+  $("rulesList").innerHTML = rules
+    .map(
+      (rule) => `
+      <div class="list-item">
+        <div>
+          <strong>${rule.token_address ? "代币余额" : "原生资产"} / ${rule.chain_key}</strong>
+          <span class="muted">${shortAddress(rule.wallet_address)} · ${rule.rule_type} · 阈值 ${rule.threshold}</span>
+          <div class="muted">通知：${rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊"}</div>
+        </div>
+        <button class="ghost" type="button" data-delete-rule="${rule.id}">删除</button>
+      </div>
+    `
+    )
+    .join("");
+  document.querySelectorAll("[data-delete-rule]").forEach((button) => {
+    button.addEventListener("click", () => deleteRule(button.dataset.deleteRule));
+  });
+}
+
+function updateTargetVisibility() {
+  const type = $("targetTypeSelect").value;
+  $("groupTargetWrap").style.display = type === "group" ? "grid" : "none";
+}
+
+async function connectWallet() {
+  const provider = walletProvider();
+  if (!provider || !provider.request) {
+    toast("当前浏览器没有检测到 DeBox 钱包或 EVM 钱包。");
+    return;
+  }
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  state.walletAddress = accounts && accounts[0] ? accounts[0] : "";
+  $("walletAddressInput").value = state.walletAddress;
+
+  let profile = null;
+  try {
+    if (provider.request) {
+      profile = await provider.request({ method: "debox_getUserInfo" });
+    }
+  } catch (_) {
+    profile = null;
+  }
+  if (!profile && state.walletAddress) {
+    try {
+      profile = await api(`/api/debox/user?wallet_address=${encodeURIComponent(state.walletAddress)}`);
+    } catch (_) {
+      profile = null;
+    }
+  }
+  state.profile = profile;
+  state.deboxUserId = deboxUserIdFromProfile(profile, state.walletAddress);
+  renderProfile();
+  await refreshAccount();
+  toast("钱包已连接");
+}
+
+async function refreshAccount() {
+  if (!state.deboxUserId) return;
+  const current = await api(`/api/subscription/current?debox_user_id=${encodeURIComponent(state.deboxUserId)}`);
+  state.entitlement = current;
+  state.groups = current.groups || [];
+  renderSubscription();
+  renderGroups();
+  renderRules();
+  await loadPaymentConfig();
+}
+
+async function loadPaymentConfig() {
+  const status = $("paymentStatus");
+  try {
+    const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+    if (state.selectedPlan === "free") {
+      status.textContent = "免费体验无需支付。";
+    } else if (config.mode !== "live") {
+      status.textContent = "当前为预览模式，不会发起真实支付。";
+    } else if (!config.ready) {
+      status.textContent = `支付配置缺少：${config.missing.join(", ")}`;
+    } else {
+      status.textContent = `${config.total_amount} ${config.asset} / ${config.chain_name}`;
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function startFreeTrial() {
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  await api("/api/subscription/free-trial", {
+    method: "POST",
+    body: JSON.stringify({ debox_user_id: state.deboxUserId }),
+  });
+  await refreshAccount();
+  toast("免费体验已开启");
+}
+
+async function payOrRenew() {
+  if (!state.deboxUserId || !state.walletAddress) {
+    toast("请先连接钱包。");
+    return;
+  }
+  if (state.selectedPlan === "free") {
+    await startFreeTrial();
+    return;
+  }
+  const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+  if (config.mode !== "live") {
+    toast("当前是预览模式，未发起真实支付。");
+    return;
+  }
+  const provider = walletProvider();
+  await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: config.chain_id_hex }] });
+  const prepared = await api("/api/payment/prepare", {
+    method: "POST",
+    body: JSON.stringify({
+      payer_address: state.walletAddress,
+      debox_user_id: state.deboxUserId,
+      plan_code: state.selectedPlan,
+    }),
+  });
+  const tx = prepared.transactions[0].request;
+  const txHash = await provider.request({ method: "eth_sendTransaction", params: [tx] });
+  await api("/api/payment/verify", {
+    method: "POST",
+    body: JSON.stringify({ order_id: prepared.order.id, tx_hash: txHash }),
+  });
+  await refreshAccount();
+  toast("订阅已生效");
+}
+
+async function lookupToken() {
+  const token = $("tokenAddressInput").value.trim();
+  if (!token) {
+    $("tokenInfoBox").textContent = "输入代币合约后会自动识别代币信息。";
+    return;
+  }
+  try {
+    const data = await api(`/api/debox/token?contract_address=${encodeURIComponent(token)}&chain_key=${encodeURIComponent($("chainSelect").value)}`);
+    const source = typeof data.data === "object" && data.data ? data.data : data;
+    $("tokenInfoBox").textContent = `识别结果：${source.name || "-"} (${source.symbol || "-"}) · 精度 ${source.decimal || source.decimals || "-"}`;
+  } catch (error) {
+    $("tokenInfoBox").textContent = `代币识别失败：${error.message}`;
+  }
+}
+
+async function queryBalance() {
+  const address = $("walletAddressInput").value.trim();
+  if (!address) {
+    toast("请填写钱包地址。");
+    return;
+  }
+  const query = new URLSearchParams({
+    address,
+    token_address: $("tokenAddressInput").value.trim(),
+    chain_key: $("chainSelect").value,
+  });
+  const data = await api(`/api/chain/balance?${query.toString()}`);
+  $("balanceBox").innerHTML = `当前余额：<strong>${data.value} ${data.symbol}</strong> · ${data.chain_name}`;
+}
+
+async function createRule(event) {
+  event.preventDefault();
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  const targetType = $("targetTypeSelect").value;
+  const selectedGroup = $("groupTargetSelect").selectedOptions[0];
+  await api("/api/watch-rules", {
+    method: "POST",
+    body: JSON.stringify({
+      chain_key: $("chainSelect").value,
+      wallet_address: $("walletAddressInput").value.trim(),
+      token_address: $("tokenAddressInput").value.trim() || null,
+      rule_type: $("ruleTypeSelect").value,
+      threshold: $("thresholdInput").value || "0",
+      debox_user_id: state.deboxUserId,
+      notification_chat_type: targetType,
+      notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
+      notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
+    }),
+  });
+  await refreshAccount();
+  toast("监控规则已创建");
+}
+
+async function deleteRule(ruleId) {
+  await api(`/api/watch-rules/${ruleId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
+  await refreshAccount();
+  toast("监控规则已删除");
+}
+
+async function addGroup(event) {
+  event.preventDefault();
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  await api("/api/notification-groups", {
+    method: "POST",
+    body: JSON.stringify({
+      debox_user_id: state.deboxUserId,
+      wallet_address: state.walletAddress,
+      gid: $("groupIdInput").value.trim(),
+      label: $("groupLabelInput").value.trim(),
+    }),
+  });
+  $("groupIdInput").value = "";
+  $("groupLabelInput").value = "";
+  await refreshAccount();
+  toast("群通知已绑定");
+}
+
+async function deleteGroup(groupId) {
+  await api(`/api/notification-groups/${groupId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
+  await refreshAccount();
+  toast("群通知已删除");
+}
+
+function bindEvents() {
+  $("connectWalletBtn").addEventListener("click", connectWallet);
+  $("freeTrialBtn").addEventListener("click", startFreeTrial);
+  $("payBtn").addEventListener("click", payOrRenew);
+  $("refreshRulesBtn").addEventListener("click", refreshAccount);
+  $("queryBalanceBtn").addEventListener("click", queryBalance);
+  $("ruleForm").addEventListener("submit", createRule);
+  $("groupForm").addEventListener("submit", addGroup);
+  $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
+  $("tokenAddressInput").addEventListener("blur", lookupToken);
+  $("chainSelect").addEventListener("change", lookupToken);
+}
+
+async function boot() {
+  bindEvents();
+  updateTargetVisibility();
+  await loadBootData();
+  await loadPaymentConfig();
+}
+
+boot().catch((error) => {
+  $("healthBadge").textContent = "服务异常";
+  toast(error.message);
+});
