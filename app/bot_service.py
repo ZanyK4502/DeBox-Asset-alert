@@ -111,7 +111,7 @@ def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
             _button_data("余额查询", "alert:balance"),
         ),
         boxbotapi.NewInlineKeyboardRow(
-            _button_chain("闪兑 USDT", swap_payload()),
+            _button_data("闪兑", "alert:swap"),
             _button_url("快捷续费", f"{app_url}#renew") if app_url else _button_data("快捷续费", "alert:renew"),
         ),
     ]
@@ -229,6 +229,21 @@ def balance_text(debox_user_id: str) -> str:
     )
 
 
+def swap_text() -> str:
+    return (
+        "<b>闪兑</b><br/>"
+        "将资产兑换为 BSC 链 USDT"
+    )
+
+
+def swap_markup() -> boxbotapi.InlineKeyboardMarkup:
+    return boxbotapi.NewInlineKeyboardMarkup(
+        boxbotapi.NewInlineKeyboardRow(
+            _button_chain("开始兑换", swap_payload()),
+            _button_data("返回", "alert:intro"),
+        )
+    )
+
 def callback_text(data: str, debox_user_id: str = "") -> str:
     try:
         if data == "alert:intro":
@@ -241,6 +256,8 @@ def callback_text(data: str, debox_user_id: str = "") -> str:
             return subscription_text(debox_user_id)
         if data == "alert:balance":
             return balance_text(debox_user_id)
+        if data == "alert:swap":
+            return swap_text()
         if data == "alert:renew":
             app_url = public_app_url()
             return f"请打开个人监控面板续费：{escape(app_url)}" if app_url else "请在 H5 中续费。"
@@ -250,6 +267,8 @@ def callback_text(data: str, debox_user_id: str = "") -> str:
 
 
 def callback_markup(data: str) -> boxbotapi.InlineKeyboardMarkup:
+    if data == "alert:swap":
+        return swap_markup()
     return menu_markup(show_intro=data != "alert:intro")
 
 
