@@ -138,8 +138,8 @@ def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineK
 def menu_text() -> str:
     return (
         "<b>DeBox Asset Alert</b><br/>"
-        "订阅钱包地址或代币资产变化，并通过 DeBox Bot 接收通知。<br/><br/>"
-        "可用能力：多链余额监控、代币识别、私聊通知、专业版群通知、订阅续费。"
+        "监控钱包地址或代币资产变化，通过 DeBox Bot 实时推送通知。<br/><br/>"
+        "支持：多链余额监控、代币识别、私聊通知、专业版群通知、每日摘要等。"
     )
 
 
