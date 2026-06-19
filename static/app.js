@@ -68,12 +68,7 @@ function setLoading(button, loading) {
 }
 
 async function loadBootData() {
-  const [health, plans, chains] = await Promise.all([
-    api("/api/health"),
-    api("/api/plans"),
-    api("/api/chains"),
-  ]);
-  $("healthBadge").textContent = health.ok ? "服务正常" : "服务异常";
+  const [plans, chains] = await Promise.all([api("/api/plans"), api("/api/chains")]);
   state.plans = plans;
   state.chains = chains;
   renderPlans();
@@ -418,6 +413,5 @@ async function boot() {
 }
 
 boot().catch((error) => {
-  $("healthBadge").textContent = "服务异常";
   toast(error.message);
 });
