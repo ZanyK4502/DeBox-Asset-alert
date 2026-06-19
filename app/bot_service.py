@@ -239,7 +239,7 @@ def swap_text() -> str:
 def swap_markup() -> boxbotapi.InlineKeyboardMarkup:
     return boxbotapi.NewInlineKeyboardMarkup(
         boxbotapi.NewInlineKeyboardRow(
-            _button_chain("开始兑换", swap_payload()),
+            _button_chain("开始兑换", swap_payload(), ""),
             _button_data("返回", "alert:intro"),
         )
     )
