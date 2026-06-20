@@ -168,6 +168,15 @@ function closeChainPicker() {
   $("chainPickerButton").setAttribute("aria-expanded", "false");
 }
 
+function shieldTapThrough(duration = 260) {
+  const shield = $("tapShield");
+  clearTimeout(shieldTapThrough.timer);
+  shield.hidden = false;
+  shieldTapThrough.timer = setTimeout(() => {
+    shield.hidden = true;
+  }, duration);
+}
+
 function toggleChainPicker() {
   const menu = $("chainPickerMenu");
   const willOpen = menu.hidden;
@@ -182,6 +191,7 @@ function toggleChainPicker() {
 function selectChain(chainKey) {
   $("chainSelect").value = chainKey;
   closeChainPicker();
+  shieldTapThrough();
   $("chainSelect").dispatchEvent(new Event("change", { bubbles: true }));
   closeChainPicker();
   $("chainPickerButton").focus();
@@ -697,6 +707,14 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeChainPicker();
+  });
+  $("tapShield").addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  $("tapShield").addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
   });
   $("identityModalClose").addEventListener("click", () => {
     $("identityModal").hidden = true;

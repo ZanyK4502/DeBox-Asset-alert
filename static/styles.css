@@ -519,6 +519,14 @@ select:focus {
   animation: toast-slide-out 240ms ease both;
 }
 
+.tap-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  background: transparent;
+  touch-action: none;
+}
+
 @keyframes toast-slide-in {
   from {
     opacity: 0;
