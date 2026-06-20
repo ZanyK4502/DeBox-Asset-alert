@@ -237,23 +237,25 @@ button,
   color: var(--accent);
 }
 
-button:hover {
-  filter: brightness(1.07);
-  border-color: rgba(31, 199, 122, 0.72);
-}
-
 button:active {
   filter: brightness(1.03);
   box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.08);
 }
 
-.primary:hover {
-  box-shadow: 0 10px 24px rgba(31, 199, 122, 0.18);
-}
-
 button.is-pressing {
   filter: brightness(1.04);
   box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  button:hover {
+    filter: brightness(1.07);
+    border-color: rgba(31, 199, 122, 0.72);
+  }
+
+  .primary:hover {
+    box-shadow: 0 10px 24px rgba(31, 199, 122, 0.18);
+  }
 }
 
 button:disabled {
