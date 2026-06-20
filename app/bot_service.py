@@ -161,8 +161,8 @@ def features_text() -> str:
     return (
         "<b>监控能力</b><br/><br/>"
         "支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>"
-        "可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/>"
-        "规则包括：<br/>"
+        "可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/><br/>"
+        "- 规则包括：<br/>"
         "• 余额变化<br/>"
         "• 转入<br/>"
         "• 转出<br/>"
