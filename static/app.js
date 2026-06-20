@@ -151,7 +151,15 @@ function renderChainPicker() {
     )
     .join("");
   document.querySelectorAll("[data-chain]").forEach((option) => {
-    option.addEventListener("click", () => selectChain(option.dataset.chain));
+    option.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectChain(option.dataset.chain);
+    });
+    option.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
   });
 }
 
@@ -175,6 +183,7 @@ function selectChain(chainKey) {
   $("chainSelect").value = chainKey;
   closeChainPicker();
   $("chainSelect").dispatchEvent(new Event("change", { bubbles: true }));
+  closeChainPicker();
   $("chainPickerButton").focus();
 }
 
