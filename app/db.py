@@ -170,6 +170,18 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS token_decimals INTEGER NOT NULL DEFAULT 18",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS recipient_address TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tx_hash TEXT",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS status TEXT",
+        "UPDATE orders SET status = 'pending' WHERE status IS NULL",
+        "ALTER TABLE orders ALTER COLUMN status SET DEFAULT 'pending'",
+        "ALTER TABLE orders ALTER COLUMN status SET NOT NULL",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+        "UPDATE orders SET created_at = NOW() WHERE created_at IS NULL",
+        "ALTER TABLE orders ALTER COLUMN created_at SET DEFAULT NOW()",
+        "ALTER TABLE orders ALTER COLUMN created_at SET NOT NULL",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
+        "UPDATE orders SET expires_at = created_at + INTERVAL '20 minutes' WHERE expires_at IS NULL",
+        "ALTER TABLE orders ALTER COLUMN expires_at SET DEFAULT (NOW() + INTERVAL '20 minutes')",
+        "ALTER TABLE orders ALTER COLUMN expires_at SET NOT NULL",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
     ]
     for statement in statements:
