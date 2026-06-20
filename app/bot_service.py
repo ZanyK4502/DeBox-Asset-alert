@@ -170,9 +170,9 @@ def features_text() -> str:
 def plans_text() -> str:
     return (
         "<b>订阅方案</b><br/>"
-        "免费体验：1 个钱包，1 条规则，24 小时，仅私聊通知。<br/>"
+        "免费体验：1 个钱包，1 条规则，24 小时，仅私聊通知。<br/><br/>"
         f"标准版：{settings.subscription_price} {settings.subscription_token_symbol} / "
-        f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/>"
+        f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/><br/>"
         "专业版：25 USDT / 30 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>"
         "同一时间只能有一个有效付费套餐；同套餐可提前续费并顺延到期时间。"
     )
