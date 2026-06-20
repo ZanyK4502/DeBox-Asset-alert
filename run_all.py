@@ -5,6 +5,10 @@ import sys
 import time
 
 
+RESTARTABLE = {"bot", "monitor"}
+RESTART_DELAY_SECONDS = 3
+
+
 def start(name: str, script: str) -> subprocess.Popen:
     process = subprocess.Popen([sys.executable, script])
     print(f"{name} started pid={process.pid}", flush=True)
@@ -12,27 +16,34 @@ def start(name: str, script: str) -> subprocess.Popen:
 
 
 def main() -> None:
-    processes: list[tuple[str, subprocess.Popen]] = [("web", start("web", "run.py"))]
+    scripts = {"web": "run.py"}
 
     if os.getenv("DEBOX_BOT_RECEIVE_MODE", "polling").strip().lower() == "polling":
-        processes.append(("bot", start("bot", "run_bot.py")))
+        scripts["bot"] = "run_bot.py"
 
-    processes.append(("monitor", start("monitor", "run_monitor.py")))
+    scripts["monitor"] = "run_monitor.py"
+    processes: dict[str, subprocess.Popen] = {
+        name: start(name, script) for name, script in scripts.items()
+    }
 
     try:
         while True:
-            for name, process in processes:
+            for name, process in list(processes.items()):
                 code = process.poll()
                 if code is not None:
-                    raise RuntimeError(f"{name} exited with code {code}")
+                    if name not in RESTARTABLE:
+                        raise RuntimeError(f"{name} exited with code {code}")
+                    print(f"{name} exited with code {code}; restarting", flush=True)
+                    time.sleep(RESTART_DELAY_SECONDS)
+                    processes[name] = start(name, scripts[name])
             time.sleep(2)
     except KeyboardInterrupt:
         pass
     finally:
-        for _, process in processes:
+        for process in processes.values():
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)
-        for _, process in processes:
+        for process in processes.values():
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
