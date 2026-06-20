@@ -51,9 +51,10 @@ a {
   gap: 14px;
   min-height: 64px;
   padding: 12px max(18px, calc((100vw - 1120px) / 2));
-  background: rgba(7, 10, 13, 0.92);
+  background: rgba(7, 10, 13, 0.74);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(14px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(18px) saturate(1.25);
 }
 
 .app-header strong {
@@ -243,6 +244,11 @@ button:hover {
 button:active {
   transform: translateY(1px) scale(0.98);
   filter: brightness(1.1);
+}
+
+button.is-pressing {
+  transform: translateY(1px) scale(0.965);
+  filter: brightness(1.12);
 }
 
 button:disabled {
@@ -489,13 +495,39 @@ select:focus {
 
 @media (max-width: 620px) {
   .app-header {
-    align-items: stretch;
-    flex-direction: column;
-    padding: 12px 14px;
+    align-items: center;
+    flex-direction: row;
+    gap: 10px;
+    min-height: 60px;
+    padding: 10px 14px;
   }
 
   .app-header button {
-    width: 100%;
+    width: auto;
+    min-width: 92px;
+    min-height: 36px;
+    padding: 0 12px;
+    flex: 0 0 auto;
+    font-size: 14px;
+  }
+
+  .app-header strong {
+    font-size: 16px;
+  }
+
+  .app-header span {
+    font-size: 13px;
+  }
+
+  .brand {
+    flex: 1 1 auto;
+    gap: 9px;
+  }
+
+  .brand img {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
   }
 
   .toast {
