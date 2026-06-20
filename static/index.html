@@ -54,13 +54,13 @@
         </div>
 
         <form id="ruleForm" class="form-grid">
+          <select id="chainSelect" aria-hidden="true" tabindex="-1"></select>
           <label>
             钱包地址
             <input id="walletAddressInput" placeholder="0x..." autocomplete="off" />
           </label>
           <label>
             链
-            <select id="chainSelect"></select>
             <div id="chainPicker" class="chain-picker">
               <button id="chainPickerButton" class="chain-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false"></button>
               <div id="chainPickerMenu" class="chain-picker-menu" role="listbox" hidden></div>
