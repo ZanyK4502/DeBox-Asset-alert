@@ -66,6 +66,21 @@ a {
   color: var(--muted);
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand img {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
 .layout {
   width: min(1120px, calc(100% - 28px));
   margin: 0 auto;
