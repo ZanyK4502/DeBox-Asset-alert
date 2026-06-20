@@ -227,11 +227,13 @@ def balance_text(debox_user_id: str) -> str:
     if not address:
         return "没有从 DeBox 用户资料中识别到钱包地址，请在个人监控面板连接钱包后查询。"
     current = balance(address, settings.subscription_token_address, "bsc")
+    gas = balance(address, None, "bsc")
     return (
         "<b>余额查询</b><br/>"
         f"钱包：{escape(address[:8])}...{escape(address[-6:])}<br/>"
         f"网络：{escape(current['chain_name'])}<br/>"
-        f"余额：{escape(current['value'])} {escape(current['symbol'])}"
+        f"余额：{escape(current['value'])} {escape(current['symbol'])}<br/>"
+        f"Gas 费余额：{escape(gas['value'])} {escape(gas['symbol'])}"
     )
 
 
