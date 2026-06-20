@@ -3,6 +3,7 @@ const state = {
   deboxUserId: "",
   profile: null,
   plans: [],
+  ruleTypes: [],
   chains: [],
   selectedPlan: "standard",
   entitlement: null,
@@ -11,6 +12,15 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
@@ -18,7 +28,7 @@ function toast(message) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => {
     node.hidden = true;
-  }, 4200);
+  }, 3600);
 }
 
 async function api(path, options = {}) {
@@ -42,43 +52,40 @@ function shortAddress(address) {
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
 }
 
+function profileData(profile) {
+  return typeof profile?.data === "object" && profile.data ? profile.data : profile || {};
+}
+
 function deboxUserIdFromProfile(profile, fallback) {
-  if (!profile) return fallback;
-  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  const data = profileData(profile);
   return data.user_id || data.userId || data.uid || data.id || fallback;
 }
 
 function profileName(profile) {
-  if (!profile) return "DeBox 用户";
-  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  const data = profileData(profile);
   return data.name || data.nickname || data.user_name || "DeBox 用户";
 }
 
 function profileAvatar(profile) {
-  if (!profile) return "";
-  const data = typeof profile.data === "object" && profile.data ? profile.data : profile;
+  const data = profileData(profile);
   return data.pic || data.avatar || data.avatar_url || "";
 }
 
-function setLoading(button, loading) {
-  if (!button) return;
-  button.disabled = loading;
-  if (loading) button.dataset.text = button.textContent;
-  button.textContent = loading ? "处理中..." : button.dataset.text || button.textContent;
-}
-
-async function loadBootData() {
-  const [plans, chains] = await Promise.all([api("/api/plans"), api("/api/chains")]);
-  state.plans = plans;
-  state.chains = chains;
-  renderPlans();
-  renderChains();
+function currentPlan() {
+  return state.entitlement?.plan || null;
 }
 
 function renderChains() {
   $("chainSelect").innerHTML = state.chains
-    .map((chain) => `<option value="${chain.key}">${chain.name}</option>`)
+    .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.name)}</option>`)
     .join("");
+}
+
+function renderRuleTypes() {
+  $("ruleTypeSelect").innerHTML = state.ruleTypes
+    .map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(rule.label)}</option>`)
+    .join("");
+  updateRuleFields();
 }
 
 function renderPlans() {
@@ -87,10 +94,10 @@ function renderPlans() {
       const active = plan.code === state.selectedPlan ? " active" : "";
       const price = plan.price === "0" ? "免费" : `${plan.price} ${plan.asset || "USDT"}`;
       return `
-        <button class="plan-card${active}" type="button" data-plan="${plan.code}">
-          <strong>${plan.name}</strong>
-          <p>${price} / ${plan.days} 天</p>
-          <p class="muted">${plan.description}</p>
+        <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}">
+          <span>${escapeHtml(plan.name)}</span>
+          <strong>${escapeHtml(price)}</strong>
+          <small>${escapeHtml(plan.description)}</small>
         </button>
       `;
     })
@@ -111,78 +118,93 @@ function renderProfile() {
   }
   const avatar = profileAvatar(state.profile);
   $("profileBox").innerHTML = `
-    ${avatar ? `<img src="${avatar}" alt="">` : ""}
-    <div>
-      <strong>${profileName(state.profile)}</strong>
-      <div class="muted">${shortAddress(state.walletAddress)}</div>
-      <div class="muted">DeBox ID: ${state.deboxUserId || "-"}</div>
+    <div class="profile-row">
+      ${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : ""}
+      <div>
+        <strong>${escapeHtml(profileName(state.profile))}</strong>
+        <span>${escapeHtml(shortAddress(state.walletAddress))}</span>
+        <span>DeBox ID: ${escapeHtml(state.deboxUserId || "-")}</span>
+      </div>
     </div>
   `;
 }
 
 function renderSubscription() {
   const box = $("subscriptionBox");
-  if (!state.entitlement || !state.entitlement.plan) {
+  const plan = currentPlan();
+  if (!state.entitlement || !plan) {
     box.innerHTML = "还没有有效订阅";
     return;
   }
-  const plan = state.entitlement.plan;
   const sub = state.entitlement.subscription || {};
   box.innerHTML = `
-    <strong>${plan.name}</strong>
-    <span>剩余 ${state.entitlement.days_remaining} 天</span>
-    <span>规则 ${state.entitlement.rule_count} / ${plan.rule_limit}</span>
-    <span>群通知 ${state.entitlement.group_count} / ${plan.group_limit}</span>
-    <span class="muted">到期：${sub.expires_at || "-"}</span>
+    <div class="metric-row">
+      <strong>${escapeHtml(plan.name)}</strong>
+      <span>剩余 ${escapeHtml(state.entitlement.days_remaining)} 天</span>
+    </div>
+    <div class="mini-grid">
+      <span>钱包 ${state.entitlement.wallet_count} / ${plan.wallet_limit}</span>
+      <span>规则 ${state.entitlement.rule_count} / ${plan.rule_limit}</span>
+      <span>群 ${state.entitlement.group_count} / ${plan.group_limit}</span>
+    </div>
+    <small class="muted">到期：${escapeHtml(sub.expires_at || "-")}</small>
   `;
+  fillSummaryForm();
 }
 
 function renderGroups() {
-  const groupSelect = $("groupTargetSelect");
+  const options = state.groups.length
+    ? state.groups.map((group) => `<option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>`).join("")
+    : `<option value="">暂无已绑定群</option>`;
+  $("groupTargetSelect").innerHTML = options;
+  $("summaryGroupSelect").innerHTML = options;
+
   if (!state.groups.length) {
-    groupSelect.innerHTML = `<option value="">暂无已绑定群</option>`;
-    $("groupsList").innerHTML = `<div class="info-box muted">专业版可绑定群 ID，用于把监控通知发送到群里。</div>`;
-    return;
+    $("groupsList").innerHTML = `<div class="notice muted">专业版可绑定群，用于群通知和群每日摘要。</div>`;
+  } else {
+    $("groupsList").innerHTML = state.groups
+      .map(
+        (group) => `
+          <div class="list-item">
+            <div>
+              <strong>${escapeHtml(group.name || group.gid)}</strong>
+              <span>GID: ${escapeHtml(group.gid)}</span>
+            </div>
+            <button class="secondary" type="button" data-delete-group="${escapeHtml(group.id)}">删除</button>
+          </div>
+        `
+      )
+      .join("");
   }
-  groupSelect.innerHTML = state.groups
-    .map((group) => `<option value="${group.gid}">${group.name || group.gid}</option>`)
-    .join("");
-  $("groupsList").innerHTML = state.groups
-    .map(
-      (group) => `
-      <div class="list-item">
-        <div>
-          <strong>${group.name || group.gid}</strong>
-          <span class="muted">GID: ${group.gid}</span>
-        </div>
-        <button class="ghost" type="button" data-delete-group="${group.id}">删除</button>
-      </div>
-    `
-    )
-    .join("");
   document.querySelectorAll("[data-delete-group]").forEach((button) => {
     button.addEventListener("click", () => deleteGroup(button.dataset.deleteGroup));
   });
+  updateTargetVisibility();
+  updateSummaryTargetVisibility();
+}
+
+function ruleLabel(code) {
+  return state.ruleTypes.find((rule) => rule.code === code)?.label || code;
 }
 
 function renderRules() {
-  const rules = (state.entitlement && state.entitlement.rules) || [];
+  const rules = state.entitlement?.rules || [];
   if (!rules.length) {
-    $("rulesList").innerHTML = `<div class="info-box muted">还没有监控规则。</div>`;
+    $("rulesList").innerHTML = `<div class="notice muted">还没有监控规则。</div>`;
     return;
   }
   $("rulesList").innerHTML = rules
     .map(
       (rule) => `
-      <div class="list-item">
-        <div>
-          <strong>${rule.token_address ? "代币余额" : "原生资产"} / ${rule.chain_key}</strong>
-          <span class="muted">${shortAddress(rule.wallet_address)} · ${rule.rule_type} · 阈值 ${rule.threshold}</span>
-          <div class="muted">通知：${rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊"}</div>
+        <div class="list-item">
+          <div>
+            <strong>${escapeHtml(ruleLabel(rule.rule_type))} / ${escapeHtml(rule.chain_key)}</strong>
+            <span>${escapeHtml(shortAddress(rule.wallet_address))} · 阈值 ${escapeHtml(rule.threshold)}</span>
+            <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊通知")}</small>
+          </div>
+          <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">删除</button>
         </div>
-        <button class="ghost" type="button" data-delete-rule="${rule.id}">删除</button>
-      </div>
-    `
+      `
     )
     .join("");
   document.querySelectorAll("[data-delete-rule]").forEach((button) => {
@@ -190,26 +212,59 @@ function renderRules() {
   });
 }
 
+function fillSummaryForm() {
+  const settings = state.entitlement?.summary_settings || {};
+  $("summaryEnabledInput").checked = Boolean(settings.enabled);
+  $("summaryTimeInput").value = settings.time || "20:00";
+  $("summaryTimezoneInput").value = settings.timezone || "Asia/Shanghai";
+  $("summaryTargetSelect").value = settings.chat_type || "private";
+  $("summaryLabelInput").value = settings.label || "";
+  const plan = currentPlan();
+  $("summaryCapability").textContent = plan?.daily_summary ? "可用" : "当前套餐不可用";
+  $("summaryCapability").classList.toggle("muted", !plan?.daily_summary);
+  updateSummaryTargetVisibility();
+}
+
+function updateRuleFields() {
+  const type = $("ruleTypeSelect").value;
+  const needsTarget = type === "approval_change" || type === "address_interaction";
+  $("targetAddressWrap").hidden = !needsTarget;
+  $("targetLabelWrap").hidden = !needsTarget;
+  $("tokenAddressInput").placeholder =
+    type === "approval_change" ? "必填，授权代币合约" : "可选，留空监控原生资产";
+}
+
 function updateTargetVisibility() {
-  const type = $("targetTypeSelect").value;
-  $("groupTargetWrap").style.display = type === "group" ? "grid" : "none";
+  $("groupTargetWrap").hidden = $("targetTypeSelect").value !== "group";
+}
+
+function updateSummaryTargetVisibility() {
+  $("summaryGroupWrap").hidden = $("summaryTargetSelect").value !== "group";
+}
+
+async function loadBootData() {
+  const [planPayload, chains] = await Promise.all([api("/api/plans"), api("/api/chains")]);
+  state.plans = planPayload.plans || planPayload;
+  state.ruleTypes = planPayload.rule_types || [];
+  state.chains = chains;
+  renderPlans();
+  renderChains();
+  renderRuleTypes();
 }
 
 async function connectWallet() {
   const provider = walletProvider();
-  if (!provider || !provider.request) {
+  if (!provider?.request) {
     toast("当前浏览器没有检测到 DeBox 钱包或 EVM 钱包。");
     return;
   }
   const accounts = await provider.request({ method: "eth_requestAccounts" });
-  state.walletAddress = accounts && accounts[0] ? accounts[0] : "";
+  state.walletAddress = accounts?.[0] || "";
   $("walletAddressInput").value = state.walletAddress;
 
   let profile = null;
   try {
-    if (provider.request) {
-      profile = await provider.request({ method: "debox_getUserInfo" });
-    }
+    profile = await provider.request({ method: "debox_getUserInfo" });
   } catch (_) {
     profile = null;
   }
@@ -293,8 +348,10 @@ async function payOrRenew() {
       plan_code: state.selectedPlan,
     }),
   });
-  const tx = prepared.transactions[0].request;
-  const txHash = await provider.request({ method: "eth_sendTransaction", params: [tx] });
+  const txHash = await provider.request({
+    method: "eth_sendTransaction",
+    params: [prepared.transactions[0].request],
+  });
   await api("/api/payment/verify", {
     method: "POST",
     body: JSON.stringify({ order_id: prepared.order.id, tx_hash: txHash }),
@@ -306,12 +363,12 @@ async function payOrRenew() {
 async function lookupToken() {
   const token = $("tokenAddressInput").value.trim();
   if (!token) {
-    $("tokenInfoBox").textContent = "输入代币合约后会自动识别代币信息。";
+    $("tokenInfoBox").textContent = "填写代币合约后可识别 Token 信息。";
     return;
   }
   try {
     const data = await api(`/api/debox/token?contract_address=${encodeURIComponent(token)}&chain_key=${encodeURIComponent($("chainSelect").value)}`);
-    const source = typeof data.data === "object" && data.data ? data.data : data;
+    const source = profileData(data);
     $("tokenInfoBox").textContent = `识别结果：${source.name || "-"} (${source.symbol || "-"}) · 精度 ${source.decimal || source.decimals || "-"}`;
   } catch (error) {
     $("tokenInfoBox").textContent = `代币识别失败：${error.message}`;
@@ -326,11 +383,12 @@ async function queryBalance() {
   }
   const query = new URLSearchParams({
     address,
-    token_address: $("tokenAddressInput").value.trim(),
     chain_key: $("chainSelect").value,
   });
+  const token = $("tokenAddressInput").value.trim();
+  if (token) query.set("token_address", token);
   const data = await api(`/api/chain/balance?${query.toString()}`);
-  $("balanceBox").innerHTML = `当前余额：<strong>${data.value} ${data.symbol}</strong> · ${data.chain_name}`;
+  $("balanceBox").innerHTML = `当前余额：<strong>${escapeHtml(data.value)} ${escapeHtml(data.symbol)}</strong> · ${escapeHtml(data.chain_name)}`;
 }
 
 async function createRule(event) {
@@ -347,6 +405,8 @@ async function createRule(event) {
       chain_key: $("chainSelect").value,
       wallet_address: $("walletAddressInput").value.trim(),
       token_address: $("tokenAddressInput").value.trim() || null,
+      target_address: $("targetAddressInput").value.trim() || null,
+      target_label: $("targetLabelInput").value.trim(),
       rule_type: $("ruleTypeSelect").value,
       threshold: $("thresholdInput").value || "0",
       debox_user_id: state.deboxUserId,
@@ -363,6 +423,28 @@ async function deleteRule(ruleId) {
   await api(`/api/watch-rules/${ruleId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
   await refreshAccount();
   toast("监控规则已删除");
+}
+
+async function saveSummary(event) {
+  event.preventDefault();
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  await api("/api/subscription/summary-settings", {
+    method: "POST",
+    body: JSON.stringify({
+      debox_user_id: state.deboxUserId,
+      enabled: $("summaryEnabledInput").checked,
+      push_time: $("summaryTimeInput").value || "20:00",
+      timezone: $("summaryTimezoneInput").value.trim() || "Asia/Shanghai",
+      chat_type: $("summaryTargetSelect").value,
+      chat_id: $("summaryTargetSelect").value === "group" ? $("summaryGroupSelect").value : "",
+      label: $("summaryLabelInput").value.trim(),
+    }),
+  });
+  await refreshAccount();
+  toast("每日摘要设置已保存");
 }
 
 async function addGroup(event) {
@@ -400,7 +482,10 @@ function bindEvents() {
   $("queryBalanceBtn").addEventListener("click", queryBalance);
   $("ruleForm").addEventListener("submit", createRule);
   $("groupForm").addEventListener("submit", addGroup);
+  $("summaryForm").addEventListener("submit", saveSummary);
   $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
+  $("summaryTargetSelect").addEventListener("change", updateSummaryTargetVisibility);
+  $("ruleTypeSelect").addEventListener("change", updateRuleFields);
   $("tokenAddressInput").addEventListener("blur", lookupToken);
   $("chainSelect").addEventListener("change", lookupToken);
 }
@@ -408,6 +493,7 @@ function bindEvents() {
 async function boot() {
   bindEvents();
   updateTargetVisibility();
+  updateSummaryTargetVisibility();
   await loadBootData();
   await loadPaymentConfig();
 }

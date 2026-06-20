@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from functools import lru_cache
 import re
+from typing import Any
 
 import requests
 
@@ -251,3 +252,143 @@ def transaction_by_hash(tx_hash: str, chain_key: str | None = None) -> dict:
         "blockchain/getTransactionByHash",
         {"transactionHash": validate_transaction_hash(tx_hash), "withBalanceChanges": True},
     )
+
+
+def _items(payload: Any) -> list:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in ("items", "transactions", "data", "result"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = _items(value)
+            if nested:
+                return nested
+    return []
+
+
+def _first_value(payload: Any, keys: tuple[str, ...]) -> str | None:
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if value is not None:
+                return str(value)
+        for value in payload.values():
+            found = _first_value(value, keys)
+            if found is not None:
+                return found
+    if isinstance(payload, list):
+        for value in payload:
+            found = _first_value(value, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _contains_address(payload: Any, expected: str) -> bool:
+    if isinstance(payload, dict):
+        for value in payload.values():
+            if _contains_address(value, expected):
+                return True
+    elif isinstance(payload, list):
+        for value in payload:
+            if _contains_address(value, expected):
+                return True
+    elif isinstance(payload, str):
+        candidate = payload.strip()
+        if ADDRESS_RE.fullmatch(candidate) and validate_address(candidate) == expected:
+            return True
+        return expected[2:] in candidate.lower()
+    return False
+
+
+def token_allowance(
+    owner_address: str,
+    token_address: str,
+    spender_address: str,
+    chain_key: str | None = None,
+) -> dict:
+    profile = chain_profile(chain_key)
+    owner = validate_address(owner_address)
+    token = validate_address(token_address)
+    spender = validate_address(spender_address)
+    data = nodit_client().post(
+        profile,
+        "token/getTokenAllowance",
+        {
+            "ownerAddress": owner,
+            "contractAddress": token,
+            "spenderAddress": spender,
+        },
+    )
+    raw = _first_value(data, ("allowance", "value", "amount", "balance")) or "0"
+    decimals = int(_first_value(data, ("decimals", "decimal", "tokenDecimal")) or 18)
+    symbol = _first_value(data, ("symbol", "tokenSymbol", "name")) or "TOKEN"
+    return {
+        "value": format_units(raw, decimals),
+        "raw": raw,
+        "symbol": symbol,
+        "decimals": decimals,
+        "chain_key": profile["key"],
+        "chain_id": profile["chain_id"],
+        "chain_name": profile["name"],
+        "wallet_address": owner,
+        "token_address": token,
+        "spender_address": spender,
+    }
+
+
+def transactions_by_account(address: str, chain_key: str | None = None, rpp: int = 20) -> list[dict]:
+    profile = chain_profile(chain_key)
+    wallet = validate_address(address)
+    data = nodit_client().post(
+        profile,
+        "blockchain/getTransactionsByAccount",
+        {
+            "accountAddress": wallet,
+            "rpp": max(1, min(int(rpp), 100)),
+            "withLogs": True,
+            "withDecode": True,
+        },
+    )
+    return [item for item in _items(data) if isinstance(item, dict)]
+
+
+def latest_interaction(
+    address: str,
+    target_address: str,
+    chain_key: str | None = None,
+) -> dict:
+    profile = chain_profile(chain_key)
+    target = validate_address(target_address)
+    wallet = validate_address(address)
+    for item in transactions_by_account(wallet, profile["key"], rpp=30):
+        if _contains_address(item, target):
+            tx_hash = (
+                item.get("transactionHash")
+                or item.get("hash")
+                or item.get("txHash")
+                or item.get("id")
+                or "matched"
+            )
+            return {
+                "cursor": str(tx_hash),
+                "matched": True,
+                "transaction": item,
+                "chain_key": profile["key"],
+                "chain_id": profile["chain_id"],
+                "wallet_address": wallet,
+                "target_address": target,
+            }
+    return {
+        "cursor": "none",
+        "matched": False,
+        "transaction": None,
+        "chain_key": profile["key"],
+        "chain_id": profile["chain_id"],
+        "wallet_address": wallet,
+        "target_address": target,
+    }

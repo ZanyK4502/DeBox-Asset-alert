@@ -3,7 +3,6 @@ from __future__ import annotations
 from html import escape
 import json
 import logging
-from pathlib import Path
 import time
 from typing import Any
 
@@ -66,17 +65,14 @@ def _button_url(text: str, url: str) -> Any:
     return boxbotapi.NewInlineKeyboardButtonURL(text, url)
 
 
-def _button_chain(text: str, payload: str, sub_text: str = "BNB Chain") -> Any:
-    try:
-        return boxbotapi.NewInlineKeyboardButtonDataWithColor(
-            text,
-            payload,
-            "debox://wallet/request",
-            sub_text,
-            "#16C784",
-        )
-    except Exception:
-        return _button_url(text, "debox://wallet/request")
+def _button_chain(text: str, payload: str) -> Any:
+    return boxbotapi.NewInlineKeyboardButtonDataWithColor(
+        text,
+        payload,
+        "debox://wallet/request",
+        "",
+        "#16C784",
+    )
 
 
 def swap_payload() -> str:
@@ -112,7 +108,9 @@ def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
         ),
         boxbotapi.NewInlineKeyboardRow(
             _button_data("闪兑", "alert:swap"),
-            _button_url("快捷续费", f"{app_url}#renew") if app_url else _button_data("快捷续费", "alert:renew"),
+            _button_url("快捷续费", f"{app_url}#renew")
+            if app_url
+            else _button_data("快捷续费", "alert:renew"),
         ),
     ]
     if app_url:
@@ -120,6 +118,14 @@ def menu_markup(show_intro: bool = False) -> boxbotapi.InlineKeyboardMarkup:
     if show_intro:
         rows.append(boxbotapi.NewInlineKeyboardRow(_button_data("介绍", "alert:intro")))
     return boxbotapi.NewInlineKeyboardMarkup(*rows)
+
+
+def back_markup(include_panel: bool = True) -> boxbotapi.InlineKeyboardMarkup:
+    app_url = public_app_url()
+    buttons = [_button_data("返回介绍", "alert:intro")]
+    if include_panel and app_url:
+        buttons.append(_button_url("个人监控面板", app_url))
+    return boxbotapi.NewInlineKeyboardMarkup(boxbotapi.NewInlineKeyboardRow(*buttons))
 
 
 def group_entry_markup(bot: boxbotapi.BotAPI | None = None) -> boxbotapi.InlineKeyboardMarkup:
@@ -148,27 +154,27 @@ def group_entry_text(message: boxbotapi.Message) -> str:
     if message.From is not None:
         user_name = message.From.Name or message.From.UserId
     prefix = f"@{escape(user_name)} " if user_name else ""
-    return f"{prefix}我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或个人监控面板。"
+    return f"{prefix}我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。"
 
 
 def features_text() -> str:
     return (
         "<b>监控能力</b><br/>"
-        "- 支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/>"
-        "- 可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/>"
-        "- 支持余额变化、转入、转出、余额阈值。<br/>"
-        "- 标准版和专业版支持每日订阅摘要，专业版可把通知发送到已绑定的 DeBox 群。"
+        "支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/>"
+        "可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/>"
+        "规则包括余额变化、转入、转出、余额阈值、授权变化和指定地址交互。<br/>"
+        "标准版支持私聊通知和每日摘要；专业版支持群通知和更多高级规则。"
     )
 
 
 def plans_text() -> str:
     return (
         "<b>订阅方案</b><br/>"
-        "免费体验：1 条规则，24 小时，仅支持私聊通知。<br/>"
-        f"标准订阅：{settings.subscription_price} {settings.subscription_token_symbol} / "
-        f"{settings.subscription_days} 天，最多 10 条规则。<br/>"
-        "专业订阅：25 USDT / 30 天，最多 50 条规则，可绑定 3 个群。<br/><br/>"
-        "同一时间只能有一个有效套餐；同套餐可以提前续费并顺延到期时间。"
+        "免费体验：1 个钱包，1 条规则，24 小时，仅私聊通知。<br/>"
+        f"标准版：{settings.subscription_price} {settings.subscription_token_symbol} / "
+        f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/>"
+        "专业版：25 USDT / 30 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>"
+        "同一时间只能有一个有效付费套餐；同套餐可提前续费并顺延到期时间。"
     )
 
 
@@ -230,19 +236,17 @@ def balance_text(debox_user_id: str) -> str:
 
 
 def swap_text() -> str:
-    return (
-        "<b>闪兑</b><br/>"
-        "将资产兑换为 BSC 链 USDT"
-    )
+    return "<b>闪兑</b><br/>将资产兑换为 BSC 链 USDT"
 
 
 def swap_markup() -> boxbotapi.InlineKeyboardMarkup:
     return boxbotapi.NewInlineKeyboardMarkup(
         boxbotapi.NewInlineKeyboardRow(
-            _button_chain("开始兑换", swap_payload(), ""),
+            _button_chain("开始兑换", swap_payload()),
             _button_data("返回", "alert:intro"),
         )
     )
+
 
 def callback_text(data: str, debox_user_id: str = "") -> str:
     try:
@@ -267,9 +271,11 @@ def callback_text(data: str, debox_user_id: str = "") -> str:
 
 
 def callback_markup(data: str) -> boxbotapi.InlineKeyboardMarkup:
+    if data == "alert:intro":
+        return menu_markup()
     if data == "alert:swap":
         return swap_markup()
-    return menu_markup(show_intro=data != "alert:intro")
+    return back_markup()
 
 
 def send_menu(bot: boxbotapi.BotAPI, chat_id: str, chat_type: str) -> None:

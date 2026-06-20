@@ -1,137 +1,244 @@
 from __future__ import annotations
 
+from collections import Counter
+from datetime import datetime, timezone
 from decimal import Decimal
 from html import escape
+from zoneinfo import ZoneInfo
 
-from app.chain_service import balance
+from app.chain_service import balance, latest_interaction, token_allowance
 from app.db import (
     create_alert_event,
     list_due_scheduled_subscriptions,
     list_enabled_watch_rules,
+    list_recent_alert_events,
     list_user_watch_rules,
     mark_scheduled_push_sent,
     update_watch_rule_value,
 )
 from app.debox_service import send_notification
-from app.plans import get_plan
+from app.plans import ASSET_RULE_TYPES, RULE_TYPE_LABELS
 
 
-def notification_reason(
-    rule_type: str,
-    previous: Decimal,
-    current: Decimal,
-    threshold: Decimal,
-) -> str | None:
+def _decimal(value: str | None) -> Decimal:
+    try:
+        return Decimal(str(value or "0"))
+    except Exception:
+        return Decimal("0")
+
+
+def _short(address: str | None) -> str:
+    if not address:
+        return "-"
+    value = str(address)
+    return f"{value[:8]}...{value[-6:]}" if len(value) > 16 else value
+
+
+def _send_rule_alert(rule: dict, previous: str, current: str, note: str) -> str:
+    text = (
+        "<b>DeBox Asset Alert</b><br/>"
+        f"规则：{escape(RULE_TYPE_LABELS.get(rule['rule_type'], rule['rule_type']))}<br/>"
+        f"网络：{escape(str(rule.get('chain_key', '-')))}<br/>"
+        f"钱包：{escape(_short(rule.get('wallet_address')))}<br/>"
+        f"变化：{escape(previous)} -> {escape(current)}<br/>"
+        f"{escape(note)}"
+    )
+    return send_notification(rule["notification_chat_id"], rule["notification_chat_type"], text)
+
+
+def _should_alert_asset(rule_type: str, previous: Decimal, current: Decimal, threshold: Decimal) -> bool:
     delta = current - previous
-    if rule_type == "balance_change" and delta != 0 and abs(delta) >= threshold:
-        return "余额变化"
-    if rule_type == "incoming" and delta > 0 and delta >= threshold:
-        return "检测到转入"
-    if rule_type == "outgoing" and delta < 0 and abs(delta) >= threshold:
-        return "检测到转出"
+    absolute_delta = abs(delta)
+    if rule_type == "balance_change":
+        return delta != 0 and (threshold <= 0 or absolute_delta >= threshold)
+    if rule_type == "incoming":
+        return delta > 0 and (threshold <= 0 or delta >= threshold)
+    if rule_type == "outgoing":
+        return delta < 0 and (threshold <= 0 or abs(delta) >= threshold)
     if rule_type == "balance_threshold":
-        if previous < threshold <= current:
-            return "余额向上达到阈值"
-        if previous >= threshold > current:
-            return "余额向下跌破阈值"
-    return None
+        return current <= threshold
+    return False
 
 
-def _rule_title(rule: dict, current: dict) -> str:
-    label = (rule.get("notification_label") or "").strip()
-    asset = current["symbol"]
-    chain = current["chain_name"]
-    return f"{label} {asset} / {chain}".strip() if label else f"{asset} / {chain}"
+def check_asset_rule(rule: dict) -> dict:
+    current = balance(rule["wallet_address"], rule.get("token_address"), rule.get("chain_key"))
+    current_value = current["value"]
+    previous_value = rule.get("last_value")
+    update_watch_rule_value(int(rule["id"]), current_value)
+    if previous_value is None:
+        return {"rule_id": rule["id"], "status": "baseline", "value": current_value}
+
+    previous = _decimal(previous_value)
+    now = _decimal(current_value)
+    threshold = _decimal(rule.get("threshold"))
+    if not _should_alert_asset(rule["rule_type"], previous, now, threshold):
+        return {"rule_id": rule["id"], "status": "no_change", "value": current_value}
+
+    symbol = current.get("symbol", "TOKEN")
+    note = f"{symbol} 余额触发监控条件。"
+    message_id = _send_rule_alert(rule, previous_value, current_value, note)
+    event = create_alert_event(
+        watch_rule_id=int(rule["id"]),
+        event_type=rule["rule_type"],
+        previous_value=previous_value,
+        current_value=current_value,
+        notification_message_id=message_id,
+    )
+    return {"rule_id": rule["id"], "status": "alerted", "event": event}
+
+
+def check_approval_rule(rule: dict) -> dict:
+    if not rule.get("token_address") or not rule.get("target_address"):
+        return {"rule_id": rule["id"], "status": "invalid", "reason": "missing token or spender"}
+    current = token_allowance(
+        rule["wallet_address"],
+        rule["token_address"],
+        rule["target_address"],
+        rule.get("chain_key"),
+    )
+    current_value = current["value"]
+    previous_value = rule.get("last_value")
+    update_watch_rule_value(int(rule["id"]), current_value)
+    if previous_value is None:
+        return {"rule_id": rule["id"], "status": "baseline", "value": current_value}
+    if _decimal(previous_value) == _decimal(current_value):
+        return {"rule_id": rule["id"], "status": "no_change", "value": current_value}
+
+    note = f"授权对象：{_short(rule.get('target_address'))}。"
+    message_id = _send_rule_alert(rule, previous_value, current_value, note)
+    event = create_alert_event(
+        watch_rule_id=int(rule["id"]),
+        event_type="approval_change",
+        previous_value=previous_value,
+        current_value=current_value,
+        notification_message_id=message_id,
+    )
+    return {"rule_id": rule["id"], "status": "alerted", "event": event}
+
+
+def check_interaction_rule(rule: dict) -> dict:
+    if not rule.get("target_address"):
+        return {"rule_id": rule["id"], "status": "invalid", "reason": "missing target address"}
+    current = latest_interaction(rule["wallet_address"], rule["target_address"], rule.get("chain_key"))
+    cursor = current["cursor"]
+    previous_cursor = rule.get("last_value")
+    update_watch_rule_value(int(rule["id"]), cursor)
+    if previous_cursor is None:
+        return {"rule_id": rule["id"], "status": "baseline", "value": cursor}
+    if cursor == previous_cursor or not current.get("matched"):
+        return {"rule_id": rule["id"], "status": "no_change", "value": cursor}
+
+    note = f"目标地址：{_short(rule.get('target_address'))}。"
+    message_id = _send_rule_alert(rule, previous_cursor, cursor, note)
+    event = create_alert_event(
+        watch_rule_id=int(rule["id"]),
+        event_type="address_interaction",
+        previous_value=previous_cursor,
+        current_value=cursor,
+        notification_message_id=message_id,
+    )
+    return {"rule_id": rule["id"], "status": "alerted", "event": event}
 
 
 def check_rule(rule: dict) -> dict:
-    current = balance(
-        rule["wallet_address"],
-        rule["token_address"] or None,
-        rule.get("chain_key") or "bsc",
+    try:
+        if rule["rule_type"] in ASSET_RULE_TYPES:
+            return check_asset_rule(rule)
+        if rule["rule_type"] == "approval_change":
+            return check_approval_rule(rule)
+        if rule["rule_type"] == "address_interaction":
+            return check_interaction_rule(rule)
+        return {"rule_id": rule["id"], "status": "unsupported", "rule_type": rule["rule_type"]}
+    except Exception as exc:
+        return {"rule_id": rule.get("id"), "status": "error", "error": str(exc)}
+
+
+def check_all_rules(limit: int = 200) -> dict:
+    results = [check_rule(rule) for rule in list_enabled_watch_rules(limit)]
+    return {
+        "checked": len(results),
+        "alerted": sum(1 for item in results if item.get("status") == "alerted"),
+        "errors": [item for item in results if item.get("status") == "error"],
+        "results": results,
+    }
+
+
+def _summary_due(subscription: dict) -> tuple[bool, str]:
+    timezone_name = subscription.get("daily_summary_timezone") or "Asia/Shanghai"
+    try:
+        zone = ZoneInfo(timezone_name)
+    except Exception:
+        zone = ZoneInfo("Asia/Shanghai")
+    local_now = datetime.now(timezone.utc).astimezone(zone)
+    local_date = local_now.date().isoformat()
+    if subscription.get("daily_summary_last_sent_date") == local_date:
+        return False, local_date
+
+    push_time = str(subscription.get("daily_summary_time") or "20:00")
+    try:
+        hour, minute = [int(part) for part in push_time.split(":", 1)]
+    except Exception:
+        hour, minute = 20, 0
+    return (local_now.hour, local_now.minute) >= (hour, minute), local_date
+
+
+def _summary_text(subscription: dict) -> str:
+    user_id = subscription["debox_user_id"]
+    rules = list_user_watch_rules(user_id)
+    events = list_recent_alert_events(user_id, hours=24, limit=80)
+    rule_count_by_type = Counter(rule["rule_type"] for rule in rules)
+    event_count_by_type = Counter(event["event_type"] for event in events)
+    wallets = {str(rule["wallet_address"]).lower() for rule in rules}
+
+    recent_lines = []
+    for event in events[:5]:
+        label = RULE_TYPE_LABELS.get(event["event_type"], event["event_type"])
+        recent_lines.append(
+            f"- {escape(label)}：{escape(_short(event.get('wallet_address')))} "
+            f"{escape(str(event.get('previous_value') or '-'))} -> {escape(str(event.get('current_value') or '-'))}"
+        )
+    recent_text = "<br/>".join(recent_lines) if recent_lines else "今日暂无触发事件。"
+
+    asset_rule_count = sum(rule_count_by_type[key] for key in ASSET_RULE_TYPES)
+    asset_event_count = sum(event_count_by_type[key] for key in ASSET_RULE_TYPES)
+    alert_hint = "无"
+    if events:
+        alert_hint = f"有 {len(events)} 条规则在过去 24 小时内触发，请查看下方最近事件。"
+
+    return (
+        "<b>DeBox Asset Alert 每日摘要</b><br/>"
+        f"统计范围：过去 24 小时<br/>"
+        f"今日触发次数：{len(events)}<br/>"
+        f"监控钱包数：{len(wallets)}<br/>"
+        f"当前规则数：{len(rules)}<br/>"
+        f"资产规则：{asset_rule_count}，"
+        f"授权规则：{rule_count_by_type['approval_change']}，"
+        f"交互规则：{rule_count_by_type['address_interaction']}<br/>"
+        f"事件概览：资产 {asset_event_count}，"
+        f"授权 {event_count_by_type['approval_change']}，"
+        f"交互 {event_count_by_type['address_interaction']}<br/>"
+        f"异常提醒：{escape(alert_hint)}<br/><br/>"
+        f"{recent_text}"
     )
-    current_value = current["value"]
-    previous_value = rule["last_value"]
-
-    if previous_value is None:
-        update_watch_rule_value(rule["id"], current_value)
-        return {"rule_id": rule["id"], "status": "baseline", "value": current_value}
-
-    previous_decimal = Decimal(previous_value)
-    current_decimal = Decimal(current_value)
-    threshold = Decimal(rule["threshold"])
-    reason = notification_reason(rule["rule_type"], previous_decimal, current_decimal, threshold)
-
-    if reason is None:
-        update_watch_rule_value(rule["id"], current_value)
-        return {"rule_id": rule["id"], "status": "unchanged", "value": current_value}
-
-    direction = "增加" if current_decimal > previous_decimal else "减少"
-    change_amount = abs(current_decimal - previous_decimal)
-    text = (
-        f"<b>{escape(reason)}</b><br/>"
-        f"监控：{escape(_rule_title(rule, current))}<br/>"
-        f"地址：{escape(current['wallet_address'])}<br/>"
-        f"变化：{escape(previous_value)} -> {escape(current_value)}"
-        f"（{escape(direction)} {escape(str(change_amount))}）<br/>"
-        f"阈值：{escape(rule['threshold'])}"
-    )
-    message_id = send_notification(rule["notification_chat_id"], rule["notification_chat_type"], text)
-    create_alert_event(
-        rule["id"],
-        rule["rule_type"],
-        previous_value,
-        current_value,
-        message_id,
-    )
-    update_watch_rule_value(rule["id"], current_value)
-    return {"rule_id": rule["id"], "status": "notified", "value": current_value}
 
 
-def check_all_rules() -> list[dict]:
-    results = []
-    for rule in list_enabled_watch_rules():
+def send_due_scheduled_reports(limit: int = 100) -> dict:
+    sent = 0
+    skipped = 0
+    errors = []
+    for subscription in list_due_scheduled_subscriptions(limit):
+        due, local_date = _summary_due(subscription)
+        if not due:
+            skipped += 1
+            continue
+        chat_type = subscription.get("daily_summary_chat_type") or "private"
+        chat_id = subscription.get("daily_summary_chat_id") or subscription["debox_user_id"]
+        if chat_type == "private":
+            chat_id = subscription["debox_user_id"]
         try:
-            results.append(check_rule(rule))
+            send_notification(chat_id, chat_type, _summary_text(subscription))
+            mark_scheduled_push_sent(int(subscription["id"]), local_date)
+            sent += 1
         except Exception as exc:
-            results.append({"rule_id": rule["id"], "status": "error", "error": str(exc)})
-    return results
-
-
-def scheduled_summary_text(subscription: dict, rules: list[dict]) -> str:
-    plan = get_plan(subscription["plan_code"])
-    enabled_rules = [rule for rule in rules if int(rule.get("enabled") or 0) == 1]
-    lines = [
-        "<b>DeBox Asset Alert 每日摘要</b>",
-        f"套餐：{escape(plan['name'])}",
-        f"有效期至：{escape(str(subscription['expires_at']))}",
-        f"当前监控规则：{len(enabled_rules)} 条",
-    ]
-    for rule in enabled_rules[:8]:
-        symbol = "原生资产" if not rule.get("token_address") else "代币"
-        label = rule.get("notification_label") or rule.get("wallet_address")
-        value = rule.get("last_value") or "未建立基线"
-        lines.append(f"- {escape(str(label))}：{escape(str(value))} {escape(symbol)}")
-    if len(enabled_rules) > 8:
-        lines.append(f"...还有 {len(enabled_rules) - 8} 条规则")
-    return "<br/>".join(lines)
-
-
-def send_due_scheduled_reports(limit: int = 20) -> list[dict]:
-    results = []
-    for subscription in list_due_scheduled_subscriptions()[:limit]:
-        try:
-            plan = get_plan(subscription["plan_code"])
-            if not plan["scheduled_push"]:
-                continue
-            rules = list_user_watch_rules(subscription["debox_user_id"])
-            if not rules:
-                mark_scheduled_push_sent(subscription["id"])
-                results.append({"subscription_id": subscription["id"], "status": "skipped"})
-                continue
-            send_notification(subscription["debox_user_id"], "private", scheduled_summary_text(subscription, rules))
-            mark_scheduled_push_sent(subscription["id"])
-            results.append({"subscription_id": subscription["id"], "status": "sent"})
-        except Exception as exc:
-            results.append({"subscription_id": subscription["id"], "status": "error", "error": str(exc)})
-    return results
+            errors.append({"subscription_id": subscription["id"], "error": str(exc)})
+    return {"sent": sent, "skipped": skipped, "errors": errors}

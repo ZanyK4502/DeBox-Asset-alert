@@ -7,117 +7,150 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header class="topbar">
+    <header class="app-header">
       <div>
         <strong>DeBox Asset Alert</strong>
-        <span>链上资产订阅通知</span>
+        <span>链上资产监控</span>
       </div>
+      <button id="connectWalletBtn" class="primary" type="button">连接钱包</button>
     </header>
 
-    <main class="shell">
-      <section class="hero">
-        <p class="eyebrow">Multi-chain Asset Monitor</p>
-        <h1>创建资产监控，变化时通过 DeBox Bot 通知</h1>
-        <p class="lead">连接钱包后创建地址或代币监控规则。订阅生效后，后端会持续检查链上余额变化，并通过 DeBox Bot 推送通知。</p>
-        <div class="hero-actions">
-          <button id="connectWalletBtn" class="primary">连接 DeBox 钱包</button>
-          <a class="secondary" href="#rules">创建监控</a>
-          <a class="secondary" href="#renew">订阅续费</a>
+    <main class="layout">
+      <section class="overview" aria-label="账户概览">
+        <div class="intro">
+          <p class="eyebrow">Asset Monitor</p>
+          <h1>钱包和代币变化，通过 DeBox Bot 实时通知。</h1>
         </div>
+        <div id="profileBox" class="status-box muted">尚未连接钱包</div>
+        <div id="subscriptionBox" class="status-box muted">连接钱包后查看订阅状态</div>
       </section>
 
-      <section class="grid two">
-        <div class="panel">
-          <h2>个人账户</h2>
-          <div id="profileBox" class="profile muted">尚未连接钱包</div>
-        </div>
-        <div class="panel">
-          <h2>当前订阅</h2>
-          <div id="subscriptionBox" class="stack muted">连接钱包后查看订阅状态</div>
-        </div>
-      </section>
-
-      <section id="renew" class="panel">
+      <section id="renew" class="section">
         <div class="section-head">
           <div>
             <p class="eyebrow">Plans</p>
             <h2>订阅方案</h2>
           </div>
-          <button id="freeTrialBtn" class="ghost">开启免费体验</button>
+          <button id="freeTrialBtn" class="secondary" type="button">免费体验</button>
         </div>
         <div id="plansGrid" class="plans"></div>
-        <div class="payment-line">
-          <button id="payBtn" class="primary">支付并开通 / 续费</button>
+        <div class="action-line">
+          <button id="payBtn" class="primary" type="button">支付 / 续费</button>
           <span id="paymentStatus" class="muted"></span>
         </div>
       </section>
 
-      <section id="rules" class="panel">
+      <section id="rules" class="section">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Watch Rules</p>
-            <h2>创建监控规则</h2>
+            <p class="eyebrow">Rules</p>
+            <h2>监控规则</h2>
           </div>
-          <button id="refreshRulesBtn" class="ghost">刷新</button>
+          <button id="refreshRulesBtn" class="secondary" type="button">刷新</button>
         </div>
 
         <form id="ruleForm" class="form-grid">
-          <label>
-            网络
-            <select id="chainSelect"></select>
-          </label>
           <label>
             钱包地址
             <input id="walletAddressInput" placeholder="0x..." autocomplete="off" />
           </label>
           <label>
-            代币合约地址（可选）
-            <input id="tokenAddressInput" placeholder="留空则监控原生资产" autocomplete="off" />
+            链
+            <select id="chainSelect"></select>
           </label>
           <label>
-            监控类型
-            <select id="ruleTypeSelect">
-              <option value="balance_change">余额变化</option>
-              <option value="incoming">转入</option>
-              <option value="outgoing">转出</option>
-              <option value="balance_threshold">余额阈值</option>
-            </select>
+            规则类型
+            <select id="ruleTypeSelect"></select>
           </label>
           <label>
-            金额阈值
+            代币合约
+            <input id="tokenAddressInput" placeholder="可选，留空监控原生资产" autocomplete="off" />
+          </label>
+          <label id="targetAddressWrap">
+            目标地址 / 合约
+            <input id="targetAddressInput" placeholder="授权对象或交互目标地址" autocomplete="off" />
+          </label>
+          <label id="targetLabelWrap">
+            目标备注
+            <input id="targetLabelInput" placeholder="例如交易所、合约名" autocomplete="off" />
+          </label>
+          <label>
+            阈值
             <input id="thresholdInput" type="number" min="0" step="0.000001" value="0" />
           </label>
           <label>
-            通知目标
+            通知方式
             <select id="targetTypeSelect">
               <option value="private">私聊通知</option>
-              <option value="group">群通知（专业版）</option>
+              <option value="group">群通知</option>
             </select>
           </label>
           <label id="groupTargetWrap">
-            选择群
+            通知群
             <select id="groupTargetSelect"></select>
           </label>
-          <div id="tokenInfoBox" class="info-box muted">输入代币合约后会自动识别代币信息。</div>
+          <div id="tokenInfoBox" class="notice muted">填写代币合约后可识别 Token 信息。</div>
+          <div id="balanceBox" class="notice muted">还没有查询余额。</div>
           <div class="form-actions">
             <button id="queryBalanceBtn" class="secondary" type="button">查询余额</button>
-            <button class="primary" type="submit">创建监控</button>
+            <button class="primary" type="submit">创建规则</button>
           </div>
         </form>
 
-        <div id="balanceBox" class="info-box muted">还没有查询余额。</div>
         <div id="rulesList" class="list"></div>
       </section>
 
-      <section id="groups" class="panel">
+      <section id="summary" class="section">
         <div class="section-head">
           <div>
-            <p class="eyebrow">Professional</p>
-            <h2>群通知设置</h2>
+            <p class="eyebrow">Digest</p>
+            <h2>每日摘要</h2>
           </div>
-          <span class="badge">专业版最多 3 个群</span>
+          <span id="summaryCapability" class="badge muted">未连接</span>
         </div>
-        <form id="groupForm" class="form-grid compact">
+        <form id="summaryForm" class="form-grid summary-grid">
+          <label class="switch-line">
+            <input id="summaryEnabledInput" type="checkbox" />
+            开启每日摘要
+          </label>
+          <label>
+            推送时间
+            <input id="summaryTimeInput" type="time" value="20:00" />
+          </label>
+          <label>
+            时区
+            <input id="summaryTimezoneInput" value="Asia/Shanghai" autocomplete="off" />
+          </label>
+          <label>
+            推送对象
+            <select id="summaryTargetSelect">
+              <option value="private">本人私聊</option>
+              <option value="group">已绑定群</option>
+            </select>
+          </label>
+          <label id="summaryGroupWrap">
+            摘要群
+            <select id="summaryGroupSelect"></select>
+          </label>
+          <label>
+            备注
+            <input id="summaryLabelInput" placeholder="例如晚间摘要" autocomplete="off" />
+          </label>
+          <div class="form-actions">
+            <button class="primary" type="submit">保存摘要设置</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="groups" class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Groups</p>
+            <h2>群通知</h2>
+          </div>
+          <span class="badge">专业版</span>
+        </div>
+        <form id="groupForm" class="form-grid group-grid">
           <label>
             DeBox 群 ID
             <input id="groupIdInput" placeholder="例如 8c6yo6hf" autocomplete="off" />
@@ -126,7 +159,9 @@
             群备注
             <input id="groupLabelInput" placeholder="例如 Alpha 群" autocomplete="off" />
           </label>
-          <button class="primary" type="submit">绑定群通知</button>
+          <div class="form-actions">
+            <button class="primary" type="submit">绑定群通知</button>
+          </div>
         </form>
         <div id="groupsList" class="list"></div>
       </section>

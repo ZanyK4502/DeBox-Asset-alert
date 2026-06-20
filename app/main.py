@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 import hmac
+import re
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -9,13 +10,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
-from app.bot_service import (
-    handle_webhook_payload,
-    public_app_url,
-    record_webhook_event,
-    write_status,
+from app.bot_service import handle_webhook_payload, public_app_url, record_webhook_event, write_status
+from app.chain_service import (
+    balance,
+    chain_profile,
+    latest_interaction,
+    supported_chains,
+    token_allowance,
 )
-from app.chain_service import balance, chain_profile, supported_chains
 from app.config import ROOT_DIR, settings
 from app.db import (
     create_notification_group,
@@ -27,19 +29,23 @@ from app.db import (
     initialize_database,
     list_notification_groups,
     list_user_watch_rules,
+    update_daily_summary_settings,
 )
 from app.openapi_service import group_info, is_group_joined, token_info, user_info
 from app.payment_service import payment_configuration, prepare_payment, verify_payment
-from app.plans import public_plans
+from app.plans import ALL_RULE_TYPES, public_plans, public_rule_types
 from app.subscription_service import (
     entitlement,
     ensure_free_trial,
     require_group_slot,
     require_rule_creation,
+    require_summary_target,
 )
 
 
 STATIC_DIR = ROOT_DIR / "static"
+TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
 app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -48,6 +54,8 @@ class WatchRuleInput(BaseModel):
     chain_key: str = "bsc"
     wallet_address: str
     token_address: str | None = None
+    target_address: str | None = None
+    target_label: str = ""
     rule_type: str = "balance_change"
     threshold: str = "0"
     debox_user_id: str
@@ -76,6 +84,16 @@ class VerifyPaymentInput(BaseModel):
 
 class FreeTrialInput(BaseModel):
     debox_user_id: str
+
+
+class SummarySettingsInput(BaseModel):
+    debox_user_id: str
+    enabled: bool = True
+    push_time: str = "20:00"
+    timezone: str = "Asia/Shanghai"
+    chat_type: str = "private"
+    chat_id: str = ""
+    label: str = ""
 
 
 @app.on_event("startup")
@@ -122,30 +140,30 @@ async def bot_webhook(
     x_api_key: str | None = Header(default=None, alias="X-API-KEY"),
 ) -> dict:
     if settings.debox_bot_receive_mode != "webhook":
-        raise HTTPException(status_code=409, detail="当前未启用 Webhook 接收模式")
+        raise HTTPException(status_code=409, detail="当前未启用 Webhook 接收模式。")
     if not settings.debox_webhook_key:
-        raise HTTPException(status_code=503, detail="尚未配置 DEBOX_WEBHOOK_KEY")
+        raise HTTPException(status_code=503, detail="尚未配置 DEBOX_WEBHOOK_KEY。")
     if not x_api_key or not hmac.compare_digest(x_api_key, settings.debox_webhook_key):
-        raise HTTPException(status_code=401, detail="Webhook 密钥不正确")
+        raise HTTPException(status_code=401, detail="Webhook 密钥不正确。")
 
     try:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise ValueError("Webhook 请求体必须是 JSON 对象")
+            raise ValueError("Webhook 请求体必须是 JSON 对象。")
         record_webhook_event(payload)
         result = handle_webhook_payload(payload)
-        write_status("running", "Webhook 已接收并处理")
+        write_status("running", "Webhook 已接收并处理。")
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        write_status("degraded", f"Webhook 处理失败: {exc}")
-        raise HTTPException(status_code=500, detail="Webhook 处理失败") from exc
+        write_status("degraded", f"Webhook 处理失败：{exc}")
+        raise HTTPException(status_code=500, detail="Webhook 处理失败。") from exc
 
 
 @app.get("/api/plans")
-def get_plans() -> list[dict]:
-    return public_plans()
+def get_plans() -> dict:
+    return {"plans": public_plans(), "rule_types": public_rule_types()}
 
 
 @app.get("/api/chains")
@@ -156,7 +174,7 @@ def get_chains() -> list[dict]:
 @app.get("/api/subscription/current")
 def current_subscription(debox_user_id: str) -> dict:
     if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id")
+        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
     return entitlement(debox_user_id)
 
 
@@ -171,36 +189,95 @@ def start_free_trial(payload: FreeTrialInput) -> dict:
     return entitlement(payload.debox_user_id, create_trial=False)
 
 
+@app.post("/api/subscription/summary-settings")
+def save_summary_settings(payload: SummarySettingsInput) -> dict:
+    try:
+        user_id = payload.debox_user_id.strip()
+        if not user_id:
+            raise ValueError("请先连接 DeBox 钱包。")
+        chat_type = payload.chat_type.strip().lower()
+        if chat_type not in {"private", "group"}:
+            raise ValueError("每日摘要推送对象只能是私聊或群聊。")
+        require_summary_target(user_id, chat_type)
+        validate_push_time(payload.push_time)
+        chat_id = user_id if chat_type == "private" else payload.chat_id.strip()
+        if chat_type == "group" and not get_notification_group(user_id, chat_id):
+            raise ValueError("请先绑定这个群，再设置群每日摘要。")
+        subscription = update_daily_summary_settings(
+            debox_user_id=user_id,
+            enabled=payload.enabled,
+            push_time=payload.push_time,
+            timezone_name=payload.timezone or "Asia/Shanghai",
+            chat_type=chat_type,
+            chat_id=chat_id,
+            label=payload.label.strip() or ("私聊摘要" if chat_type == "private" else chat_id),
+        )
+        return {"subscription": subscription, "entitlement": entitlement(user_id, create_trial=False)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def validate_push_time(value: str) -> None:
+    if not TIME_RE.fullmatch(value):
+        raise ValueError("推送时间格式应为 HH:MM。")
+    hour, minute = [int(part) for part in value.split(":", 1)]
+    if hour > 23 or minute > 59:
+        raise ValueError("推送时间必须在 00:00 到 23:59 之间。")
+
+
 @app.get("/api/watch-rules")
 def get_watch_rules(debox_user_id: str) -> dict:
     if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id")
+        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
     return {"rules": list_user_watch_rules(debox_user_id)}
 
 
 @app.post("/api/watch-rules")
 def post_watch_rule(payload: WatchRuleInput) -> dict:
     try:
-        validate_rule_input(payload.rule_type, payload.threshold)
+        validate_rule_input(payload)
         user_id = payload.debox_user_id.strip()
         if not user_id:
             raise ValueError("请先连接 DeBox 钱包。")
+
+        profile = chain_profile(payload.chain_key)
+        wallet_address = payload.wallet_address.strip()
+        require_rule_creation(user_id, payload.notification_chat_type.strip().lower(), wallet_address, payload.rule_type)
         chat_id, label = notification_target(payload)
-        require_rule_creation(user_id, payload.notification_chat_type)
-        current = balance(payload.wallet_address, payload.token_address, payload.chain_key)
+
+        token_address = (payload.token_address or "").strip() or None
+        target_address = (payload.target_address or "").strip() or None
+        if payload.rule_type == "approval_change":
+            baseline = token_allowance(wallet_address, token_address or "", target_address or "", profile["key"])
+            last_value = baseline["value"]
+            baseline_payload = baseline
+        elif payload.rule_type == "address_interaction":
+            baseline = latest_interaction(wallet_address, target_address or "", profile["key"])
+            last_value = baseline["cursor"]
+            baseline_payload = baseline
+        else:
+            baseline = balance(wallet_address, token_address, profile["key"])
+            wallet_address = baseline["wallet_address"]
+            token_address = baseline["token_address"]
+            last_value = baseline["value"]
+            baseline_payload = baseline
+
         rule = create_watch_rule(
             debox_user_id=user_id,
-            chain_key=current["chain_key"],
-            chain_id=current["chain_id"],
-            wallet_address=current["wallet_address"],
-            token_address=current["token_address"],
+            chain_key=profile["key"],
+            chain_id=profile["chain_id"],
+            wallet_address=wallet_address,
+            token_address=token_address,
+            target_address=target_address,
+            target_label=payload.target_label.strip(),
             rule_type=payload.rule_type,
-            threshold=payload.threshold,
+            threshold=Decimal(payload.threshold),
             notification_chat_id=chat_id,
-            notification_chat_type=payload.notification_chat_type,
+            notification_chat_type=payload.notification_chat_type.strip().lower(),
             notification_label=label,
+            last_value=last_value,
         )
-        return {"rule": rule, "current_balance": current, "entitlement": entitlement(user_id)}
+        return {"rule": rule, "baseline": baseline_payload, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -209,19 +286,23 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
 def remove_watch_rule(rule_id: int, debox_user_id: str) -> dict:
     try:
         if not debox_user_id:
-            raise ValueError("缺少 debox_user_id")
-        delete_watch_rule(debox_user_id, rule_id)
-        return {"ok": True, "entitlement": entitlement(debox_user_id)}
+            raise ValueError("缺少 debox_user_id。")
+        delete_watch_rule(rule_id, debox_user_id)
+        return {"ok": True, "entitlement": entitlement(debox_user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def validate_rule_input(rule_type: str, threshold: str) -> None:
-    allowed = {"balance_change", "incoming", "outgoing", "balance_threshold"}
-    if rule_type not in allowed:
+def validate_rule_input(payload: WatchRuleInput) -> None:
+    if payload.rule_type not in ALL_RULE_TYPES:
         raise ValueError("不支持的监控类型。")
-    if Decimal(threshold) < 0:
+    if Decimal(payload.threshold) < 0:
         raise ValueError("金额阈值不能小于 0。")
+    if payload.rule_type == "approval_change":
+        if not payload.token_address or not payload.target_address:
+            raise ValueError("授权监控需要填写代币合约和授权对象地址。")
+    if payload.rule_type == "address_interaction" and not payload.target_address:
+        raise ValueError("指定地址交互提醒需要填写目标地址或合约。")
 
 
 def notification_target(payload: WatchRuleInput) -> tuple[str, str]:
@@ -241,11 +322,7 @@ def notification_target(payload: WatchRuleInput) -> tuple[str, str]:
 
 
 @app.get("/api/chain/balance")
-def get_balance(
-    address: str,
-    token_address: str | None = None,
-    chain_key: str = "bsc",
-) -> dict:
+def get_balance(address: str, token_address: str | None = None, chain_key: str = "bsc") -> dict:
     try:
         return balance(address, token_address, chain_key)
     except Exception as exc:
@@ -256,7 +333,7 @@ def get_balance(
 def get_debox_user(user_id: str = "", wallet_address: str = "") -> dict:
     try:
         if not user_id and not wallet_address:
-            raise ValueError("需要提供 user_id 或 wallet_address")
+            raise ValueError("需要提供 user_id 或 wallet_address。")
         return user_info(user_id=user_id, wallet_address=wallet_address)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -274,7 +351,7 @@ def get_debox_token(contract_address: str, chain_key: str = "bsc") -> dict:
 @app.get("/api/notification-groups")
 def get_groups(debox_user_id: str) -> dict:
     if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id")
+        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
     return {"groups": list_notification_groups(debox_user_id)}
 
 
@@ -289,7 +366,7 @@ def post_group(payload: GroupInput) -> dict:
             raise ValueError("请输入 DeBox 群 ID。")
         existing = get_notification_group(user_id, gid)
         if existing:
-            return {"group": existing, "already_exists": True, "entitlement": entitlement(user_id)}
+            return {"group": existing, "already_exists": True, "entitlement": entitlement(user_id, create_trial=False)}
         require_group_slot(user_id)
         group = group_info(gid)
         if payload.wallet_address.strip():
@@ -297,7 +374,7 @@ def post_group(payload: GroupInput) -> dict:
             if not group_joined(joined):
                 raise ValueError("当前钱包似乎不是该群成员，请确认后再绑定。")
         saved = create_notification_group(user_id, gid, payload.label.strip() or group_name(group, gid))
-        return {"group": saved, "source": group, "entitlement": entitlement(user_id)}
+        return {"group": saved, "source": group, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -306,9 +383,9 @@ def post_group(payload: GroupInput) -> dict:
 def delete_group(group_id: int, debox_user_id: str) -> dict:
     try:
         if not debox_user_id:
-            raise ValueError("缺少 debox_user_id")
-        delete_notification_group(debox_user_id, group_id)
-        return {"ok": True, "entitlement": entitlement(debox_user_id)}
+            raise ValueError("缺少 debox_user_id。")
+        delete_notification_group(group_id, debox_user_id)
+        return {"ok": True, "entitlement": entitlement(debox_user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -1,9 +1,49 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal
 
 from app.config import settings
 
+
+ASSET_RULE_TYPES = {
+    "balance_change",
+    "incoming",
+    "outgoing",
+    "balance_threshold",
+}
+APPROVAL_RULE_TYPES = {"approval_change"}
+INTERACTION_RULE_TYPES = {"address_interaction"}
+ALL_RULE_TYPES = ASSET_RULE_TYPES | APPROVAL_RULE_TYPES | INTERACTION_RULE_TYPES
+
+RULE_TYPE_ORDER = [
+    "balance_change",
+    "incoming",
+    "outgoing",
+    "balance_threshold",
+    "approval_change",
+    "address_interaction",
+]
+
+RULE_TYPE_LABELS = {
+    "balance_change": "余额变化",
+    "incoming": "转入提醒",
+    "outgoing": "转出提醒",
+    "balance_threshold": "余额阈值",
+    "approval_change": "授权 / Approve 监控",
+    "address_interaction": "指定地址交互提醒",
+}
+
+RULE_TYPE_DESCRIPTIONS = {
+    "balance_change": "余额发生任意变化时推送通知。",
+    "incoming": "余额增加并达到阈值时推送通知。",
+    "outgoing": "余额减少并达到阈值时推送通知。",
+    "balance_threshold": "余额达到或低于阈值时推送通知。",
+    "approval_change": "钱包对指定合约的代币授权额度发生变化时推送通知。",
+    "address_interaction": "钱包与指定地址或合约发生交互时推送通知。",
+}
+
+PLAN_ORDER = ["free", "standard", "professional"]
 
 PLANS = {
     "free": {
@@ -11,50 +51,97 @@ PLANS = {
         "name": "免费体验",
         "price": Decimal("0"),
         "days": 1,
+        "wallet_limit": 1,
         "rule_limit": 1,
-        "group_notifications": False,
         "group_limit": 0,
-        "scheduled_push": False,
-        "description": "1 条监控规则，24 小时体验，仅支持私聊通知。",
+        "allowed_rule_types": [
+            "balance_change",
+            "incoming",
+            "outgoing",
+            "balance_threshold",
+        ],
+        "private_notification": True,
+        "group_notification": False,
+        "daily_summary": False,
+        "summary_targets": [],
+        "description": "1 个钱包、1 条规则、24 小时体验，仅支持私聊通知。",
     },
     "standard": {
         "code": "standard",
-        "name": "标准订阅",
+        "name": "标准版",
         "price": settings.subscription_price,
         "days": settings.subscription_days,
+        "wallet_limit": 3,
         "rule_limit": 10,
-        "group_notifications": False,
         "group_limit": 0,
-        "scheduled_push": True,
-        "description": "最多 10 条监控规则，支持私聊通知和每日资产摘要。",
+        "allowed_rule_types": [
+            "balance_change",
+            "incoming",
+            "outgoing",
+            "balance_threshold",
+            "approval_change",
+        ],
+        "private_notification": True,
+        "group_notification": False,
+        "daily_summary": True,
+        "summary_targets": ["private"],
+        "description": "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
     },
     "professional": {
         "code": "professional",
-        "name": "专业订阅",
+        "name": "专业版",
         "price": Decimal("25"),
         "days": 30,
-        "rule_limit": 50,
-        "group_notifications": True,
+        "wallet_limit": 20,
+        "rule_limit": 100,
         "group_limit": 3,
-        "scheduled_push": True,
-        "description": "最多 50 条监控规则，可绑定 3 个 DeBox 群作为通知目标。",
+        "allowed_rule_types": [
+            "balance_change",
+            "incoming",
+            "outgoing",
+            "balance_threshold",
+            "approval_change",
+            "address_interaction",
+        ],
+        "private_notification": True,
+        "group_notification": True,
+        "daily_summary": True,
+        "summary_targets": ["private", "group"],
+        "description": "适合项目方和社群：20 个钱包、100 条规则，支持群通知、指定地址交互提醒和群每日摘要。",
     },
 }
 
 
-def get_plan(plan_code: str) -> dict:
-    plan = PLANS.get(plan_code)
-    if not plan:
-        raise ValueError("未知订阅套餐")
-    return dict(plan)
+def get_plan(plan_code: str | None) -> dict:
+    code = (plan_code or "standard").strip().lower()
+    if code not in PLANS:
+        raise ValueError(f"不支持的套餐：{code}")
+    return deepcopy(PLANS[code])
+
+
+def public_rule_type(rule_type: str) -> dict:
+    if rule_type not in ALL_RULE_TYPES:
+        raise ValueError(f"不支持的规则类型：{rule_type}")
+    return {
+        "code": rule_type,
+        "label": RULE_TYPE_LABELS[rule_type],
+        "description": RULE_TYPE_DESCRIPTIONS[rule_type],
+    }
+
+
+def public_rule_types() -> list[dict]:
+    return [public_rule_type(rule_type) for rule_type in RULE_TYPE_ORDER]
+
+
+def public_plan(plan_code: str) -> dict:
+    plan = get_plan(plan_code)
+    plan["price"] = str(plan["price"])
+    plan["asset"] = settings.subscription_token_symbol
+    plan["allowed_rules"] = [
+        public_rule_type(rule_type) for rule_type in plan["allowed_rule_types"]
+    ]
+    return plan
 
 
 def public_plans() -> list[dict]:
-    return [
-        {
-            **plan,
-            "price": str(plan["price"]),
-            "asset": settings.subscription_token_symbol,
-        }
-        for plan in PLANS.values()
-    ]
+    return [public_plan(code) for code in PLAN_ORDER]

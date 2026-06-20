@@ -4,117 +4,103 @@ from decimal import Decimal
 
 from app.chain_service import (
     amount_to_units,
+    chain_profile,
     encode_erc20_transfer,
     transaction_by_hash,
     validate_address,
+    validate_transaction_hash,
 )
 from app.config import settings
-from app.db import activate_subscription, complete_order, create_order, get_order
+from app.db import complete_order, create_order, get_order
 from app.plans import get_plan
-from app.subscription_service import validate_plan_purchase
+from app.subscription_service import activate_paid_subscription
 
 
 def payment_configuration(plan_code: str = "standard") -> dict:
     plan = get_plan(plan_code)
+    profile = chain_profile(settings.chain_key)
     missing = []
-    if not settings.payment_recipient_address:
+    if settings.payment_mode == "live" and not settings.payment_recipient_address:
         missing.append("PAYMENT_RECIPIENT_ADDRESS")
-    if settings.subscription_token_symbol != "BNB" and not settings.subscription_token_address:
+    if settings.payment_mode == "live" and not settings.subscription_token_address:
         missing.append("SUBSCRIPTION_TOKEN_ADDRESS")
-    if Decimal(plan["price"]) <= 0:
-        missing.append("valid payment amount")
 
     return {
-        "ready": not missing,
         "mode": settings.payment_mode,
-        "payment_enabled": settings.payment_mode == "live",
-        "plan_code": plan_code,
-        "plan_name": plan["name"],
-        "missing": missing,
-        "chain_key": settings.chain_key,
-        "chain_id": settings.chain_id,
-        "chain_id_hex": hex(settings.chain_id),
-        "chain_name": settings.chain_name,
+        "plan": {**plan, "price": str(plan["price"])},
+        "chain": profile,
+        "chain_name": profile["name"],
+        "chain_id": profile["chain_id"],
+        "chain_id_hex": profile["chain_id_hex"],
         "asset": settings.subscription_token_symbol,
+        "token_address": settings.subscription_token_address,
+        "token_decimals": settings.subscription_token_decimals,
         "total_amount": str(plan["price"]),
-        "days": plan["days"],
         "recipient_address": settings.payment_recipient_address,
-        "token_address": settings.subscription_token_address or None,
+        "ready": not missing,
+        "missing": missing,
     }
 
 
-def _require_configuration(plan_code: str) -> dict:
-    config = payment_configuration(plan_code)
-    if not config["ready"]:
-        raise ValueError(f"支付配置不完整：{', '.join(config['missing'])}")
-    return config
-
-
-def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str) -> dict:
+def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str = "standard") -> dict:
+    user_id = (debox_user_id or "").strip()
+    if not user_id:
+        raise ValueError("缺少 DeBox 用户 ID。")
+    if plan_code == "free":
+        raise ValueError("免费体验无需支付。")
     if settings.payment_mode != "live":
         raise ValueError("当前是预览模式，不会发起真实链上支付。")
+    if not settings.payment_recipient_address:
+        raise ValueError("尚未配置收款地址 PAYMENT_RECIPIENT_ADDRESS。")
+    if not settings.subscription_token_address:
+        raise ValueError("尚未配置订阅代币 SUBSCRIPTION_TOKEN_ADDRESS。")
 
-    validate_plan_purchase(debox_user_id, plan_code)
-    config = _require_configuration(plan_code)
-    total_amount = Decimal(config["total_amount"])
     payer = validate_address(payer_address)
-    recipient = validate_address(config["recipient_address"])
-
-    if config["token_address"]:
-        token_address = validate_address(config["token_address"])
-        total_units = amount_to_units(total_amount, settings.subscription_token_decimals)
-        transaction = {
-            "kind": "payment",
-            "label": f"支付 {config['total_amount']} {config['asset']}",
-            "request": {
-                "from": payer,
-                "to": token_address,
-                "data": encode_erc20_transfer(recipient, total_units),
-                "value": "0x0",
-            },
-        }
-        payment_contract_address = token_address
-    else:
-        token_address = None
-        total_units = amount_to_units(total_amount, 18)
-        transaction = {
-            "kind": "payment",
-            "label": f"支付 {config['total_amount']} {config['asset']}",
-            "request": {
-                "from": payer,
-                "to": recipient,
-                "data": "0x",
-                "value": hex(total_units),
-            },
-        }
-        payment_contract_address = recipient
+    recipient = validate_address(settings.payment_recipient_address)
+    token = validate_address(settings.subscription_token_address)
+    plan = get_plan(plan_code)
+    profile = chain_profile(settings.chain_key)
+    amount_units = amount_to_units(Decimal(str(plan["price"])), settings.subscription_token_decimals)
 
     order = create_order(
-        debox_user_id=debox_user_id,
+        debox_user_id=user_id,
         payer_address=payer,
-        token_address=token_address,
+        plan_code=plan["code"],
+        chain_key=profile["key"],
+        chain_id=profile["chain_id"],
+        token_address=token,
+        token_symbol=settings.subscription_token_symbol,
+        token_decimals=settings.subscription_token_decimals,
+        total_amount=Decimal(str(plan["price"])),
         recipient_address=recipient,
-        payment_contract_address=payment_contract_address,
-        total_amount=str(total_amount),
-        plan_code=plan_code,
     )
-    return {"order": order, "plan": config, "transactions": [transaction]}
+    request = {
+        "from": payer,
+        "to": token,
+        "data": encode_erc20_transfer(recipient, amount_units),
+        "value": "0x0",
+        "chainId": profile["chain_id_hex"],
+    }
+    return {
+        "order": order,
+        "chain": profile,
+        "transaction": request,
+        "transactions": [{"request": request}],
+        "amount_units": str(amount_units),
+        "amount": str(plan["price"]),
+        "symbol": settings.subscription_token_symbol,
+        "recipient": recipient,
+    }
 
 
-def _field(data: dict, *names: str):
-    for name in names:
-        if name in data and data[name] is not None:
-            return data[name]
-    return None
-
-
-def _decode_transfer_input(data: str) -> tuple[str, int]:
-    value = (data or "").lower()
-    if not value.startswith("0xa9059cbb") or len(value) < 138:
-        raise ValueError("支付交易方法不匹配。")
-    recipient = "0x" + value[34:74]
-    amount = int(value[74:138], 16)
-    return validate_address(recipient), amount
+def _find_matching_transfer(tx: dict, order: dict) -> bool:
+    text = str(tx).lower()
+    required = [
+        str(order["payer_address"]).lower(),
+        str(order["recipient_address"]).lower(),
+        str(order.get("token_address") or "").lower(),
+    ]
+    return all(item in text for item in required if item)
 
 
 def verify_payment(order_id: int, tx_hash: str) -> dict:
@@ -122,48 +108,15 @@ def verify_payment(order_id: int, tx_hash: str) -> dict:
     if not order:
         raise ValueError("订单不存在。")
     if order["status"] == "paid":
-        return {"order": order, "already_verified": True}
+        return {"order": order, "subscription": None}
+    if order["status"] != "pending":
+        raise ValueError("订单不是待支付状态。")
 
-    transaction = transaction_by_hash(tx_hash, settings.chain_key)
-    if transaction.get("success") is False or transaction.get("status") in {0, "0", "failed"}:
-        raise ValueError("链上交易失败。")
+    clean_hash = validate_transaction_hash(tx_hash)
+    tx = transaction_by_hash(clean_hash, order["chain_key"])
+    if not _find_matching_transfer(tx, order):
+        raise ValueError("没有在交易中识别到匹配的付款记录，请确认交易哈希、付款地址和收款地址。")
 
-    payer = _field(transaction, "from", "fromAddress", "sender", "senderAddress")
-    if not payer:
-        raise ValueError("Nodit 返回数据中没有交易发起方。")
-    if validate_address(payer) != validate_address(order["payer_address"]):
-        raise ValueError("付款地址与订单不一致。")
-
-    token_address = order["token_address"]
-    recipient = validate_address(order["recipient_address"])
-    tx_to = _field(transaction, "to", "toAddress", "recipient", "recipientAddress")
-    tx_input = _field(transaction, "input", "data", "inputData") or "0x"
-
-    if token_address:
-        token_address = validate_address(token_address)
-        if not tx_to or validate_address(tx_to) != token_address:
-            raise ValueError("支付代币合约与订单不一致。")
-        expected_total = amount_to_units(
-            Decimal(order["total_amount"]),
-            settings.subscription_token_decimals,
-        )
-        decoded_recipient, decoded_amount = _decode_transfer_input(tx_input)
-        if decoded_recipient != recipient:
-            raise ValueError("收款地址与订单不一致。")
-        if decoded_amount != expected_total:
-            raise ValueError("支付金额与订单不一致。")
-    else:
-        expected_total = amount_to_units(Decimal(order["total_amount"]), 18)
-        tx_value = int(str(_field(transaction, "value", "amount", "nativeValue") or "0"), 0)
-        if not tx_to or validate_address(tx_to) != recipient:
-            raise ValueError("收款地址与订单不一致。")
-        if tx_value != expected_total:
-            raise ValueError("支付金额与订单不一致。")
-
-    paid_order = complete_order(order_id, tx_hash)
-    subscription = activate_subscription(
-        paid_order["debox_user_id"],
-        paid_order["plan_code"],
-        get_plan(paid_order["plan_code"])["days"],
-    )
-    return {"order": paid_order, "subscription": subscription, "already_verified": False}
+    paid_order = complete_order(order_id, clean_hash)
+    subscription = activate_paid_subscription(order["debox_user_id"], order["plan_code"])
+    return {"order": paid_order, "subscription": subscription}

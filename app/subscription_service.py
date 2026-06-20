@@ -1,128 +1,122 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import ceil
 
 from app.db import (
     activate_subscription,
     count_notification_groups,
+    count_user_wallets,
     count_user_watch_rules,
     get_active_subscription,
     has_used_plan,
     list_notification_groups,
     list_user_watch_rules,
+    wallet_is_monitored,
 )
-from app.plans import get_plan
+from app.plans import get_plan, public_plan
 
 
-def _serialize_plan(plan: dict) -> dict:
-    return {**plan, "price": str(plan["price"])}
+UTC = timezone.utc
 
 
-def _serialize_row(row: dict | None) -> dict | None:
-    if not row:
-        return None
-    result = {}
-    for key, value in row.items():
-        result[key] = value.isoformat() if hasattr(value, "isoformat") else value
-    return result
-
-
-def _days_remaining(expires_at) -> int:
-    if not expires_at:
+def _days_remaining(subscription: dict | None) -> int:
+    if not subscription:
         return 0
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-    now = datetime.now(expires_at.tzinfo or timezone.utc)
-    seconds = max(0, (expires_at - now).total_seconds())
-    return int((seconds + 86399) // 86400)
+    raw = subscription.get("expires_at")
+    if not raw:
+        return 0
+    expires_at = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    seconds = (expires_at.astimezone(UTC) - datetime.now(UTC)).total_seconds()
+    return max(0, ceil(seconds / 86400))
 
 
 def ensure_free_trial(debox_user_id: str) -> dict | None:
     active = get_active_subscription(debox_user_id)
     if active:
-        return active
+        return None
     if has_used_plan(debox_user_id, "free"):
         return None
-    return activate_subscription(debox_user_id, "free", get_plan("free")["days"])
+    return activate_subscription(debox_user_id, "free", 1)
 
 
 def entitlement(debox_user_id: str, create_trial: bool = True) -> dict:
+    if create_trial:
+        ensure_free_trial(debox_user_id)
     subscription = get_active_subscription(debox_user_id)
-    if subscription is None and create_trial:
-        subscription = ensure_free_trial(debox_user_id)
-
-    rule_count = count_user_watch_rules(debox_user_id)
-    group_count = count_notification_groups(debox_user_id)
+    plan = public_plan(subscription["plan_code"]) if subscription else None
     rules = list_user_watch_rules(debox_user_id)
     groups = list_notification_groups(debox_user_id)
-
-    if subscription is None:
-        return {
-            "subscription": None,
-            "plan": None,
-            "rule_count": rule_count,
-            "group_count": group_count,
-            "rules": [_serialize_row(rule) for rule in rules],
-            "groups": [_serialize_row(group) for group in groups],
-            "days_remaining": 0,
-            "can_create_rule": False,
-            "can_add_group": False,
-            "reason": "当前没有有效订阅。",
-        }
-
-    plan = get_plan(subscription["plan_code"])
     return {
-        "subscription": _serialize_row(subscription),
-        "plan": _serialize_plan(plan),
-        "rule_count": rule_count,
-        "group_count": group_count,
-        "rules": [_serialize_row(rule) for rule in rules],
-        "groups": [_serialize_row(group) for group in groups],
-        "days_remaining": _days_remaining(subscription.get("expires_at")),
-        "can_create_rule": rule_count < plan["rule_limit"],
-        "can_add_group": bool(plan["group_notifications"]) and group_count < plan["group_limit"],
-        "reason": "",
+        "debox_user_id": debox_user_id,
+        "subscription": subscription,
+        "plan": plan,
+        "days_remaining": _days_remaining(subscription),
+        "rule_count": count_user_watch_rules(debox_user_id),
+        "wallet_count": count_user_wallets(debox_user_id),
+        "group_count": count_notification_groups(debox_user_id),
+        "rules": rules,
+        "groups": groups,
+        "summary_settings": {
+            "enabled": bool((subscription or {}).get("daily_summary_enabled")),
+            "time": (subscription or {}).get("daily_summary_time", "20:00"),
+            "timezone": (subscription or {}).get("daily_summary_timezone", "Asia/Shanghai"),
+            "chat_type": (subscription or {}).get("daily_summary_chat_type", "private"),
+            "chat_id": (subscription or {}).get("daily_summary_chat_id", ""),
+            "label": (subscription or {}).get("daily_summary_label", ""),
+        },
     }
 
 
-def validate_plan_purchase(debox_user_id: str, plan_code: str) -> dict:
-    plan = get_plan(plan_code)
-    if plan_code == "free":
-        raise ValueError("免费体验不需要支付。")
-
-    active = get_active_subscription(debox_user_id)
-    if not active:
-        return {"allowed": True, "mode": "new", "plan": _serialize_plan(plan)}
-
-    active_plan = get_plan(active["plan_code"])
-    if active["plan_code"] == plan_code:
-        return {"allowed": True, "mode": "renew", "plan": _serialize_plan(plan)}
-    if active["plan_code"] == "free":
-        return {"allowed": True, "mode": "upgrade", "plan": _serialize_plan(plan)}
-
-    raise ValueError(
-        f"你当前是{active_plan['name']}，有效期内不能切换到{plan['name']}。"
-        "同套餐可以提前续费，到期时间会自动顺延。"
-    )
+def active_plan_for_user(debox_user_id: str) -> dict:
+    subscription = get_active_subscription(debox_user_id)
+    if not subscription:
+        subscription = ensure_free_trial(debox_user_id)
+    if not subscription:
+        raise ValueError("没有有效订阅，请先开通套餐。")
+    return get_plan(subscription["plan_code"])
 
 
-def require_rule_creation(debox_user_id: str, notification_chat_type: str) -> dict:
-    current = entitlement(debox_user_id)
-    plan = current["plan"]
-    if plan is None:
-        raise ValueError("当前没有有效订阅，请先选择套餐。")
-    if not current["can_create_rule"]:
-        raise ValueError(f"{plan['name']}最多支持 {plan['rule_limit']} 条监控规则。")
-    if notification_chat_type == "group" and not plan["group_notifications"]:
-        raise ValueError("群通知需要专业订阅。")
-    return current
+def require_rule_creation(
+    debox_user_id: str,
+    notification_chat_type: str,
+    wallet_address: str,
+    rule_type: str,
+) -> dict:
+    plan = active_plan_for_user(debox_user_id)
+    if rule_type not in plan["allowed_rule_types"]:
+        raise ValueError(f"当前套餐不支持该规则类型：{rule_type}")
+    if notification_chat_type == "group" and not plan["group_notification"]:
+        raise ValueError("当前套餐不支持群通知，请升级专业版。")
+    if count_user_watch_rules(debox_user_id) >= int(plan["rule_limit"]):
+        raise ValueError(f"当前套餐最多支持 {plan['rule_limit']} 条规则。")
+    if not wallet_is_monitored(debox_user_id, wallet_address) and count_user_wallets(debox_user_id) >= int(plan["wallet_limit"]):
+        raise ValueError(f"当前套餐最多支持 {plan['wallet_limit']} 个钱包。")
+    return plan
 
 
 def require_group_slot(debox_user_id: str) -> dict:
-    current = entitlement(debox_user_id)
-    plan = current["plan"]
-    if plan is None or not plan["group_notifications"]:
-        raise ValueError("群通知需要专业订阅。")
-    if not current["can_add_group"]:
-        raise ValueError(f"{plan['name']}最多支持 {plan['group_limit']} 个群通知目标。")
-    return current
+    plan = active_plan_for_user(debox_user_id)
+    if not plan["group_notification"]:
+        raise ValueError("当前套餐不支持群通知，请升级专业版。")
+    if count_notification_groups(debox_user_id) >= int(plan["group_limit"]):
+        raise ValueError(f"当前套餐最多绑定 {plan['group_limit']} 个群。")
+    return plan
+
+
+def require_summary_target(debox_user_id: str, chat_type: str) -> dict:
+    plan = active_plan_for_user(debox_user_id)
+    if not plan["daily_summary"]:
+        raise ValueError("当前套餐不支持每日摘要。")
+    if chat_type not in plan["summary_targets"]:
+        raise ValueError("当前套餐不支持把每日摘要发送到这个目标。")
+    return plan
+
+
+def activate_paid_subscription(debox_user_id: str, plan_code: str) -> dict:
+    plan = get_plan(plan_code)
+    if plan["code"] == "free":
+        raise ValueError("免费体验不能通过支付开通。")
+    return activate_subscription(debox_user_id, plan["code"], int(plan["days"]))
