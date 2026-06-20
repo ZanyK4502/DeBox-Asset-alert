@@ -231,6 +231,7 @@ button,
   border-color: var(--accent);
   background: var(--accent);
   color: #03100a;
+  box-shadow: 0 0 0 rgba(31, 199, 122, 0);
 }
 
 .secondary {
@@ -238,12 +239,17 @@ button,
 }
 
 button:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.07);
+  transform: translateY(-1px) scale(1.01);
 }
 
 button:active {
   transform: translateY(1px) scale(0.98);
   filter: brightness(1.1);
+}
+
+.primary:hover {
+  box-shadow: 0 10px 24px rgba(31, 199, 122, 0.18);
 }
 
 button.is-pressing {

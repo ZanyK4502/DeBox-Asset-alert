@@ -356,9 +356,12 @@ function disconnectWallet() {
 
 async function toggleWalletConnection() {
   const button = $("connectWalletBtn");
+  const isMobile = window.matchMedia("(max-width: 620px)").matches;
   button.classList.add("is-pressing");
   setTimeout(() => button.classList.remove("is-pressing"), 180);
-  await new Promise((resolve) => setTimeout(resolve, 140));
+  if (isMobile) {
+    await new Promise((resolve) => setTimeout(resolve, 140));
+  }
   if (state.deboxUserId) {
     disconnectWallet();
     return;
