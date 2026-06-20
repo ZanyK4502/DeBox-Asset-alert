@@ -218,6 +218,12 @@ button,
   color: var(--text);
   font-weight: 760;
   cursor: pointer;
+  transform: translateY(0) scale(1);
+  transition:
+    transform 150ms ease,
+    filter 150ms ease,
+    box-shadow 150ms ease,
+    border-color 150ms ease;
 }
 
 .primary {
@@ -232,6 +238,11 @@ button,
 
 button:hover {
   filter: brightness(1.06);
+}
+
+button:active {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(1.1);
 }
 
 button:disabled {
@@ -394,6 +405,35 @@ select:focus {
   background: #16221e;
   color: var(--text);
   box-shadow: 0 18px 42px var(--shadow);
+  animation: toast-slide-in 260ms ease both;
+}
+
+.toast.leaving {
+  animation: toast-slide-out 240ms ease both;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 8px, 0) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes toast-slide-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate3d(18px, 8px, 0) scale(0.98);
+  }
 }
 
 .modal-backdrop {
@@ -458,6 +498,18 @@ select:focus {
     width: 100%;
   }
 
+  .toast {
+    right: auto;
+    left: 50%;
+    bottom: 16px;
+    width: min(420px, calc(100% - 28px));
+    animation-name: toast-mobile-in;
+  }
+
+  .toast.leaving {
+    animation-name: toast-mobile-out;
+  }
+
   .layout {
     width: min(100% - 20px, 560px);
     padding-top: 12px;
@@ -487,5 +539,29 @@ select:focus {
 
   .mini-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@keyframes toast-mobile-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-50%, 16px, 0) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+}
+
+@keyframes toast-mobile-out {
+  from {
+    opacity: 1;
+    transform: translate3d(-50%, 0, 0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate3d(-50%, 16px, 0) scale(0.98);
   }
 }

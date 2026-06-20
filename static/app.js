@@ -24,10 +24,17 @@ function escapeHtml(value) {
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
+  clearTimeout(toast.hideTimer);
+  node.classList.remove("leaving");
   node.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => {
-    node.hidden = true;
+    node.classList.add("leaving");
+    clearTimeout(toast.hideTimer);
+    toast.hideTimer = setTimeout(() => {
+      node.hidden = true;
+      node.classList.remove("leaving");
+    }, 260);
   }, 3600);
 }
 
