@@ -341,6 +341,95 @@ select:focus {
   border-color: var(--accent);
 }
 
+#chainSelect {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chain-picker {
+  position: relative;
+}
+
+.chain-picker-button,
+.chain-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+}
+
+.chain-picker-button {
+  justify-content: flex-start;
+  min-height: 44px;
+  padding: 0 12px;
+  border-color: var(--line);
+  background: var(--surface-3);
+}
+
+.chain-picker-button[aria-expanded="true"] {
+  outline: 2px solid rgba(31, 199, 122, 0.18);
+  border-color: var(--accent);
+}
+
+.chain-picker-button img,
+.chain-picker-option img,
+.chain-logo-fallback {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.chain-logo-fallback {
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.chain-picker-arrow {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.chain-picker-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 35;
+  display: grid;
+  gap: 4px;
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(12, 17, 20, 0.94);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(14px) saturate(1.15);
+}
+
+.chain-picker-option {
+  min-height: 42px;
+  padding: 0 10px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.chain-picker-option.active {
+  border-color: rgba(31, 199, 122, 0.32);
+  background: rgba(31, 199, 122, 0.1);
+  color: var(--text);
+}
+
 [hidden] {
   display: none !important;
 }
@@ -535,6 +624,29 @@ select:focus {
     width: 34px;
     height: 34px;
     flex-basis: 34px;
+  }
+
+  .chain-picker-button {
+    min-height: 46px;
+  }
+
+  .chain-picker-menu {
+    max-height: min(320px, 52vh);
+    gap: 5px;
+    padding: 7px;
+  }
+
+  .chain-picker-option {
+    min-height: 48px;
+    padding: 0 12px;
+  }
+
+  .chain-picker-button img,
+  .chain-picker-option img,
+  .chain-logo-fallback {
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
   }
 
   .toast {

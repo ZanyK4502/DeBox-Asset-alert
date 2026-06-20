@@ -12,6 +12,19 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+const CHAIN_LOGOS = {
+  bsc: "/static/chains/bsc.png",
+  ethereum: "/static/chains/ethereum.png",
+  base: "/static/chains/base.png",
+  polygon: "/static/chains/polygon.png",
+  arbitrum: "/static/chains/arbitrum.png",
+  optimism: "/static/chains/optimism.png",
+};
+
+function chainLogoSrc(chainKey) {
+  return CHAIN_LOGOS[String(chainKey || "").toLowerCase()] || "";
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -105,6 +118,92 @@ function currentPlan() {
   return state.entitlement?.plan || null;
 }
 
+function currentChain() {
+  const key = $("chainSelect").value || state.chains[0]?.key || "";
+  return state.chains.find((chain) => chain.key === key) || state.chains[0] || null;
+}
+
+function chainOptionHtml(chain) {
+  const logo = chainLogoSrc(chain.key);
+  return `
+    ${logo ? `<img src="${escapeHtml(logo)}" alt="" />` : `<span class="chain-logo-fallback">${escapeHtml(String(chain.name || "?").slice(0, 1))}</span>`}
+    <span>${escapeHtml(chain.name)}</span>
+  `;
+}
+
+function renderChainPicker() {
+  const selected = currentChain();
+  const button = $("chainPickerButton");
+  const menu = $("chainPickerMenu");
+  if (!selected) {
+    button.textContent = "请选择链";
+    menu.innerHTML = "";
+    return;
+  }
+  button.innerHTML = `${chainOptionHtml(selected)}<span class="chain-picker-arrow">⌄</span>`;
+  menu.innerHTML = state.chains
+    .map(
+      (chain) => `
+        <button class="chain-picker-option${chain.key === selected.key ? " active" : ""}" type="button" role="option" aria-selected="${chain.key === selected.key}" data-chain="${escapeHtml(chain.key)}">
+          ${chainOptionHtml(chain)}
+        </button>
+      `
+    )
+    .join("");
+  document.querySelectorAll("[data-chain]").forEach((option) => {
+    option.addEventListener("click", () => selectChain(option.dataset.chain));
+  });
+}
+
+function closeChainPicker() {
+  $("chainPickerMenu").hidden = true;
+  $("chainPickerButton").setAttribute("aria-expanded", "false");
+}
+
+function toggleChainPicker() {
+  const menu = $("chainPickerMenu");
+  const willOpen = menu.hidden;
+  menu.hidden = !willOpen;
+  $("chainPickerButton").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) {
+    const active = $("chainPickerMenu").querySelector(".chain-picker-option.active");
+    active?.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function selectChain(chainKey) {
+  $("chainSelect").value = chainKey;
+  closeChainPicker();
+  $("chainSelect").dispatchEvent(new Event("change", { bubbles: true }));
+  $("chainPickerButton").focus();
+}
+
+function moveChainSelection(direction) {
+  if (!state.chains.length) return;
+  const currentKey = $("chainSelect").value || state.chains[0].key;
+  const currentIndex = Math.max(0, state.chains.findIndex((chain) => chain.key === currentKey));
+  const nextIndex = (currentIndex + direction + state.chains.length) % state.chains.length;
+  selectChain(state.chains[nextIndex].key);
+  $("chainPickerMenu").hidden = false;
+  $("chainPickerButton").setAttribute("aria-expanded", "true");
+}
+
+function handleChainPickerKeydown(event) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    toggleChainPicker();
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    moveChainSelection(event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (event.key === "Escape") {
+    closeChainPicker();
+  }
+}
+
 function updateConnectionButton() {
   $("connectWalletBtn").textContent = state.deboxUserId ? "断开连接" : "连接钱包";
 }
@@ -134,6 +233,7 @@ function renderChains() {
   $("chainSelect").innerHTML = state.chains
     .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.name)}</option>`)
     .join("");
+  renderChainPicker();
 }
 
 function renderRuleTypes() {
@@ -575,6 +675,20 @@ function bindEvents() {
   $("ruleTypeSelect").addEventListener("change", updateRuleFields);
   $("tokenAddressInput").addEventListener("blur", lookupToken);
   $("chainSelect").addEventListener("change", lookupToken);
+  $("chainSelect").addEventListener("change", renderChainPicker);
+  $("chainPickerButton").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleChainPicker();
+  });
+  $("chainPickerButton").addEventListener("keydown", handleChainPickerKeydown);
+  document.addEventListener("click", (event) => {
+    if (!$("chainPicker").contains(event.target)) {
+      closeChainPicker();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeChainPicker();
+  });
   $("identityModalClose").addEventListener("click", () => {
     $("identityModal").hidden = true;
   });
