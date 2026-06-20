@@ -370,6 +370,41 @@ select:focus {
   box-shadow: 0 18px 42px var(--shadow);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(7, 10, 13, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.modal {
+  width: min(420px, 100%);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.42);
+}
+
+.modal h3 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.modal p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.modal button {
+  width: 100%;
+}
+
 @media (max-width: 960px) {
   .overview,
   .plans,

@@ -56,9 +56,9 @@ function profileData(profile) {
   return typeof profile?.data === "object" && profile.data ? profile.data : profile || {};
 }
 
-function deboxUserIdFromProfile(profile, fallback) {
+function deboxUserIdFromProfile(profile) {
   const data = profileData(profile);
-  return data.user_id || data.userId || data.uid || data.id || fallback;
+  return data.user_id || data.userId || data.uid || data.id || "";
 }
 
 function profileName(profile) {
@@ -73,6 +73,26 @@ function profileAvatar(profile) {
 
 function currentPlan() {
   return state.entitlement?.plan || null;
+}
+
+function resetConnectionState() {
+  state.walletAddress = "";
+  state.deboxUserId = "";
+  state.profile = null;
+  state.entitlement = null;
+  state.groups = [];
+  $("walletAddressInput").value = "";
+  $("profileBox").innerHTML = "尚未连接钱包";
+  $("subscriptionBox").innerHTML = "连接钱包后查看订阅状态";
+  $("rulesList").innerHTML = "";
+  $("groupsList").innerHTML = "";
+  $("balanceBox").innerHTML = "还没有查询余额。";
+  $("summaryCapability").textContent = "未连接";
+  $("summaryCapability").classList.add("muted");
+}
+
+function showIdentityModal() {
+  $("identityModal").hidden = false;
 }
 
 function renderChains() {
@@ -275,8 +295,14 @@ async function connectWallet() {
       profile = null;
     }
   }
+  const deboxUserId = deboxUserIdFromProfile(profile);
+  if (!deboxUserId) {
+    resetConnectionState();
+    showIdentityModal();
+    return;
+  }
   state.profile = profile;
-  state.deboxUserId = deboxUserIdFromProfile(profile, state.walletAddress);
+  state.deboxUserId = deboxUserId;
   renderProfile();
   await refreshAccount();
   toast("钱包已连接");
@@ -488,6 +514,9 @@ function bindEvents() {
   $("ruleTypeSelect").addEventListener("change", updateRuleFields);
   $("tokenAddressInput").addEventListener("blur", lookupToken);
   $("chainSelect").addEventListener("change", lookupToken);
+  $("identityModalClose").addEventListener("click", () => {
+    $("identityModal").hidden = true;
+  });
 }
 
 async function boot() {
