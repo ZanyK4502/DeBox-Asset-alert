@@ -98,6 +98,10 @@ function currentPlan() {
   return state.entitlement?.plan || null;
 }
 
+function updateConnectionButton() {
+  $("connectWalletBtn").textContent = state.deboxUserId ? "断开连接" : "连接钱包";
+}
+
 function resetConnectionState() {
   state.walletAddress = "";
   state.deboxUserId = "";
@@ -112,6 +116,7 @@ function resetConnectionState() {
   $("balanceBox").innerHTML = "还没有查询余额。";
   $("summaryCapability").textContent = "未连接";
   $("summaryCapability").classList.add("muted");
+  updateConnectionButton();
 }
 
 function showIdentityModal() {
@@ -332,8 +337,22 @@ async function connectWallet() {
   state.profile = profile;
   state.deboxUserId = deboxUserId;
   renderProfile();
+  updateConnectionButton();
   await refreshAccount();
   toast("钱包已连接");
+}
+
+function disconnectWallet() {
+  resetConnectionState();
+  toast("已断开连接");
+}
+
+async function toggleWalletConnection() {
+  if (state.deboxUserId) {
+    disconnectWallet();
+    return;
+  }
+  await connectWallet();
 }
 
 async function refreshAccount() {
@@ -529,7 +548,7 @@ async function deleteGroup(groupId) {
 }
 
 function bindEvents() {
-  $("connectWalletBtn").addEventListener("click", connectWallet);
+  $("connectWalletBtn").addEventListener("click", toggleWalletConnection);
   $("freeTrialBtn").addEventListener("click", startFreeTrial);
   $("payBtn").addEventListener("click", payOrRenew);
   $("refreshRulesBtn").addEventListener("click", refreshAccount);
@@ -551,6 +570,7 @@ async function boot() {
   bindEvents();
   updateTargetVisibility();
   updateSummaryTargetVisibility();
+  updateConnectionButton();
   await loadBootData();
   await loadPaymentConfig();
 }
