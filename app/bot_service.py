@@ -159,11 +159,11 @@ def group_entry_text(message: boxbotapi.Message) -> str:
 
 def features_text() -> str:
     return (
-        "<b>监控能力</b><br/>"
-        "支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/>"
+        "<b>监控能力</b><br/><br/>"
+        "支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>"
         "可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/>"
-        "规则包括余额变化、转入、转出、余额阈值、授权变化和指定地址交互。<br/>"
-        "标准版支持私聊通知和每日摘要；专业版支持群通知和更多高级规则。"
+        "规则包括余额变化、转入、转出、余额阈值、授权变化和指定地址交互。<br/><br/>"
+        "<b>标准版</b>支持私聊通知和每日摘要；<b>专业版</b>支持群通知和更多高级规则。"
     )
 
 
