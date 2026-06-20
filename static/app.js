@@ -66,9 +66,32 @@ function profileName(profile) {
   return data.name || data.nickname || data.user_name || "DeBox 用户";
 }
 
+function normalizeAvatarUrl(value) {
+  const url = String(value || "").trim();
+  if (!url) return "";
+  if (/^https?:\/\//i.test(url)) return url;
+  if (url.startsWith("//")) return `https:${url}`;
+  if (url.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${url.slice(7)}`;
+  if (url.startsWith("/")) return `https://data.debox.pro${url}`;
+  return url;
+}
+
 function profileAvatar(profile) {
   const data = profileData(profile);
-  return data.pic || data.avatar || data.avatar_url || "";
+  return normalizeAvatarUrl(
+    data.pic ||
+      data.avatar ||
+      data.avatar_url ||
+      data.avatarUrl ||
+      data.headimgurl ||
+      data.headImgUrl ||
+      data.icon ||
+      ""
+  );
+}
+
+function profileInitial(profile) {
+  return profileName(profile).trim().slice(0, 1).toUpperCase() || "D";
 }
 
 function currentPlan() {
@@ -137,9 +160,14 @@ function renderProfile() {
     return;
   }
   const avatar = profileAvatar(state.profile);
+  const initial = profileInitial(state.profile);
   $("profileBox").innerHTML = `
     <div class="profile-row">
-      ${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : ""}
+      ${
+        avatar
+          ? `<img src="${escapeHtml(avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.hidden=true;this.nextElementSibling.hidden=false;" /><span class="profile-avatar-fallback" hidden>${escapeHtml(initial)}</span>`
+          : `<span class="profile-avatar-fallback">${escapeHtml(initial)}</span>`
+      }
       <div>
         <strong>${escapeHtml(profileName(state.profile))}</strong>
         <span>${escapeHtml(shortAddress(state.walletAddress))}</span>

@@ -157,6 +157,17 @@ h2 {
   object-fit: cover;
 }
 
+.profile-avatar-fallback {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #03100a;
+  font-weight: 850;
+}
+
 .profile-row strong,
 .profile-row span,
 .metric-row strong,
