@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 import hmac
 import re
+from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -45,6 +46,17 @@ from app.subscription_service import (
 
 STATIC_DIR = ROOT_DIR / "static"
 TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+
+def parse_debox_group_link(value: str) -> str:
+    parsed = urlparse((value or "").strip())
+    host = parsed.hostname or ""
+    if host.lower() not in {"m.debox.pro", "www.debox.pro", "debox.pro"}:
+        return ""
+    if parsed.path != "/group":
+        return ""
+    ids = parse_qs(parsed.query).get("id") or []
+    return (ids[0] if ids else "").strip()
 
 app = FastAPI(title=settings.app_name)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -359,11 +371,11 @@ def get_groups(debox_user_id: str) -> dict:
 def post_group(payload: GroupInput) -> dict:
     try:
         user_id = payload.debox_user_id.strip()
-        gid = payload.gid.strip()
+        gid = parse_debox_group_link(payload.gid)
         if not user_id:
             raise ValueError("请先连接 DeBox 钱包。")
         if not gid:
-            raise ValueError("请输入 DeBox 群 ID。")
+            raise ValueError("请输入正确的 DeBox 群链接。")
         existing = get_notification_group(user_id, gid)
         if existing:
             return {"group": existing, "already_exists": True, "entitlement": entitlement(user_id, create_trial=False)}

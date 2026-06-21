@@ -25,6 +25,20 @@ function chainLogoSrc(chainKey) {
   return CHAIN_LOGOS[String(chainKey || "").toLowerCase()] || "";
 }
 
+function parseDeBoxGroupLink(value) {
+  const raw = String(value || "").trim();
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    if ((host === "m.debox.pro" || host === "www.debox.pro" || host === "debox.pro") && url.pathname === "/group") {
+      return url.searchParams.get("id")?.trim() || "";
+    }
+  } catch (_) {
+    return "";
+  }
+  return "";
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -659,12 +673,18 @@ async function addGroup(event) {
     toast("请先连接钱包。");
     return;
   }
+  const groupLink = $("groupIdInput").value.trim();
+  const gid = parseDeBoxGroupLink(groupLink);
+  if (!gid) {
+    toast("请输入正确的 DeBox 群链接。");
+    return;
+  }
   await api("/api/notification-groups", {
     method: "POST",
     body: JSON.stringify({
       debox_user_id: state.deboxUserId,
       wallet_address: state.walletAddress,
-      gid: $("groupIdInput").value.trim(),
+      gid: groupLink,
       label: $("groupLabelInput").value.trim(),
     }),
   });
