@@ -177,7 +177,7 @@ def features_text() -> str:
 def plans_text() -> str:
     return (
         "<b>订阅方案</b><br/><br/>"
-        "免费体验：1 个钱包，1 条规则，24 小时，仅私聊通知。<br/><br/>"
+        "免费版：1 个钱包，1 条基础规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>"
         f"标准版：{settings.subscription_price} {settings.subscription_token_symbol} / "
         f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/><br/>"
         "专业版：25 USDT / 30 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>"
@@ -216,6 +216,14 @@ def subscription_text(debox_user_id: str) -> str:
     current = entitlement(debox_user_id)
     plan = current.get("plan") or {}
     subscription = current.get("subscription") or {}
+    if plan.get("code") == "free":
+        return (
+            "<b>订阅有效期</b><br/>"
+            f"当前方案：{escape(plan.get('name', '免费版'))}<br/>"
+            "有效期：永久有效<br/>"
+            f"监控规则：{current.get('rule_count', 0)} / {plan.get('rule_limit', 0)}<br/>"
+            f"群通知：{current.get('group_count', 0)} / {plan.get('group_limit', 0)}"
+        )
     return (
         "<b>订阅有效期</b><br/>"
         f"当前方案：{escape(plan.get('name', '未开通'))}<br/>"

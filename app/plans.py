@@ -48,12 +48,13 @@ PLAN_ORDER = ["free", "standard", "professional"]
 PLANS = {
     "free": {
         "code": "free",
-        "name": "免费体验",
+        "name": "免费版",
         "price": Decimal("0"),
-        "days": 1,
+        "days": 0,
         "wallet_limit": 1,
         "rule_limit": 1,
         "group_limit": 0,
+        "daily_alert_limit": 5,
         "allowed_rule_types": [
             "balance_change",
             "incoming",
@@ -64,7 +65,7 @@ PLANS = {
         "group_notification": False,
         "daily_summary": False,
         "summary_targets": [],
-        "description": "1 个钱包、1 条规则、24 小时体验，仅支持私聊通知。",
+        "description": "1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。",
     },
     "standard": {
         "code": "standard",
@@ -74,6 +75,7 @@ PLANS = {
         "wallet_limit": 3,
         "rule_limit": 10,
         "group_limit": 0,
+        "daily_alert_limit": None,
         "allowed_rule_types": [
             "balance_change",
             "incoming",
@@ -95,6 +97,7 @@ PLANS = {
         "wallet_limit": 20,
         "rule_limit": 100,
         "group_limit": 3,
+        "daily_alert_limit": None,
         "allowed_rule_types": [
             "balance_change",
             "incoming",

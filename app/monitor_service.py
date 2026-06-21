@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from app.chain_service import balance, latest_interaction, token_allowance
 from app.db import (
+    count_daily_alert_events,
     create_alert_event,
     list_due_scheduled_subscriptions,
     list_enabled_watch_rules,
@@ -17,7 +18,10 @@ from app.db import (
     update_watch_rule_value,
 )
 from app.debox_service import send_notification
-from app.plans import ASSET_RULE_TYPES, RULE_TYPE_LABELS
+from app.plans import ASSET_RULE_TYPES, RULE_TYPE_LABELS, get_plan
+
+
+FREE_ALERT_TIMEZONE = "Asia/Shanghai"
 
 
 def _decimal(value: str | None) -> Decimal:
@@ -44,6 +48,45 @@ def _send_rule_alert(rule: dict, previous: str, current: str, note: str) -> str:
         f"{escape(note)}"
     )
     return send_notification(rule["notification_chat_id"], rule["notification_chat_type"], text)
+
+
+def _plan_for_rule(rule: dict) -> dict:
+    return get_plan(rule.get("effective_plan_code") or "free")
+
+
+def _rule_allowed_by_plan(rule: dict, plan: dict) -> dict | None:
+    if rule["rule_type"] not in plan["allowed_rule_types"]:
+        return {
+            "rule_id": rule["id"],
+            "status": "plan_limited",
+            "reason": "rule_type",
+            "plan": plan["code"],
+        }
+    if rule.get("notification_chat_type") == "group" and not plan["group_notification"]:
+        return {
+            "rule_id": rule["id"],
+            "status": "plan_limited",
+            "reason": "group_notification",
+            "plan": plan["code"],
+        }
+    return None
+
+
+def _free_daily_limit_result(rule: dict, plan: dict) -> dict | None:
+    if plan["code"] != "free":
+        return None
+    limit = int(plan.get("daily_alert_limit") or 0)
+    if limit <= 0:
+        return None
+    used = count_daily_alert_events(rule["debox_user_id"], FREE_ALERT_TIMEZONE)
+    if used < limit:
+        return None
+    return {
+        "rule_id": rule["id"],
+        "status": "daily_limit",
+        "limit": limit,
+        "used": used,
+    }
 
 
 def _should_alert_asset(rule_type: str, previous: Decimal, current: Decimal, threshold: Decimal) -> bool:
@@ -76,6 +119,10 @@ def check_asset_rule(rule: dict) -> dict:
 
     symbol = current.get("symbol", "TOKEN")
     note = f"{symbol} 余额触发监控条件。"
+    plan = _plan_for_rule(rule)
+    limited = _free_daily_limit_result(rule, plan)
+    if limited:
+        return {**limited, "value": current_value}
     message_id = _send_rule_alert(rule, previous_value, current_value, note)
     event = create_alert_event(
         watch_rule_id=int(rule["id"]),
@@ -105,6 +152,10 @@ def check_approval_rule(rule: dict) -> dict:
         return {"rule_id": rule["id"], "status": "no_change", "value": current_value}
 
     note = f"授权对象：{_short(rule.get('target_address'))}。"
+    plan = _plan_for_rule(rule)
+    limited = _free_daily_limit_result(rule, plan)
+    if limited:
+        return {**limited, "value": current_value}
     message_id = _send_rule_alert(rule, previous_value, current_value, note)
     event = create_alert_event(
         watch_rule_id=int(rule["id"]),
@@ -129,6 +180,10 @@ def check_interaction_rule(rule: dict) -> dict:
         return {"rule_id": rule["id"], "status": "no_change", "value": cursor}
 
     note = f"目标地址：{_short(rule.get('target_address'))}。"
+    plan = _plan_for_rule(rule)
+    limited = _free_daily_limit_result(rule, plan)
+    if limited:
+        return {**limited, "value": cursor}
     message_id = _send_rule_alert(rule, previous_cursor, cursor, note)
     event = create_alert_event(
         watch_rule_id=int(rule["id"]),
@@ -142,6 +197,10 @@ def check_interaction_rule(rule: dict) -> dict:
 
 def check_rule(rule: dict) -> dict:
     try:
+        plan = _plan_for_rule(rule)
+        limited = _rule_allowed_by_plan(rule, plan)
+        if limited:
+            return limited
         if rule["rule_type"] in ASSET_RULE_TYPES:
             return check_asset_rule(rule)
         if rule["rule_type"] == "approval_change":

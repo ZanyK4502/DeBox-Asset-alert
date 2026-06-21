@@ -251,6 +251,8 @@ function resetConnectionState() {
   $("profileBox").innerHTML = "尚未连接钱包";
   $("subscriptionBox").innerHTML = "连接钱包后查看订阅状态";
   $("rulesList").innerHTML = "";
+  $("pausedRulesWrap").hidden = true;
+  $("pausedRulesList").innerHTML = "";
   $("groupsList").innerHTML = "";
   $("balanceBox").innerHTML = "还没有查询余额。";
   $("summaryCapability").textContent = "未连接";
@@ -330,17 +332,22 @@ function renderSubscription() {
     return;
   }
   const sub = state.entitlement.subscription || {};
+  const isFree = plan.code === "free";
+  const freeHint =
+    state.entitlement.paid_history && state.entitlement.fallback_free
+      ? "当前为免费版，升级后可恢复更多监控能力。"
+      : "当前为免费版，可升级解锁更多监控能力。";
   box.innerHTML = `
     <div class="metric-row">
       <strong>${escapeHtml(plan.name)}</strong>
-      <span>剩余 ${escapeHtml(state.entitlement.days_remaining)} 天</span>
+      <span>${isFree ? "永久有效" : `剩余 ${escapeHtml(state.entitlement.days_remaining)} 天`}</span>
     </div>
     <div class="mini-grid">
       <span>钱包 ${state.entitlement.wallet_count} / ${plan.wallet_limit}</span>
       <span>规则 ${state.entitlement.rule_count} / ${plan.rule_limit}</span>
       <span>群 ${state.entitlement.group_count} / ${plan.group_limit}</span>
     </div>
-    <small class="muted">到期：${escapeHtml(sub.expires_at || "-")}</small>
+    <small class="muted">${isFree ? freeHint : `到期：${escapeHtml(sub.expires_at || "-")}`}</small>
   `;
   fillSummaryForm();
 }
@@ -380,28 +387,42 @@ function ruleLabel(code) {
   return state.ruleTypes.find((rule) => rule.code === code)?.label || code;
 }
 
+function ruleItemHtml(rule, paused = false) {
+  const freeAction =
+    paused && rule.can_select_free
+      ? `<button class="secondary" type="button" data-free-rule="${escapeHtml(rule.id)}">设为免费版监控</button>`
+      : "";
+  return `
+    <div class="list-item${paused ? " paused" : ""}">
+      <div>
+        <strong>${escapeHtml(ruleLabel(rule.rule_type))} / ${escapeHtml(rule.chain_key)}</strong>
+        <span>${escapeHtml(shortAddress(rule.wallet_address))} · 阈值 ${escapeHtml(rule.threshold)}</span>
+        <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊通知")}</small>
+        ${paused ? `<small class="pause-reason">${escapeHtml(rule.pause_reason || "当前规则已暂停。")}</small>` : ""}
+      </div>
+      <div class="list-actions">
+        ${freeAction}
+        <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">删除</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderRules() {
-  const rules = state.entitlement?.rules || [];
+  const rules = state.entitlement?.active_rules || state.entitlement?.rules || [];
+  const pausedRules = state.entitlement?.paused_rules || [];
   if (!rules.length) {
-    $("rulesList").innerHTML = `<div class="notice muted">还没有监控规则。</div>`;
-    return;
+    $("rulesList").innerHTML = `<div class="notice muted">${pausedRules.length ? "当前没有正在生效的规则。" : "还没有监控规则。"}</div>`;
+  } else {
+    $("rulesList").innerHTML = rules.map((rule) => ruleItemHtml(rule)).join("");
   }
-  $("rulesList").innerHTML = rules
-    .map(
-      (rule) => `
-        <div class="list-item">
-          <div>
-            <strong>${escapeHtml(ruleLabel(rule.rule_type))} / ${escapeHtml(rule.chain_key)}</strong>
-            <span>${escapeHtml(shortAddress(rule.wallet_address))} · 阈值 ${escapeHtml(rule.threshold)}</span>
-            <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊通知")}</small>
-          </div>
-          <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">删除</button>
-        </div>
-      `
-    )
-    .join("");
+  $("pausedRulesWrap").hidden = pausedRules.length === 0;
+  $("pausedRulesList").innerHTML = pausedRules.map((rule) => ruleItemHtml(rule, true)).join("");
   document.querySelectorAll("[data-delete-rule]").forEach((button) => {
     button.addEventListener("click", () => deleteRule(button.dataset.deleteRule));
+  });
+  document.querySelectorAll("[data-free-rule]").forEach((button) => {
+    button.addEventListener("click", () => selectFreeRule(button.dataset.freeRule));
   });
 }
 
@@ -518,7 +539,7 @@ async function loadPaymentConfig() {
   try {
     const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
     if (state.selectedPlan === "free") {
-      status.textContent = "免费体验无需支付。";
+      status.textContent = "免费版无需支付。";
     } else if (config.mode !== "live") {
       status.textContent = "当前为预览模式，不会发起真实支付。";
     } else if (!config.ready) {
@@ -531,7 +552,7 @@ async function loadPaymentConfig() {
   }
 }
 
-async function startFreeTrial() {
+async function enableFreePlan() {
   if (!state.deboxUserId) {
     toast("请先连接钱包。");
     return;
@@ -541,7 +562,7 @@ async function startFreeTrial() {
     body: JSON.stringify({ debox_user_id: state.deboxUserId }),
   });
   await refreshAccount();
-  toast("免费体验已开启");
+  toast("免费版已启用");
 }
 
 async function payOrRenew() {
@@ -550,7 +571,7 @@ async function payOrRenew() {
     return;
   }
   if (state.selectedPlan === "free") {
-    await startFreeTrial();
+    await enableFreePlan();
     return;
   }
   const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
@@ -645,6 +666,22 @@ async function deleteRule(ruleId) {
   toast("监控规则已删除");
 }
 
+async function selectFreeRule(ruleId) {
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  state.entitlement = await api(`/api/watch-rules/${ruleId}/free-monitor`, {
+    method: "POST",
+    body: JSON.stringify({ debox_user_id: state.deboxUserId }),
+  });
+  state.groups = state.entitlement.groups || [];
+  renderSubscription();
+  renderGroups();
+  renderRules();
+  toast("免费版监控规则已设置");
+}
+
 async function saveSummary(event) {
   event.preventDefault();
   if (!state.deboxUserId) {
@@ -702,7 +739,7 @@ async function deleteGroup(groupId) {
 
 function bindEvents() {
   $("connectWalletBtn").addEventListener("click", toggleWalletConnection);
-  $("freeTrialBtn").addEventListener("click", startFreeTrial);
+  $("freeTrialBtn").addEventListener("click", enableFreePlan);
   $("payBtn").addEventListener("click", payOrRenew);
   $("refreshRulesBtn").addEventListener("click", refreshAccount);
   $("queryBalanceBtn").addEventListener("click", queryBalance);

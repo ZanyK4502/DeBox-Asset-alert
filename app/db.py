@@ -136,12 +136,22 @@ def initialize_database() -> None:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    debox_user_id TEXT PRIMARY KEY,
+                    free_watch_rule_id INTEGER REFERENCES watch_rules(id) ON DELETE SET NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
             _migrate(cur)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_user ON watch_rules (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules (enabled)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_events_rule ON alert_events (watch_rule_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON alert_events (created_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_groups_user ON notification_groups (debox_user_id)")
 
 
@@ -237,6 +247,22 @@ def has_used_plan(debox_user_id: str, plan_code: str) -> bool:
             cur.execute(
                 "SELECT 1 FROM subscriptions WHERE debox_user_id = %s AND plan_code = %s LIMIT 1",
                 (debox_user_id, plan_code),
+            )
+            return cur.fetchone() is not None
+
+
+def has_paid_subscription_history(debox_user_id: str) -> bool:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM subscriptions
+                WHERE debox_user_id = %s
+                  AND plan_code <> 'free'
+                LIMIT 1
+                """,
+                (debox_user_id,),
             )
             return cur.fetchone() is not None
 
@@ -474,19 +500,84 @@ def list_user_watch_rules(debox_user_id: str) -> list[dict]:
             return serialize_many(cur.fetchall())
 
 
+def get_user_preferences(debox_user_id: str) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM user_preferences WHERE debox_user_id = %s", (debox_user_id,))
+            return serialize(cur.fetchone()) or {"debox_user_id": debox_user_id, "free_watch_rule_id": None}
+
+
+def set_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM watch_rules
+                WHERE id = %s
+                  AND debox_user_id = %s
+                  AND enabled = 1
+                  AND notification_chat_type = 'private'
+                  AND rule_type IN (
+                    'balance_change',
+                    'incoming',
+                    'outgoing',
+                    'balance_threshold'
+                  )
+                LIMIT 1
+                """,
+                (rule_id, debox_user_id),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("这条规则不能设为免费版监控。")
+            cur.execute(
+                """
+                INSERT INTO user_preferences (debox_user_id, free_watch_rule_id, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (debox_user_id)
+                DO UPDATE SET free_watch_rule_id = EXCLUDED.free_watch_rule_id, updated_at = NOW()
+                RETURNING *
+                """,
+                (debox_user_id, rule_id),
+            )
+            return serialize(cur.fetchone()) or {}
+
+
 def list_enabled_watch_rules(limit: int = 200) -> list[dict]:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT wr.*
+                SELECT wr.*, COALESCE(active_subscription.plan_code, 'free') AS effective_plan_code
                 FROM watch_rules wr
+                LEFT JOIN LATERAL (
+                    SELECT s.plan_code
+                    FROM subscriptions s
+                    WHERE s.debox_user_id = wr.debox_user_id
+                      AND s.status = 'active'
+                      AND s.expires_at > NOW()
+                    ORDER BY s.expires_at DESC
+                    LIMIT 1
+                ) active_subscription ON TRUE
                 WHERE wr.enabled = 1
-                  AND EXISTS (
-                      SELECT 1 FROM subscriptions s
-                      WHERE s.debox_user_id = wr.debox_user_id
-                        AND s.status = 'active'
-                        AND s.expires_at > NOW()
+                  AND (
+                    active_subscription.plan_code <> 'free'
+                    OR (
+                      (
+                        active_subscription.plan_code = 'free'
+                        OR NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.debox_user_id = wr.debox_user_id
+                            AND s.plan_code <> 'free'
+                        )
+                      )
+                      AND EXISTS (
+                        SELECT 1
+                        FROM user_preferences up
+                        WHERE up.debox_user_id = wr.debox_user_id
+                          AND up.free_watch_rule_id = wr.id
+                      )
+                    )
                   )
                 ORDER BY wr.last_checked_at NULLS FIRST, wr.id ASC
                 LIMIT %s
@@ -494,6 +585,22 @@ def list_enabled_watch_rules(limit: int = 200) -> list[dict]:
                 (max(1, min(int(limit), 1000)),),
             )
             return serialize_many(cur.fetchall())
+
+
+def count_daily_alert_events(debox_user_id: str, timezone_name: str = "Asia/Shanghai") -> int:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM alert_events ae
+                JOIN watch_rules wr ON wr.id = ae.watch_rule_id
+                WHERE wr.debox_user_id = %s
+                  AND (ae.created_at AT TIME ZONE %s)::date = (NOW() AT TIME ZONE %s)::date
+                """,
+                (debox_user_id, timezone_name, timezone_name),
+            )
+            return int(cur.fetchone()["count"])
 
 
 def update_watch_rule_value(rule_id: int, value: str) -> None:

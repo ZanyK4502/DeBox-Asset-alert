@@ -36,8 +36,9 @@ from app.openapi_service import group_info, is_group_joined, token_info, user_in
 from app.payment_service import payment_configuration, prepare_payment, verify_payment
 from app.plans import ALL_RULE_TYPES, public_plans, public_rule_types
 from app.subscription_service import (
+    choose_free_watch_rule,
     entitlement,
-    ensure_free_trial,
+    enable_free_plan,
     require_group_slot,
     require_rule_creation,
     require_summary_target,
@@ -95,6 +96,10 @@ class VerifyPaymentInput(BaseModel):
 
 
 class FreeTrialInput(BaseModel):
+    debox_user_id: str
+
+
+class FreeWatchRuleInput(BaseModel):
     debox_user_id: str
 
 
@@ -191,13 +196,8 @@ def current_subscription(debox_user_id: str) -> dict:
 
 
 @app.post("/api/subscription/free-trial")
-def start_free_trial(payload: FreeTrialInput) -> dict:
-    subscription = ensure_free_trial(payload.debox_user_id)
-    if subscription is None:
-        active = entitlement(payload.debox_user_id, create_trial=False)
-        if active["subscription"]:
-            return active
-        raise HTTPException(status_code=409, detail="免费体验已经使用过。")
+def enable_free_plan_endpoint(payload: FreeTrialInput) -> dict:
+    enable_free_plan(payload.debox_user_id)
     return entitlement(payload.debox_user_id, create_trial=False)
 
 
@@ -301,6 +301,16 @@ def remove_watch_rule(rule_id: int, debox_user_id: str) -> dict:
             raise ValueError("缺少 debox_user_id。")
         delete_watch_rule(rule_id, debox_user_id)
         return {"ok": True, "entitlement": entitlement(debox_user_id, create_trial=False)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/watch-rules/{rule_id}/free-monitor")
+def set_free_monitor_rule(rule_id: int, payload: FreeWatchRuleInput) -> dict:
+    try:
+        if not payload.debox_user_id:
+            raise ValueError("缺少 debox_user_id。")
+        return choose_free_watch_rule(payload.debox_user_id, rule_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

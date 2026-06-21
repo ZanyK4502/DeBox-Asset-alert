@@ -47,7 +47,7 @@ def prepare_payment(payer_address: str, debox_user_id: str, plan_code: str = "st
     if not user_id:
         raise ValueError("缺少 DeBox 用户 ID。")
     if plan_code == "free":
-        raise ValueError("免费体验无需支付。")
+        raise ValueError("免费版无需支付。")
     if settings.payment_mode != "live":
         raise ValueError("当前是预览模式，不会发起真实链上支付。")
     if not settings.payment_recipient_address:

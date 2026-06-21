@@ -9,9 +9,11 @@ from app.db import (
     count_user_wallets,
     count_user_watch_rules,
     get_active_subscription,
-    has_used_plan,
+    get_user_preferences,
+    has_paid_subscription_history,
     list_notification_groups,
     list_user_watch_rules,
+    set_free_watch_rule,
     wallet_is_monitored,
 )
 from app.plans import get_plan, public_plan
@@ -33,31 +35,115 @@ def _days_remaining(subscription: dict | None) -> int:
     return max(0, ceil(seconds / 86400))
 
 
-def ensure_free_trial(debox_user_id: str) -> dict | None:
-    active = get_active_subscription(debox_user_id)
-    if active:
-        return None
-    if has_used_plan(debox_user_id, "free"):
-        return None
-    return activate_subscription(debox_user_id, "free", 1)
+def enable_free_plan(debox_user_id: str) -> dict | None:
+    return get_active_subscription(debox_user_id)
+
+
+def _is_free_eligible(rule: dict, plan: dict) -> bool:
+    return (
+        int(rule.get("enabled") or 0) == 1
+        and rule["rule_type"] in plan["allowed_rule_types"]
+        and rule.get("notification_chat_type") == "private"
+    )
+
+
+def _pause_reason(rule: dict, plan: dict, fallback_free: bool, paid_history: bool) -> str:
+    if not int(rule.get("enabled") or 0):
+        return "规则已关闭。"
+    if fallback_free and paid_history:
+        return "付费套餐已到期，规则已暂停。"
+    if rule["rule_type"] not in plan["allowed_rule_types"]:
+        return f"{plan['name']}不支持该规则类型。"
+    if rule.get("notification_chat_type") == "group" and not plan["group_notification"]:
+        return f"{plan['name']}不支持群通知。"
+    return ""
+
+
+def _classified_rules(
+    rules: list[dict],
+    plan: dict,
+    fallback_free: bool,
+    paid_history: bool,
+    free_watch_rule_id: int | None,
+) -> tuple[list[dict], list[dict]]:
+    active_rules = []
+    paused_rules = []
+    active_wallets = set()
+    rule_limit = int(plan["rule_limit"])
+    wallet_limit = int(plan["wallet_limit"])
+    is_free = plan["code"] == "free"
+
+    for rule in rules:
+        reason = _pause_reason(rule, plan, fallback_free, paid_history)
+        wallet_key = str(rule.get("wallet_address") or "").lower()
+        is_new_wallet = wallet_key and wallet_key not in active_wallets
+        can_select_free = is_free and _is_free_eligible(rule, plan)
+
+        if is_free and int(rule["id"]) == int(free_watch_rule_id or 0) and can_select_free:
+            reason = ""
+        elif can_select_free and int(rule["id"]) != int(free_watch_rule_id or 0):
+            reason = reason or "请选择这条规则作为免费版监控后继续执行。"
+
+        if not reason and len(active_rules) >= rule_limit:
+            reason = f"超出{plan['name']}规则额度。"
+        if not reason and is_new_wallet and len(active_wallets) >= wallet_limit:
+            reason = f"超出{plan['name']}钱包额度。"
+
+        if reason:
+            paused_rules.append({
+                **rule,
+                "status": "paused",
+                "pause_reason": reason,
+                "can_select_free": can_select_free,
+            })
+            continue
+
+        if wallet_key:
+            active_wallets.add(wallet_key)
+        active_rules.append({
+            **rule,
+            "status": "active",
+            "pause_reason": "",
+            "can_select_free": can_select_free,
+        })
+
+    return active_rules, paused_rules
+
+
+def choose_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
+    set_free_watch_rule(debox_user_id, rule_id)
+    return entitlement(debox_user_id, create_trial=False)
 
 
 def entitlement(debox_user_id: str, create_trial: bool = True) -> dict:
-    if create_trial:
-        ensure_free_trial(debox_user_id)
     subscription = get_active_subscription(debox_user_id)
-    plan = public_plan(subscription["plan_code"]) if subscription else None
+    paid_history = has_paid_subscription_history(debox_user_id)
+    fallback_free = subscription is None
+    plan = public_plan(subscription["plan_code"] if subscription else "free")
     rules = list_user_watch_rules(debox_user_id)
+    preferences = get_user_preferences(debox_user_id)
+    active_rules, paused_rules = _classified_rules(
+        rules,
+        plan,
+        fallback_free,
+        paid_history,
+        preferences.get("free_watch_rule_id"),
+    )
     groups = list_notification_groups(debox_user_id)
     return {
         "debox_user_id": debox_user_id,
         "subscription": subscription,
         "plan": plan,
+        "paid_history": paid_history,
+        "fallback_free": fallback_free,
+        "preferences": preferences,
         "days_remaining": _days_remaining(subscription),
         "rule_count": count_user_watch_rules(debox_user_id),
         "wallet_count": count_user_wallets(debox_user_id),
         "group_count": count_notification_groups(debox_user_id),
         "rules": rules,
+        "active_rules": active_rules,
+        "paused_rules": paused_rules,
         "groups": groups,
         "summary_settings": {
             "enabled": bool((subscription or {}).get("daily_summary_enabled")),
@@ -72,11 +158,7 @@ def entitlement(debox_user_id: str, create_trial: bool = True) -> dict:
 
 def active_plan_for_user(debox_user_id: str) -> dict:
     subscription = get_active_subscription(debox_user_id)
-    if not subscription:
-        subscription = ensure_free_trial(debox_user_id)
-    if not subscription:
-        raise ValueError("没有有效订阅，请先开通套餐。")
-    return get_plan(subscription["plan_code"])
+    return get_plan(subscription["plan_code"] if subscription else "free")
 
 
 def require_rule_creation(
@@ -118,5 +200,5 @@ def require_summary_target(debox_user_id: str, chat_type: str) -> dict:
 def activate_paid_subscription(debox_user_id: str, plan_code: str) -> dict:
     plan = get_plan(plan_code)
     if plan["code"] == "free":
-        raise ValueError("免费体验不能通过支付开通。")
+        raise ValueError("免费版无需支付。")
     return activate_subscription(debox_user_id, plan["code"], int(plan["days"]))
