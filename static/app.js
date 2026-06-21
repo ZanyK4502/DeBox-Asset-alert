@@ -591,6 +591,9 @@ async function payOrRenew() {
     await enableFreePlan();
     return;
   }
+  if (!confirm("订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。")) {
+    return;
+  }
   const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
   if (config.mode !== "live") {
     toast("当前是预览模式，未发起真实支付。");

@@ -296,6 +296,13 @@ button:disabled {
   background: #10241a;
 }
 
+.refund-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .action-line,
 .form-actions {
   display: flex;

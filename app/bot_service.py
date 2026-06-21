@@ -181,7 +181,8 @@ def plans_text() -> str:
         f"标准版：{settings.subscription_price} {settings.subscription_token_symbol} / "
         f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/><br/>"
         "专业版：25 USDT / 30 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>"
-        "同一时间只能有一个有效付费套餐；同套餐可提前续费并顺延到期时间。"
+        "同一时间只能有一个有效付费套餐；同套餐可提前续费并顺延到期时间。<br/><br/>"
+        "订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。"
     )
 
 
