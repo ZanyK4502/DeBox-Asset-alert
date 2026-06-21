@@ -82,6 +82,7 @@ def initialize_database() -> None:
                     notification_chat_type TEXT NOT NULL DEFAULT 'private',
                     notification_label TEXT NOT NULL DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    run_status TEXT NOT NULL DEFAULT 'active',
                     last_value TEXT,
                     last_checked_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -148,6 +149,7 @@ def initialize_database() -> None:
             _migrate(cur)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_user ON watch_rules (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules (enabled)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_run_status ON watch_rules (run_status)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user ON orders (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_events_rule ON alert_events (watch_rule_id)")
@@ -162,6 +164,7 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS target_address TEXT",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS target_label TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS notification_label TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS run_status TEXT NOT NULL DEFAULT 'active'",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS last_value TEXT",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_enabled INTEGER NOT NULL DEFAULT 0",
@@ -413,9 +416,9 @@ def create_watch_rule(
                     debox_user_id, chain_key, chain_id, wallet_address,
                     token_address, target_address, target_label, rule_type,
                     threshold, notification_chat_id, notification_chat_type,
-                    notification_label, last_value, last_checked_at
+                    notification_label, run_status, last_value, last_checked_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, NOW())
                 RETURNING *
                 """,
                 (
@@ -447,11 +450,61 @@ def delete_watch_rule(rule_id: int, debox_user_id: str) -> bool:
             return cur.rowcount > 0
 
 
+def delete_paused_watch_rules(debox_user_id: str) -> int:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM watch_rules
+                WHERE debox_user_id = %s
+                  AND run_status = 'paused'
+                """,
+                (debox_user_id,),
+            )
+            return cur.rowcount
+
+
+def get_watch_rule(rule_id: int, debox_user_id: str) -> dict | None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM watch_rules WHERE id = %s AND debox_user_id = %s",
+                (rule_id, debox_user_id),
+            )
+            return serialize(cur.fetchone())
+
+
+def restore_watch_rule(rule_id: int, debox_user_id: str) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE watch_rules
+                SET run_status = 'active'
+                WHERE id = %s
+                  AND debox_user_id = %s
+                  AND enabled = 1
+                RETURNING *
+                """,
+                (rule_id, debox_user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("规则不存在或已删除。")
+            return serialize(row) or {}
+
+
 def count_user_watch_rules(debox_user_id: str) -> int:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS count FROM watch_rules WHERE debox_user_id = %s AND enabled = 1",
+                """
+                SELECT COUNT(*) AS count
+                FROM watch_rules
+                WHERE debox_user_id = %s
+                  AND enabled = 1
+                  AND run_status = 'active'
+                """,
                 (debox_user_id,),
             )
             return int(cur.fetchone()["count"])
@@ -464,7 +517,9 @@ def count_user_wallets(debox_user_id: str) -> int:
                 """
                 SELECT COUNT(DISTINCT LOWER(wallet_address)) AS count
                 FROM watch_rules
-                WHERE debox_user_id = %s AND enabled = 1
+                WHERE debox_user_id = %s
+                  AND enabled = 1
+                  AND run_status = 'active'
                 """,
                 (debox_user_id,),
             )
@@ -477,7 +532,10 @@ def wallet_is_monitored(debox_user_id: str, wallet_address: str) -> bool:
             cur.execute(
                 """
                 SELECT 1 FROM watch_rules
-                WHERE debox_user_id = %s AND LOWER(wallet_address) = LOWER(%s) AND enabled = 1
+                WHERE debox_user_id = %s
+                  AND LOWER(wallet_address) = LOWER(%s)
+                  AND enabled = 1
+                  AND run_status = 'active'
                 LIMIT 1
                 """,
                 (debox_user_id, wallet_address),
@@ -532,6 +590,15 @@ def set_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
                 raise ValueError("这条规则不能设为免费版监控。")
             cur.execute(
                 """
+                UPDATE watch_rules
+                SET run_status = CASE WHEN id = %s THEN 'active' ELSE 'paused' END
+                WHERE debox_user_id = %s
+                  AND enabled = 1
+                """,
+                (rule_id, debox_user_id),
+            )
+            cur.execute(
+                """
                 INSERT INTO user_preferences (debox_user_id, free_watch_rule_id, updated_at)
                 VALUES (%s, %s, NOW())
                 ON CONFLICT (debox_user_id)
@@ -541,6 +608,28 @@ def set_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
                 (debox_user_id, rule_id),
             )
             return serialize(cur.fetchone()) or {}
+
+
+def pause_user_watch_rules(debox_user_id: str, except_rule_id: int | None = None) -> int:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            params: tuple = (debox_user_id,)
+            keep_clause = ""
+            if except_rule_id:
+                keep_clause = "AND id <> %s"
+                params = (debox_user_id, except_rule_id)
+            cur.execute(
+                f"""
+                UPDATE watch_rules
+                SET run_status = 'paused'
+                WHERE debox_user_id = %s
+                  AND enabled = 1
+                  AND run_status = 'active'
+                  {keep_clause}
+                """,
+                params,
+            )
+            return cur.rowcount
 
 
 def list_enabled_watch_rules(limit: int = 200) -> list[dict]:
@@ -560,6 +649,7 @@ def list_enabled_watch_rules(limit: int = 200) -> list[dict]:
                     LIMIT 1
                 ) active_subscription ON TRUE
                 WHERE wr.enabled = 1
+                  AND wr.run_status = 'active'
                   AND (
                     active_subscription.plan_code <> 'free'
                     OR (

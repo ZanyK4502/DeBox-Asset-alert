@@ -23,6 +23,7 @@ from app.config import ROOT_DIR, settings
 from app.db import (
     create_notification_group,
     create_watch_rule,
+    delete_paused_watch_rules,
     delete_notification_group,
     delete_watch_rule,
     expire_pending_orders,
@@ -42,6 +43,7 @@ from app.subscription_service import (
     require_group_slot,
     require_rule_creation,
     require_summary_target,
+    restore_paused_watch_rule,
 )
 
 
@@ -100,6 +102,10 @@ class FreeTrialInput(BaseModel):
 
 
 class FreeWatchRuleInput(BaseModel):
+    debox_user_id: str
+
+
+class RestoreWatchRuleInput(BaseModel):
     debox_user_id: str
 
 
@@ -254,7 +260,7 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
 
         profile = chain_profile(payload.chain_key)
         wallet_address = payload.wallet_address.strip()
-        require_rule_creation(user_id, payload.notification_chat_type.strip().lower(), wallet_address, payload.rule_type)
+        plan = require_rule_creation(user_id, payload.notification_chat_type.strip().lower(), wallet_address, payload.rule_type)
         chat_id, label = notification_target(payload)
 
         token_address = (payload.token_address or "").strip() or None
@@ -289,7 +295,23 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
             notification_label=label,
             last_value=last_value,
         )
-        return {"rule": rule, "baseline": baseline_payload, "entitlement": entitlement(user_id, create_trial=False)}
+        current_entitlement = (
+            choose_free_watch_rule(user_id, int(rule["id"]))
+            if plan["code"] == "free"
+            else entitlement(user_id, create_trial=False)
+        )
+        return {"rule": rule, "baseline": baseline_payload, "entitlement": current_entitlement}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/watch-rules/paused")
+def remove_paused_watch_rules(debox_user_id: str) -> dict:
+    try:
+        if not debox_user_id:
+            raise ValueError("缺少 debox_user_id。")
+        deleted = delete_paused_watch_rules(debox_user_id)
+        return {"ok": True, "deleted": deleted, "entitlement": entitlement(debox_user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -311,6 +333,16 @@ def set_free_monitor_rule(rule_id: int, payload: FreeWatchRuleInput) -> dict:
         if not payload.debox_user_id:
             raise ValueError("缺少 debox_user_id。")
         return choose_free_watch_rule(payload.debox_user_id, rule_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/watch-rules/{rule_id}/restore")
+def restore_monitor_rule(rule_id: int, payload: RestoreWatchRuleInput) -> dict:
+    try:
+        if not payload.debox_user_id:
+            raise ValueError("缺少 debox_user_id。")
+        return restore_paused_watch_rule(payload.debox_user_id, rule_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

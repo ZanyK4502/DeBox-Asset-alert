@@ -387,10 +387,26 @@ function ruleLabel(code) {
   return state.ruleTypes.find((rule) => rule.code === code)?.label || code;
 }
 
+function canRestoreRule(rule, plan) {
+  if (!pausedRuleCanRun(rule, plan)) return false;
+  if (plan.code === "free") return Boolean(rule.can_select_free);
+  return true;
+}
+
+function pausedRuleCanRun(rule, plan) {
+  if (!plan || !rule) return false;
+  if (!rule.enabled) return false;
+  if (!plan.allowed_rule_types?.includes(rule.rule_type)) return false;
+  if (rule.notification_chat_type === "group" && !plan.group_notification) return false;
+  return true;
+}
+
 function ruleItemHtml(rule, paused = false) {
-  const freeAction =
-    paused && rule.can_select_free
-      ? `<button class="secondary" type="button" data-free-rule="${escapeHtml(rule.id)}">设为免费版监控</button>`
+  const plan = currentPlan();
+  const actionText = plan?.code === "free" ? "设为免费版监控" : "恢复监控";
+  const restoreAction =
+    paused && canRestoreRule(rule, plan)
+      ? `<button class="secondary" type="button" data-restore-rule="${escapeHtml(rule.id)}">${escapeHtml(actionText)}</button>`
       : "";
   return `
     <div class="list-item${paused ? " paused" : ""}">
@@ -401,7 +417,7 @@ function ruleItemHtml(rule, paused = false) {
         ${paused ? `<small class="pause-reason">${escapeHtml(rule.pause_reason || "当前规则已暂停。")}</small>` : ""}
       </div>
       <div class="list-actions">
-        ${freeAction}
+        ${restoreAction}
         <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">删除</button>
       </div>
     </div>
@@ -417,12 +433,13 @@ function renderRules() {
     $("rulesList").innerHTML = rules.map((rule) => ruleItemHtml(rule)).join("");
   }
   $("pausedRulesWrap").hidden = pausedRules.length === 0;
+  $("deletePausedRulesBtn").disabled = pausedRules.length === 0;
   $("pausedRulesList").innerHTML = pausedRules.map((rule) => ruleItemHtml(rule, true)).join("");
   document.querySelectorAll("[data-delete-rule]").forEach((button) => {
     button.addEventListener("click", () => deleteRule(button.dataset.deleteRule));
   });
-  document.querySelectorAll("[data-free-rule]").forEach((button) => {
-    button.addEventListener("click", () => selectFreeRule(button.dataset.freeRule));
+  document.querySelectorAll("[data-restore-rule]").forEach((button) => {
+    button.addEventListener("click", () => restoreRule(button.dataset.restoreRule));
   });
 }
 
@@ -666,12 +683,12 @@ async function deleteRule(ruleId) {
   toast("监控规则已删除");
 }
 
-async function selectFreeRule(ruleId) {
+async function restoreRule(ruleId) {
   if (!state.deboxUserId) {
     toast("请先连接钱包。");
     return;
   }
-  state.entitlement = await api(`/api/watch-rules/${ruleId}/free-monitor`, {
+  state.entitlement = await api(`/api/watch-rules/${ruleId}/restore`, {
     method: "POST",
     body: JSON.stringify({ debox_user_id: state.deboxUserId }),
   });
@@ -679,7 +696,26 @@ async function selectFreeRule(ruleId) {
   renderSubscription();
   renderGroups();
   renderRules();
-  toast("免费版监控规则已设置");
+  toast("监控规则已恢复");
+}
+
+async function deletePausedRules() {
+  if (!state.deboxUserId) {
+    toast("请先连接钱包。");
+    return;
+  }
+  if (!confirm("确定删除所有已暂停规则吗？删除后不可恢复。")) {
+    return;
+  }
+  const result = await api(`/api/watch-rules/paused?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, {
+    method: "DELETE",
+  });
+  state.entitlement = result.entitlement;
+  state.groups = state.entitlement.groups || [];
+  renderSubscription();
+  renderGroups();
+  renderRules();
+  toast(`已删除 ${result.deleted || 0} 条暂停规则`);
 }
 
 async function saveSummary(event) {
@@ -741,6 +777,7 @@ function bindEvents() {
   $("connectWalletBtn").addEventListener("click", toggleWalletConnection);
   $("freeTrialBtn").addEventListener("click", enableFreePlan);
   $("payBtn").addEventListener("click", payOrRenew);
+  $("deletePausedRulesBtn").addEventListener("click", deletePausedRules);
   $("refreshRulesBtn").addEventListener("click", refreshAccount);
   $("queryBalanceBtn").addEventListener("click", queryBalance);
   $("ruleForm").addEventListener("submit", createRule);

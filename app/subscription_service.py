@@ -9,10 +9,13 @@ from app.db import (
     count_user_wallets,
     count_user_watch_rules,
     get_active_subscription,
+    get_watch_rule,
     get_user_preferences,
     has_paid_subscription_history,
     list_notification_groups,
     list_user_watch_rules,
+    pause_user_watch_rules,
+    restore_watch_rule,
     set_free_watch_rule,
     wallet_is_monitored,
 )
@@ -50,6 +53,8 @@ def _is_free_eligible(rule: dict, plan: dict) -> bool:
 def _pause_reason(rule: dict, plan: dict, fallback_free: bool, paid_history: bool) -> str:
     if not int(rule.get("enabled") or 0):
         return "规则已关闭。"
+    if rule.get("run_status") == "paused":
+        return "规则已暂停。"
     if fallback_free and paid_history:
         return "付费套餐已到期，规则已暂停。"
     if rule["rule_type"] not in plan["allowed_rule_types"]:
@@ -111,7 +116,32 @@ def _classified_rules(
 
 
 def choose_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
+    if active_plan_for_user(debox_user_id)["code"] != "free":
+        raise ValueError("当前不是免费版，无需设置免费版监控规则。")
     set_free_watch_rule(debox_user_id, rule_id)
+    return entitlement(debox_user_id, create_trial=False)
+
+
+def restore_paused_watch_rule(debox_user_id: str, rule_id: int) -> dict:
+    plan = active_plan_for_user(debox_user_id)
+    if plan["code"] == "free":
+        return choose_free_watch_rule(debox_user_id, rule_id)
+
+    rule = get_watch_rule(rule_id, debox_user_id)
+    if not rule or not int(rule.get("enabled") or 0):
+        raise ValueError("规则不存在或已删除。")
+    if rule["rule_type"] not in plan["allowed_rule_types"]:
+        raise ValueError(f"当前套餐不支持该规则类型：{rule['rule_type']}")
+    if rule.get("notification_chat_type") == "group" and not plan["group_notification"]:
+        raise ValueError("当前套餐不支持群通知，请升级专业版。")
+    if rule.get("run_status") == "active":
+        return entitlement(debox_user_id, create_trial=False)
+    if count_user_watch_rules(debox_user_id) >= int(plan["rule_limit"]):
+        raise ValueError(f"当前套餐最多支持 {plan['rule_limit']} 条运行规则。")
+    if not wallet_is_monitored(debox_user_id, rule["wallet_address"]) and count_user_wallets(debox_user_id) >= int(plan["wallet_limit"]):
+        raise ValueError(f"当前套餐最多支持 {plan['wallet_limit']} 个运行钱包。")
+
+    restore_watch_rule(rule_id, debox_user_id)
     return entitlement(debox_user_id, create_trial=False)
 
 
@@ -119,9 +149,11 @@ def entitlement(debox_user_id: str, create_trial: bool = True) -> dict:
     subscription = get_active_subscription(debox_user_id)
     paid_history = has_paid_subscription_history(debox_user_id)
     fallback_free = subscription is None
+    preferences = get_user_preferences(debox_user_id)
+    if fallback_free and paid_history:
+        pause_user_watch_rules(debox_user_id, preferences.get("free_watch_rule_id"))
     plan = public_plan(subscription["plan_code"] if subscription else "free")
     rules = list_user_watch_rules(debox_user_id)
-    preferences = get_user_preferences(debox_user_id)
     active_rules, paused_rules = _classified_rules(
         rules,
         plan,
