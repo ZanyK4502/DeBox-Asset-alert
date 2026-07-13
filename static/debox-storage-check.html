@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeBox Storage Check</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #050b0d;
+        --panel: #10181c;
+        --panel-2: #0b1215;
+        --line: #223035;
+        --text: #eef5f2;
+        --muted: #9daaa5;
+        --green: #27d984;
+        --yellow: #f2c94c;
+        --red: #ff6b6b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top, rgba(39, 217, 132, 0.12), transparent 34%), var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        width: min(920px, 100%);
+        margin: 0 auto;
+        padding: 18px 14px 32px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      h1,
+      h2 {
+        margin: 0;
+        line-height: 1.18;
+      }
+
+      h1 {
+        font-size: 22px;
+      }
+
+      h2 {
+        font-size: 16px;
+      }
+
+      p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(16, 24, 28, 0.86);
+        padding: 14px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: minmax(120px, 190px) 1fr;
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .label {
+        color: var(--muted);
+      }
+
+      .value {
+        overflow-wrap: anywhere;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        border-radius: 999px;
+        padding: 3px 10px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .ok {
+        color: var(--green);
+      }
+
+      .warn {
+        color: var(--yellow);
+      }
+
+      .bad {
+        color: var(--red);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      button {
+        border: 1px solid rgba(39, 217, 132, 0.38);
+        border-radius: 8px;
+        background: linear-gradient(180deg, rgba(39, 217, 132, 0.95), rgba(23, 183, 107, 0.95));
+        color: #06100b;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 750;
+        min-height: 42px;
+        padding: 0 14px;
+      }
+
+      button.secondary {
+        background: var(--panel-2);
+        color: var(--text);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      pre {
+        overflow: auto;
+        max-height: 360px;
+        margin: 10px 0 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #030708;
+        color: #d8eee4;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .small {
+        font-size: 13px;
+      }
+
+      @media (max-width: 620px) {
+        main {
+          padding: 14px 10px 28px;
+        }
+
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+
+        button {
+          flex: 1 1 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>DeBox DApp 存储与钱包授权测试</h1>
+          <p>用于验证 localStorage、sessionStorage、window.ethereum 授权是否会在刷新或关闭重进后保留。</p>
+        </div>
+        <span id="overallBadge" class="badge">检测中</span>
+      </header>
+
+      <div class="grid">
+        <section class="card">
+          <h2>页面环境</h2>
+          <div id="envRows"></div>
+        </section>
+
+        <section class="card">
+          <h2>浏览器存储</h2>
+          <p class="small">页面加载时会先读取旧值，再写入本次新值。刷新或关闭重进后，看“上次读取值”是否还在。</p>
+          <div id="storageRows"></div>
+          <div class="actions">
+            <button type="button" id="writeStorageBtn">写入新测试值</button>
+            <button type="button" id="reloadBtn" class="secondary">刷新页面</button>
+            <button type="button" id="clearStorageBtn" class="secondary">清空测试缓存</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>钱包授权</h2>
+          <p class="small">先看 eth_accounts 是否已有地址，再点击请求授权。授权后刷新页面，看 eth_accounts 是否还能读到地址。</p>
+          <div id="walletRows"></div>
+          <div class="actions">
+            <button type="button" id="checkAccountsBtn" class="secondary">检查 eth_accounts</button>
+            <button type="button" id="requestAccountsBtn">请求钱包授权</button>
+            <button type="button" id="getUserInfoBtn" class="secondary">读取 DeBox 用户信息</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>完整结果</h2>
+          <p class="small">截图时建议包含这一块。如果要发文字给开发者，可以复制下面内容。</p>
+          <div class="actions">
+            <button type="button" id="copyReportBtn" class="secondary">复制结果</button>
+          </div>
+          <pre id="reportBox"></pre>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const PREFIX = "debox_storage_check_v1";
+      const VALUE_KEY = `${PREFIX}:value`;
+      const COUNT_KEY = `${PREFIX}:load_count`;
+      const SESSION_COUNT_KEY = `${PREFIX}:session_load_count`;
+
+      const state = {
+        loadedAt: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        url: location.href,
+        storage: {},
+        wallet: {},
+      };
+
+      function provider() {
+        return window.deboxWallet || window.ethereum || null;
+      }
+
+      function safeJson(value) {
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch (error) {
+          return String(value);
+        }
+      }
+
+      function short(value) {
+        const text = String(value || "");
+        if (text.length <= 42) return text || "-";
+        return `${text.slice(0, 18)}...${text.slice(-16)}`;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      function setRows(id, rows) {
+        document.getElementById(id).innerHTML = rows
+          .map(
+            ([label, value, cls = ""]) => `
+              <div class="row">
+                <div class="label">${escapeHtml(label)}</div>
+                <div class="value ${escapeHtml(cls)}">${escapeHtml(value)}</div>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function storageAvailable(storage) {
+        const key = `${PREFIX}:probe`;
+        try {
+          storage.setItem(key, "1");
+          storage.removeItem(key);
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: String(error && error.message ? error.message : error) };
+        }
+      }
+
+      function writeStorageValue(reason) {
+        const now = new Date().toISOString();
+        const value = `${reason}_${now}_${Math.random().toString(16).slice(2)}`;
+        const local = storageAvailable(localStorage);
+        const session = storageAvailable(sessionStorage);
+
+        state.storage.localStorageWritable = local.ok;
+        state.storage.sessionStorageWritable = session.ok;
+        state.storage.manualWriteAt = now;
+        state.storage.manualWriteValue = value;
+
+        if (local.ok) {
+          localStorage.setItem(VALUE_KEY, value);
+        } else {
+          state.storage.localStorageError = local.error;
+        }
+
+        if (session.ok) {
+          sessionStorage.setItem(VALUE_KEY, value);
+        } else {
+          state.storage.sessionStorageError = session.error;
+        }
+
+        readStorage();
+      }
+
+      function readStorage() {
+        const local = storageAvailable(localStorage);
+        const session = storageAvailable(sessionStorage);
+
+        state.storage.localStorageWritable = local.ok;
+        state.storage.sessionStorageWritable = session.ok;
+
+        if (local.ok) {
+          state.storage.localPreviousValue = localStorage.getItem(VALUE_KEY) || "";
+          const nextCount = Number(localStorage.getItem(COUNT_KEY) || 0) + 1;
+          localStorage.setItem(COUNT_KEY, String(nextCount));
+          state.storage.localLoadCount = nextCount;
+          state.storage.localCurrentWrite = `auto_${state.loadedAt}_${Math.random().toString(16).slice(2)}`;
+          localStorage.setItem(VALUE_KEY, state.storage.localCurrentWrite);
+        } else {
+          state.storage.localStorageError = local.error;
+        }
+
+        if (session.ok) {
+          state.storage.sessionPreviousValue = sessionStorage.getItem(VALUE_KEY) || "";
+          const nextSessionCount = Number(sessionStorage.getItem(SESSION_COUNT_KEY) || 0) + 1;
+          sessionStorage.setItem(SESSION_COUNT_KEY, String(nextSessionCount));
+          state.storage.sessionLoadCount = nextSessionCount;
+          state.storage.sessionCurrentWrite = `auto_${state.loadedAt}_${Math.random().toString(16).slice(2)}`;
+          sessionStorage.setItem(VALUE_KEY, state.storage.sessionCurrentWrite);
+        } else {
+          state.storage.sessionStorageError = session.error;
+        }
+
+        render();
+      }
+
+      async function request(method, params) {
+        const activeProvider = provider();
+        if (!activeProvider || typeof activeProvider.request !== "function") {
+          throw new Error("没有检测到可用的钱包 provider");
+        }
+        return activeProvider.request({ method, params });
+      }
+
+      async function checkAccounts() {
+        state.wallet.ethAccountsStatus = "checking";
+        render();
+        try {
+          state.wallet.ethAccounts = await request("eth_accounts");
+          state.wallet.ethAccountsError = "";
+        } catch (error) {
+          state.wallet.ethAccounts = null;
+          state.wallet.ethAccountsError = String(error && error.message ? error.message : error);
+        }
+        state.wallet.ethAccountsStatus = "done";
+        render();
+      }
+
+      async function requestAccounts() {
+        state.wallet.requestAccountsStatus = "requesting";
+        render();
+        try {
+          state.wallet.requestAccounts = await request("eth_requestAccounts");
+          state.wallet.requestAccountsError = "";
+          await checkAccounts();
+        } catch (error) {
+          state.wallet.requestAccounts = null;
+          state.wallet.requestAccountsError = String(error && error.message ? error.message : error);
+        }
+        state.wallet.requestAccountsStatus = "done";
+        render();
+      }
+
+      async function getUserInfo() {
+        state.wallet.userInfoStatus = "requesting";
+        render();
+        try {
+          state.wallet.userInfo = await request("debox_getUserInfo", []);
+          state.wallet.userInfoError = "";
+        } catch (error) {
+          state.wallet.userInfo = null;
+          state.wallet.userInfoError = String(error && error.message ? error.message : error);
+        }
+        state.wallet.userInfoStatus = "done";
+        render();
+      }
+
+      function clearTestStorage() {
+        [localStorage, sessionStorage].forEach((storage) => {
+          try {
+            Object.keys(storage)
+              .filter((key) => key.startsWith(PREFIX))
+              .forEach((key) => storage.removeItem(key));
+          } catch (error) {
+            state.storage.clearError = String(error && error.message ? error.message : error);
+          }
+        });
+        location.reload();
+      }
+
+      function render() {
+        const activeProvider = provider();
+        const hasProvider = Boolean(activeProvider);
+        const isDeBoxUA = navigator.userAgent.includes("DeBox");
+
+        setRows("envRows", [
+          ["当前时间", new Date().toLocaleString()],
+          ["页面地址", state.url],
+          ["User Agent", state.userAgent],
+          ["UA 包含 DeBox", isDeBoxUA ? "是" : "否", isDeBoxUA ? "ok" : "warn"],
+          ["window.deboxWallet", window.deboxWallet ? "存在" : "不存在", window.deboxWallet ? "ok" : "warn"],
+          ["window.ethereum", window.ethereum ? "存在" : "不存在", window.ethereum ? "ok" : "warn"],
+          ["当前使用 provider", window.deboxWallet ? "window.deboxWallet" : window.ethereum ? "window.ethereum" : "无", hasProvider ? "ok" : "bad"],
+        ]);
+
+        setRows("storageRows", [
+          ["localStorage 可写", state.storage.localStorageWritable ? "是" : "否", state.storage.localStorageWritable ? "ok" : "bad"],
+          ["localStorage 加载次数", state.storage.localLoadCount ?? "-"],
+          ["localStorage 上次读取值", short(state.storage.localPreviousValue), state.storage.localPreviousValue ? "ok" : "warn"],
+          ["localStorage 本次写入值", short(state.storage.localCurrentWrite || state.storage.manualWriteValue)],
+          ["sessionStorage 可写", state.storage.sessionStorageWritable ? "是" : "否", state.storage.sessionStorageWritable ? "ok" : "bad"],
+          ["sessionStorage 加载次数", state.storage.sessionLoadCount ?? "-"],
+          ["sessionStorage 上次读取值", short(state.storage.sessionPreviousValue), state.storage.sessionPreviousValue ? "ok" : "warn"],
+          ["sessionStorage 本次写入值", short(state.storage.sessionCurrentWrite || state.storage.manualWriteValue)],
+          ["错误", state.storage.localStorageError || state.storage.sessionStorageError || state.storage.clearError || "-"],
+        ]);
+
+        setRows("walletRows", [
+          ["eth_accounts 状态", state.wallet.ethAccountsStatus || "未检查"],
+          ["eth_accounts 结果", safeJson(state.wallet.ethAccounts ?? "-"), Array.isArray(state.wallet.ethAccounts) && state.wallet.ethAccounts.length ? "ok" : "warn"],
+          ["eth_accounts 错误", state.wallet.ethAccountsError || "-"],
+          ["eth_requestAccounts 状态", state.wallet.requestAccountsStatus || "未请求"],
+          ["eth_requestAccounts 结果", safeJson(state.wallet.requestAccounts ?? "-"), Array.isArray(state.wallet.requestAccounts) && state.wallet.requestAccounts.length ? "ok" : "warn"],
+          ["eth_requestAccounts 错误", state.wallet.requestAccountsError || "-"],
+          ["debox_getUserInfo 状态", state.wallet.userInfoStatus || "未请求"],
+          ["debox_getUserInfo 结果", safeJson(state.wallet.userInfo ?? "-")],
+          ["debox_getUserInfo 错误", state.wallet.userInfoError || "-"],
+        ]);
+
+        document.getElementById("overallBadge").textContent = hasProvider ? "已检测到钱包环境" : "未检测到钱包环境";
+        document.getElementById("overallBadge").className = `badge ${hasProvider ? "ok" : "warn"}`;
+        document.getElementById("reportBox").textContent = safeJson(state);
+      }
+
+      async function copyReport() {
+        const text = document.getElementById("reportBox").textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          alert("已复制测试结果");
+        } catch (_) {
+          alert("复制失败，可以手动长按选择结果内容");
+        }
+      }
+
+      document.getElementById("writeStorageBtn").addEventListener("click", () => writeStorageValue("manual"));
+      document.getElementById("reloadBtn").addEventListener("click", () => location.reload());
+      document.getElementById("clearStorageBtn").addEventListener("click", clearTestStorage);
+      document.getElementById("checkAccountsBtn").addEventListener("click", checkAccounts);
+      document.getElementById("requestAccountsBtn").addEventListener("click", requestAccounts);
+      document.getElementById("getUserInfoBtn").addEventListener("click", getUserInfo);
+      document.getElementById("copyReportBtn").addEventListener("click", copyReport);
+
+      readStorage();
+      checkAccounts();
+    </script>
+  </body>
+</html>
