@@ -138,7 +138,17 @@
           </label>
           <label>
             时区
-            <input id="summaryTimezoneInput" value="Asia/Shanghai" autocomplete="off" />
+            <select id="summaryTimezoneInput">
+              <option value="Asia/Shanghai">中国 / 新加坡 / 马来西亚 / 菲律宾 UTC+8</option>
+              <option value="Asia/Tokyo">日本 / 韩国 UTC+9</option>
+              <option value="Asia/Bangkok">越南 / 泰国 / 印尼西部 UTC+7</option>
+              <option value="Asia/Kolkata">印度 UTC+5:30</option>
+              <option value="Europe/Berlin">欧洲中部 UTC+1/UTC+2</option>
+              <option value="Europe/London">英国 UTC+0/UTC+1</option>
+              <option value="America/New_York">美国东部 UTC-5/UTC-4</option>
+              <option value="America/Los_Angeles">美国西部 UTC-8/UTC-7</option>
+              <option value="UTC">UTC 时间</option>
+            </select>
           </label>
           <label>
             推送对象

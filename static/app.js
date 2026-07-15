@@ -21,8 +21,25 @@ const CHAIN_LOGOS = {
   optimism: "/static/chains/optimism.png",
 };
 
+const SUMMARY_TIMEZONES = new Set([
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "Asia/Bangkok",
+  "Asia/Kolkata",
+  "Europe/Berlin",
+  "Europe/London",
+  "America/New_York",
+  "America/Los_Angeles",
+  "UTC",
+]);
+
 function chainLogoSrc(chainKey) {
   return CHAIN_LOGOS[String(chainKey || "").toLowerCase()] || "";
+}
+
+function normalizeSummaryTimezone(value) {
+  const timezone = String(value || "").trim();
+  return SUMMARY_TIMEZONES.has(timezone) ? timezone : "Asia/Shanghai";
 }
 
 function parseDeBoxGroupLink(value) {
@@ -447,7 +464,7 @@ function fillSummaryForm() {
   const settings = state.entitlement?.summary_settings || {};
   $("summaryEnabledInput").checked = Boolean(settings.enabled);
   $("summaryTimeInput").value = settings.time || "20:00";
-  $("summaryTimezoneInput").value = settings.timezone || "Asia/Shanghai";
+  $("summaryTimezoneInput").value = normalizeSummaryTimezone(settings.timezone);
   $("summaryTargetSelect").value = settings.chat_type || "private";
   $("summaryLabelInput").value = settings.label || "";
   const plan = currentPlan();
@@ -733,7 +750,7 @@ async function saveSummary(event) {
       debox_user_id: state.deboxUserId,
       enabled: $("summaryEnabledInput").checked,
       push_time: $("summaryTimeInput").value || "20:00",
-      timezone: $("summaryTimezoneInput").value.trim() || "Asia/Shanghai",
+      timezone: normalizeSummaryTimezone($("summaryTimezoneInput").value),
       chat_type: $("summaryTargetSelect").value,
       chat_id: $("summaryTargetSelect").value === "group" ? $("summaryGroupSelect").value : "",
       label: $("summaryLabelInput").value.trim(),

@@ -49,6 +49,17 @@ from app.subscription_service import (
 
 STATIC_DIR = ROOT_DIR / "static"
 TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+ALLOWED_SUMMARY_TIMEZONES = {
+    "Asia/Shanghai",
+    "Asia/Tokyo",
+    "Asia/Bangkok",
+    "Asia/Kolkata",
+    "Europe/Berlin",
+    "Europe/London",
+    "America/New_York",
+    "America/Los_Angeles",
+    "UTC",
+}
 
 
 def parse_debox_group_link(value: str) -> str:
@@ -218,6 +229,7 @@ def save_summary_settings(payload: SummarySettingsInput) -> dict:
             raise ValueError("每日摘要推送对象只能是私聊或群聊。")
         require_summary_target(user_id, chat_type)
         validate_push_time(payload.push_time)
+        timezone_name = validate_summary_timezone(payload.timezone)
         chat_id = user_id if chat_type == "private" else payload.chat_id.strip()
         if chat_type == "group" and not get_notification_group(user_id, chat_id):
             raise ValueError("请先绑定这个群，再设置群每日摘要。")
@@ -225,7 +237,7 @@ def save_summary_settings(payload: SummarySettingsInput) -> dict:
             debox_user_id=user_id,
             enabled=payload.enabled,
             push_time=payload.push_time,
-            timezone_name=payload.timezone or "Asia/Shanghai",
+            timezone_name=timezone_name,
             chat_type=chat_type,
             chat_id=chat_id,
             label=payload.label.strip() or ("私聊摘要" if chat_type == "private" else chat_id),
@@ -241,6 +253,13 @@ def validate_push_time(value: str) -> None:
     hour, minute = [int(part) for part in value.split(":", 1)]
     if hour > 23 or minute > 59:
         raise ValueError("推送时间必须在 00:00 到 23:59 之间。")
+
+
+def validate_summary_timezone(value: str) -> str:
+    timezone_name = (value or "Asia/Shanghai").strip()
+    if timezone_name not in ALLOWED_SUMMARY_TIMEZONES:
+        raise ValueError("每日摘要时区不在支持范围内。")
+    return timezone_name
 
 
 @app.get("/api/watch-rules")
