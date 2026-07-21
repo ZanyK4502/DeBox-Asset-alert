@@ -67,11 +67,34 @@ a {
   color: var(--muted);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.language-toggle {
+  min-width: 48px;
+  padding: 0 10px;
+}
+
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.brand > div {
+  min-width: 0;
+}
+
+.brand strong,
+.brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand img {
@@ -527,8 +550,24 @@ select:focus {
 .list-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: end;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.rule-language-control {
+  width: 126px;
+  gap: 5px;
+  text-align: left;
+}
+
+.rule-language-control span {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rule-language-control select {
+  min-height: 38px;
 }
 
 .list-item.paused {
@@ -661,6 +700,15 @@ select:focus {
     font-size: 14px;
   }
 
+  .app-header .language-toggle {
+    min-width: 42px;
+    padding: 0 8px;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
   .app-header strong {
     font-size: 16px;
   }
@@ -742,8 +790,28 @@ select:focus {
     grid-template-columns: 1fr;
   }
 
+  .list-actions {
+    justify-content: flex-start;
+  }
+
   .mini-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-header span {
+    display: none;
+  }
+
+  .app-header button {
+    min-width: 86px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .app-header .language-toggle {
+    min-width: 40px;
   }
 }
 

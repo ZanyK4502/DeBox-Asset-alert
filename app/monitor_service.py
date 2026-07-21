@@ -18,10 +18,19 @@ from app.db import (
     update_watch_rule_value,
 )
 from app.debox_service import send_notification
+from app.languages import normalize_language
 from app.plans import ASSET_RULE_TYPES, RULE_TYPE_LABELS, get_plan
 
 
 FREE_ALERT_TIMEZONE = "Asia/Shanghai"
+RULE_TYPE_LABELS_EN = {
+    "balance_change": "Balance change",
+    "incoming": "Incoming transfer",
+    "outgoing": "Outgoing transfer",
+    "balance_threshold": "Balance threshold",
+    "approval_change": "Approval change",
+    "address_interaction": "Specified address interaction",
+}
 
 
 def _decimal(value: str | None) -> Decimal:
@@ -39,6 +48,17 @@ def _short(address: str | None) -> str:
 
 
 def _send_rule_alert(rule: dict, previous: str, current: str, note: str) -> str:
+    language = normalize_language(rule.get("notification_language"))
+    if language == "en":
+        text = (
+            "<b>DeBox Asset Alert</b><br/>"
+            f"Rule: {escape(RULE_TYPE_LABELS_EN.get(rule['rule_type'], rule['rule_type']))}<br/>"
+            f"Network: {escape(str(rule.get('chain_key', '-')))}<br/>"
+            f"Wallet: {escape(_short(rule.get('wallet_address')))}<br/>"
+            f"Change: {escape(previous)} -> {escape(current)}<br/>"
+            f"{escape(note)}"
+        )
+        return send_notification(rule["notification_chat_id"], rule["notification_chat_type"], text)
     text = (
         "<b>DeBox Asset Alert</b><br/>"
         f"规则：{escape(RULE_TYPE_LABELS.get(rule['rule_type'], rule['rule_type']))}<br/>"
@@ -118,7 +138,11 @@ def check_asset_rule(rule: dict) -> dict:
         return {"rule_id": rule["id"], "status": "no_change", "value": current_value}
 
     symbol = current.get("symbol", "TOKEN")
-    note = f"{symbol} 余额触发监控条件。"
+    note = (
+        f"{symbol} balance matched the monitoring condition."
+        if normalize_language(rule.get("notification_language")) == "en"
+        else f"{symbol} 余额触发监控条件。"
+    )
     plan = _plan_for_rule(rule)
     limited = _free_daily_limit_result(rule, plan)
     if limited:
@@ -151,7 +175,11 @@ def check_approval_rule(rule: dict) -> dict:
     if _decimal(previous_value) == _decimal(current_value):
         return {"rule_id": rule["id"], "status": "no_change", "value": current_value}
 
-    note = f"授权对象：{_short(rule.get('target_address'))}。"
+    note = (
+        f"Approved spender: {_short(rule.get('target_address'))}."
+        if normalize_language(rule.get("notification_language")) == "en"
+        else f"授权对象：{_short(rule.get('target_address'))}。"
+    )
     plan = _plan_for_rule(rule)
     limited = _free_daily_limit_result(rule, plan)
     if limited:
@@ -179,7 +207,11 @@ def check_interaction_rule(rule: dict) -> dict:
     if cursor == previous_cursor or not current.get("matched"):
         return {"rule_id": rule["id"], "status": "no_change", "value": cursor}
 
-    note = f"目标地址：{_short(rule.get('target_address'))}。"
+    note = (
+        f"Target address: {_short(rule.get('target_address'))}."
+        if normalize_language(rule.get("notification_language")) == "en"
+        else f"目标地址：{_short(rule.get('target_address'))}。"
+    )
     plan = _plan_for_rule(rule)
     limited = _free_daily_limit_result(rule, plan)
     if limited:
@@ -243,26 +275,53 @@ def _summary_due(subscription: dict) -> tuple[bool, str]:
 
 def _summary_text(subscription: dict) -> str:
     user_id = subscription["debox_user_id"]
+    language = normalize_language(subscription.get("daily_summary_language"))
+    english = language == "en"
     rules = list_user_watch_rules(user_id)
     events = list_recent_alert_events(user_id, hours=24, limit=80)
     rule_count_by_type = Counter(rule["rule_type"] for rule in rules)
     event_count_by_type = Counter(event["event_type"] for event in events)
     wallets = {str(rule["wallet_address"]).lower() for rule in rules}
 
+    labels = RULE_TYPE_LABELS_EN if english else RULE_TYPE_LABELS
+    separator = ": " if english else "："
     recent_lines = []
     for event in events[:5]:
-        label = RULE_TYPE_LABELS.get(event["event_type"], event["event_type"])
+        label = labels.get(event["event_type"], event["event_type"])
         recent_lines.append(
-            f"- {escape(label)}：{escape(_short(event.get('wallet_address')))} "
+            f"- {escape(label)}{separator}{escape(_short(event.get('wallet_address')))} "
             f"{escape(str(event.get('previous_value') or '-'))} -> {escape(str(event.get('current_value') or '-'))}"
         )
-    recent_text = "<br/>".join(recent_lines) if recent_lines else "今日暂无触发事件。"
+    recent_text = "<br/>".join(recent_lines) if recent_lines else (
+        "No alerts were triggered today." if english else "今日暂无触发事件。"
+    )
 
     asset_rule_count = sum(rule_count_by_type[key] for key in ASSET_RULE_TYPES)
     asset_event_count = sum(event_count_by_type[key] for key in ASSET_RULE_TYPES)
-    alert_hint = "无"
+    alert_hint = "None" if english else "无"
     if events:
-        alert_hint = f"有 {len(events)} 条规则在过去 24 小时内触发，请查看下方最近事件。"
+        alert_hint = (
+            f"{len(events)} alerts were triggered in the past 24 hours. Review the recent events below."
+            if english
+            else f"有 {len(events)} 条规则在过去 24 小时内触发，请查看下方最近事件。"
+        )
+
+    if english:
+        return (
+            "<b>DeBox Asset Alert Daily Summary</b><br/>"
+            "Period: Past 24 hours<br/>"
+            f"Alerts triggered: {len(events)}<br/>"
+            f"Monitored wallets: {len(wallets)}<br/>"
+            f"Current rules: {len(rules)}<br/>"
+            f"Rules: Assets {asset_rule_count}, "
+            f"approvals {rule_count_by_type['approval_change']}, "
+            f"interactions {rule_count_by_type['address_interaction']}<br/>"
+            f"Events: Assets {asset_event_count}, "
+            f"approvals {event_count_by_type['approval_change']}, "
+            f"interactions {event_count_by_type['address_interaction']}<br/>"
+            f"Risk notice: {escape(alert_hint)}<br/><br/>"
+            f"{recent_text}"
+        )
 
     return (
         "<b>DeBox Asset Alert 每日摘要</b><br/>"

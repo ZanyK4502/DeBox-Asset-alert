@@ -1,4 +1,15 @@
+const UI_LANGUAGE_STORAGE_KEY = "debox_asset_alert_h5_language";
+
+function storedUiLanguage() {
+  try {
+    return localStorage.getItem(UI_LANGUAGE_STORAGE_KEY) === "en" ? "en" : "zh";
+  } catch (_) {
+    return "zh";
+  }
+}
+
 const state = {
+  uiLanguage: storedUiLanguage(),
   walletAddress: "",
   deboxUserId: "",
   profile: null,
@@ -8,9 +19,39 @@ const state = {
   selectedPlan: "standard",
   entitlement: null,
   groups: [],
+  paymentConfig: null,
+  paymentError: "",
+  tokenInfo: null,
+  tokenError: "",
+  balanceInfo: null,
 };
 
 const $ = (id) => document.getElementById(id);
+const I18N = window.H5_I18N;
+
+function t(key, values = {}) {
+  const dictionary = I18N[state.uiLanguage] || I18N.zh;
+  const template = dictionary[key] ?? I18N.zh[key] ?? key;
+  return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (_, name) => String(values[name] ?? ""));
+}
+
+function localizedPlan(plan) {
+  const localized = I18N.plans[state.uiLanguage]?.[plan?.code];
+  return {
+    name: localized?.[0] || plan?.name || "-",
+    description: localized?.[1] || plan?.description || "",
+  };
+}
+
+function localizedRuleLabel(code) {
+  return I18N.rules[state.uiLanguage]?.[code] || code;
+}
+
+function localizedApiError(message) {
+  const value = String(message || "").trim();
+  if (state.uiLanguage === "zh" || !/[\u3400-\u9fff]/u.test(value)) return value || t("requestFailed");
+  return t("requestFailed");
+}
 
 const CHAIN_LOGOS = {
   bsc: "/static/chains/bsc.png",
@@ -65,6 +106,52 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function applyStaticTranslations() {
+  document.documentElement.lang = state.uiLanguage === "en" ? "en" : "zh-CN";
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    node.placeholder = t(node.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => {
+    node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel));
+  });
+  document.querySelectorAll("[data-i18n-label]").forEach((label) => {
+    const textNode = [...label.childNodes].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+    if (textNode) textNode.textContent = `\n            ${t(label.dataset.i18nLabel)}\n            `;
+  });
+  const toggle = $("languageToggleBtn");
+  toggle.textContent = state.uiLanguage === "en" ? t("chinese") : "EN";
+  toggle.setAttribute("aria-label", t(state.uiLanguage === "en" ? "switchToChinese" : "switchToEnglish"));
+}
+
+function renderLocalizedState() {
+  applyStaticTranslations();
+  updateConnectionButton();
+  renderPlans();
+  renderChains();
+  renderRuleTypes();
+  renderProfile();
+  renderSubscription(false);
+  renderSummaryCapability();
+  renderGroups();
+  renderRules();
+  renderPaymentStatus();
+  renderTokenInfo();
+  renderBalanceInfo();
+}
+
+function toggleUiLanguage() {
+  state.uiLanguage = state.uiLanguage === "en" ? "zh" : "en";
+  try {
+    localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, state.uiLanguage);
+  } catch (_) {
+    // The current page still switches language when browser storage is unavailable.
+  }
+  renderLocalizedState();
+}
+
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
@@ -89,7 +176,7 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || data.message || "请求失败");
+    throw new Error(localizedApiError(data.detail || data.message || t("requestFailed")));
   }
   return data;
 }
@@ -114,7 +201,7 @@ function deboxUserIdFromProfile(profile) {
 
 function profileName(profile) {
   const data = profileData(profile);
-  return data.name || data.nickname || data.user_name || "DeBox 用户";
+  return data.name || data.nickname || data.user_name || t("deboxUser");
 }
 
 function normalizeAvatarUrl(value) {
@@ -167,7 +254,7 @@ function renderChainPicker() {
   const button = $("chainPickerButton");
   const menu = $("chainPickerMenu");
   if (!selected) {
-    button.textContent = "请选择链";
+    button.textContent = t("selectChain");
     menu.innerHTML = "";
     return;
   }
@@ -255,7 +342,7 @@ function handleChainPickerKeydown(event) {
 }
 
 function updateConnectionButton() {
-  $("connectWalletBtn").textContent = state.deboxUserId ? "断开连接" : "连接钱包";
+  $("connectWalletBtn").textContent = state.deboxUserId ? t("disconnectWallet") : t("connectWallet");
 }
 
 function resetConnectionState() {
@@ -264,15 +351,21 @@ function resetConnectionState() {
   state.profile = null;
   state.entitlement = null;
   state.groups = [];
+  state.paymentConfig = null;
+  state.paymentError = "";
+  state.tokenInfo = null;
+  state.tokenError = "";
+  state.balanceInfo = null;
   $("walletAddressInput").value = "";
-  $("profileBox").innerHTML = "尚未连接钱包";
-  $("subscriptionBox").innerHTML = "连接钱包后查看订阅状态";
+  $("profileBox").innerHTML = t("noWallet");
+  $("subscriptionBox").innerHTML = t("connectToView");
   $("rulesList").innerHTML = "";
   $("pausedRulesWrap").hidden = true;
   $("pausedRulesList").innerHTML = "";
   $("groupsList").innerHTML = "";
-  $("balanceBox").innerHTML = "还没有查询余额。";
-  $("summaryCapability").textContent = "未连接";
+  renderTokenInfo();
+  renderBalanceInfo();
+  $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
   updateConnectionButton();
 }
@@ -282,16 +375,24 @@ function showIdentityModal() {
 }
 
 function renderChains() {
+  const selectedChain = $("chainSelect").value;
   $("chainSelect").innerHTML = state.chains
     .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.name)}</option>`)
     .join("");
+  if (state.chains.some((chain) => chain.key === selectedChain)) {
+    $("chainSelect").value = selectedChain;
+  }
   renderChainPicker();
 }
 
 function renderRuleTypes() {
+  const selectedRuleType = $("ruleTypeSelect").value;
   $("ruleTypeSelect").innerHTML = state.ruleTypes
-    .map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(rule.label)}</option>`)
+    .map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(localizedRuleLabel(rule.code))}</option>`)
     .join("");
+  if (state.ruleTypes.some((rule) => rule.code === selectedRuleType)) {
+    $("ruleTypeSelect").value = selectedRuleType;
+  }
   updateRuleFields();
 }
 
@@ -299,12 +400,13 @@ function renderPlans() {
   $("plansGrid").innerHTML = state.plans
     .map((plan) => {
       const active = plan.code === state.selectedPlan ? " active" : "";
-      const price = plan.price === "0" ? "免费" : `${plan.price} ${plan.asset || "USDT"}`;
+      const text = localizedPlan(plan);
+      const price = plan.price === "0" ? t("freePrice") : `${plan.price} ${plan.asset || "USDT"}`;
       return `
         <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}">
-          <span>${escapeHtml(plan.name)}</span>
+          <span>${escapeHtml(text.name)}</span>
           <strong>${escapeHtml(price)}</strong>
-          <small>${escapeHtml(plan.description)}</small>
+          <small>${escapeHtml(text.description)}</small>
         </button>
       `;
     })
@@ -320,7 +422,7 @@ function renderPlans() {
 
 function renderProfile() {
   if (!state.walletAddress) {
-    $("profileBox").innerHTML = "尚未连接钱包";
+    $("profileBox").innerHTML = t("noWallet");
     return;
   }
   const avatar = profileAvatar(state.profile);
@@ -341,43 +443,58 @@ function renderProfile() {
   `;
 }
 
-function renderSubscription() {
+function renderSubscription(syncSummary = true) {
   const box = $("subscriptionBox");
   const plan = currentPlan();
   if (!state.entitlement || !plan) {
-    box.innerHTML = "还没有有效订阅";
+    box.innerHTML = state.deboxUserId ? t("noSubscription") : t("connectToView");
     return;
   }
   const sub = state.entitlement.subscription || {};
   const isFree = plan.code === "free";
+  const planText = localizedPlan(plan);
   const freeHint =
     state.entitlement.paid_history && state.entitlement.fallback_free
-      ? "当前为免费版，升级后可恢复更多监控能力。"
-      : "当前为免费版，可升级解锁更多监控能力。";
+      ? t("freeRestoreHint")
+      : t("freeUpgradeHint");
   box.innerHTML = `
     <div class="metric-row">
-      <strong>${escapeHtml(plan.name)}</strong>
-      <span>${isFree ? "永久有效" : `剩余 ${escapeHtml(state.entitlement.days_remaining)} 天`}</span>
+      <strong>${escapeHtml(planText.name)}</strong>
+      <span>${escapeHtml(isFree ? t("permanent") : t("remainingDays", { days: state.entitlement.days_remaining }))}</span>
     </div>
     <div class="mini-grid">
-      <span>钱包 ${state.entitlement.wallet_count} / ${plan.wallet_limit}</span>
-      <span>规则 ${state.entitlement.rule_count} / ${plan.rule_limit}</span>
-      <span>群 ${state.entitlement.group_count} / ${plan.group_limit}</span>
+      <span>${escapeHtml(t("walletMetric", { used: state.entitlement.wallet_count, limit: plan.wallet_limit }))}</span>
+      <span>${escapeHtml(t("ruleMetric", { used: state.entitlement.rule_count, limit: plan.rule_limit }))}</span>
+      <span>${escapeHtml(t("groupMetric", { used: state.entitlement.group_count, limit: plan.group_limit }))}</span>
     </div>
-    <small class="muted">${isFree ? freeHint : `到期：${escapeHtml(sub.expires_at || "-")}`}</small>
+    <small class="muted">${escapeHtml(isFree ? freeHint : t("expiresAt", { date: sub.expires_at || "-" }))}</small>
   `;
-  fillSummaryForm();
+  if (syncSummary) fillSummaryForm();
 }
 
 function renderGroups() {
+  if (!state.deboxUserId) {
+    $("groupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
+    $("summaryGroupSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
+    $("groupsList").innerHTML = "";
+    return;
+  }
+  const selectedRuleGroup = $("groupTargetSelect").value;
+  const selectedSummaryGroup = $("summaryGroupSelect").value;
   const options = state.groups.length
     ? state.groups.map((group) => `<option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>`).join("")
-    : `<option value="">暂无已绑定群</option>`;
+    : `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
   $("groupTargetSelect").innerHTML = options;
   $("summaryGroupSelect").innerHTML = options;
+  if (state.groups.some((group) => group.gid === selectedRuleGroup)) {
+    $("groupTargetSelect").value = selectedRuleGroup;
+  }
+  if (state.groups.some((group) => group.gid === selectedSummaryGroup)) {
+    $("summaryGroupSelect").value = selectedSummaryGroup;
+  }
 
   if (!state.groups.length) {
-    $("groupsList").innerHTML = `<div class="notice muted">专业版可绑定群，用于群通知和群每日摘要。</div>`;
+    $("groupsList").innerHTML = `<div class="notice muted">${escapeHtml(t("groupsHint"))}</div>`;
   } else {
     $("groupsList").innerHTML = state.groups
       .map(
@@ -387,7 +504,7 @@ function renderGroups() {
               <strong>${escapeHtml(group.name || group.gid)}</strong>
               <span>GID: ${escapeHtml(group.gid)}</span>
             </div>
-            <button class="secondary" type="button" data-delete-group="${escapeHtml(group.id)}">删除</button>
+            <button class="secondary" type="button" data-delete-group="${escapeHtml(group.id)}">${escapeHtml(t("delete"))}</button>
           </div>
         `
       )
@@ -401,7 +518,24 @@ function renderGroups() {
 }
 
 function ruleLabel(code) {
-  return state.ruleTypes.find((rule) => rule.code === code)?.label || code;
+  return localizedRuleLabel(code);
+}
+
+function localizedPauseReason(rule, plan) {
+  if (state.uiLanguage === "zh") return rule.pause_reason || t("rulePaused");
+  if (!rule.enabled) return t("ruleClosed");
+  if (!plan?.allowed_rule_types?.includes(rule.rule_type)) return t("planRuleUnsupported");
+  if (rule.notification_chat_type === "group" && !plan.group_notification) return t("planGroupUnsupported");
+  if (state.entitlement?.fallback_free && state.entitlement?.paid_history) return t("paidExpired");
+  const reason = String(rule.pause_reason || "");
+  if (reason.includes("\u89c4\u5219\u989d\u5ea6")) return t("ruleLimitExceeded");
+  if (reason.includes("\u94b1\u5305\u989d\u5ea6")) return t("walletLimitExceeded");
+  if (rule.can_select_free && plan?.code === "free") return t("selectFreeRule");
+  return t("rulePaused");
+}
+
+function ruleLanguage(rule) {
+  return rule?.notification_language === "en" ? "en" : "zh";
 }
 
 function canRestoreRule(rule, plan) {
@@ -420,7 +554,7 @@ function pausedRuleCanRun(rule, plan) {
 
 function ruleItemHtml(rule, paused = false) {
   const plan = currentPlan();
-  const actionText = plan?.code === "free" ? "设为免费版监控" : "恢复监控";
+  const actionText = plan?.code === "free" ? t("setFreeMonitor") : t("restoreMonitor");
   const restoreAction =
     paused && canRestoreRule(rule, plan)
       ? `<button class="secondary" type="button" data-restore-rule="${escapeHtml(rule.id)}">${escapeHtml(actionText)}</button>`
@@ -429,23 +563,36 @@ function ruleItemHtml(rule, paused = false) {
     <div class="list-item${paused ? " paused" : ""}">
       <div>
         <strong>${escapeHtml(ruleLabel(rule.rule_type))} / ${escapeHtml(rule.chain_key)}</strong>
-        <span>${escapeHtml(shortAddress(rule.wallet_address))} · 阈值 ${escapeHtml(rule.threshold)}</span>
-        <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : "私聊通知")}</small>
-        ${paused ? `<small class="pause-reason">${escapeHtml(rule.pause_reason || "当前规则已暂停。")}</small>` : ""}
+        <span>${escapeHtml(t("ruleThreshold", { address: shortAddress(rule.wallet_address), threshold: rule.threshold }))}</span>
+        <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : t("privateNotification"))}</small>
+        ${paused ? `<small class="pause-reason">${escapeHtml(localizedPauseReason(rule, plan))}</small>` : ""}
       </div>
       <div class="list-actions">
+        <label class="rule-language-control">
+          <span>${escapeHtml(t("notificationLanguage"))}</span>
+          <select data-rule-language="${escapeHtml(rule.id)}" data-current-language="${ruleLanguage(rule)}" aria-label="${escapeHtml(t("notificationLanguage"))}">
+            <option value="zh"${ruleLanguage(rule) === "zh" ? " selected" : ""}>${escapeHtml(t("chinese"))}</option>
+            <option value="en"${ruleLanguage(rule) === "en" ? " selected" : ""}>English</option>
+          </select>
+        </label>
         ${restoreAction}
-        <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">删除</button>
+        <button class="secondary" type="button" data-delete-rule="${escapeHtml(rule.id)}">${escapeHtml(t("delete"))}</button>
       </div>
     </div>
   `;
 }
 
 function renderRules() {
+  if (!state.deboxUserId) {
+    $("rulesList").innerHTML = "";
+    $("pausedRulesWrap").hidden = true;
+    $("pausedRulesList").innerHTML = "";
+    return;
+  }
   const rules = state.entitlement?.active_rules || state.entitlement?.rules || [];
   const pausedRules = state.entitlement?.paused_rules || [];
   if (!rules.length) {
-    $("rulesList").innerHTML = `<div class="notice muted">${pausedRules.length ? "当前没有正在生效的规则。" : "还没有监控规则。"}</div>`;
+    $("rulesList").innerHTML = `<div class="notice muted">${escapeHtml(pausedRules.length ? t("noActiveRules") : t("noRules"))}</div>`;
   } else {
     $("rulesList").innerHTML = rules.map((rule) => ruleItemHtml(rule)).join("");
   }
@@ -458,6 +605,9 @@ function renderRules() {
   document.querySelectorAll("[data-restore-rule]").forEach((button) => {
     button.addEventListener("click", () => restoreRule(button.dataset.restoreRule));
   });
+  document.querySelectorAll("[data-rule-language]").forEach((select) => {
+    select.addEventListener("change", () => updateRuleLanguage(select.dataset.ruleLanguage, select));
+  });
 }
 
 function fillSummaryForm() {
@@ -466,11 +616,19 @@ function fillSummaryForm() {
   $("summaryTimeInput").value = settings.time || "20:00";
   $("summaryTimezoneInput").value = normalizeSummaryTimezone(settings.timezone);
   $("summaryTargetSelect").value = settings.chat_type || "private";
+  $("summaryLanguageInput").value = settings.language === "en" ? "en" : "zh";
   $("summaryLabelInput").value = settings.label || "";
-  const plan = currentPlan();
-  $("summaryCapability").textContent = plan?.daily_summary ? "可用" : "当前套餐不可用";
-  $("summaryCapability").classList.toggle("muted", !plan?.daily_summary);
+  renderSummaryCapability();
   updateSummaryTargetVisibility();
+}
+
+function renderSummaryCapability() {
+  const plan = currentPlan();
+  const available = Boolean(state.deboxUserId && plan?.daily_summary);
+  $("summaryCapability").textContent = state.deboxUserId
+    ? (available ? t("available") : t("planUnavailable"))
+    : t("notConnected");
+  $("summaryCapability").classList.toggle("muted", !available);
 }
 
 function updateRuleFields() {
@@ -478,8 +636,49 @@ function updateRuleFields() {
   const needsTarget = type === "approval_change" || type === "address_interaction";
   $("targetAddressWrap").hidden = !needsTarget;
   $("targetLabelWrap").hidden = !needsTarget;
-  $("tokenAddressInput").placeholder =
-    type === "approval_change" ? "必填，授权代币合约" : "可选，留空监控原生资产";
+  $("tokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
+}
+
+function renderPaymentStatus() {
+  const status = $("paymentStatus");
+  const config = state.paymentConfig;
+  if (state.paymentError) {
+    status.textContent = localizedApiError(state.paymentError);
+  } else if (!config) {
+    status.textContent = "";
+  } else if (state.selectedPlan === "free") {
+    status.textContent = t("freeNoPayment");
+  } else if (config.mode !== "live") {
+    status.textContent = t("previewMode");
+  } else if (!config.ready) {
+    status.textContent = t("paymentMissing", { items: config.missing.join(", ") });
+  } else {
+    status.textContent = `${config.total_amount} ${config.asset} / ${config.chain_name}`;
+  }
+}
+
+function renderTokenInfo() {
+  const box = $("tokenInfoBox");
+  if (state.tokenError) {
+    box.textContent = t("tokenFailed", { error: localizedApiError(state.tokenError) });
+  } else if (state.tokenInfo) {
+    box.textContent = t("tokenResult", state.tokenInfo);
+  } else {
+    box.textContent = t("tokenHint");
+  }
+}
+
+function renderBalanceInfo() {
+  const box = $("balanceBox");
+  if (!state.balanceInfo) {
+    box.textContent = t("noBalance");
+    return;
+  }
+  box.innerHTML = t("currentBalance", {
+    value: escapeHtml(state.balanceInfo.value),
+    symbol: escapeHtml(state.balanceInfo.symbol),
+    chain: escapeHtml(state.balanceInfo.chain_name),
+  });
 }
 
 function updateTargetVisibility() {
@@ -503,7 +702,7 @@ async function loadBootData() {
 async function connectWallet() {
   const provider = walletProvider();
   if (!provider?.request) {
-    toast("当前浏览器没有检测到 DeBox 钱包或 EVM 钱包。");
+    toast(t("browserNoWallet"));
     return;
   }
   const accounts = await provider.request({ method: "eth_requestAccounts" });
@@ -534,12 +733,12 @@ async function connectWallet() {
   renderProfile();
   updateConnectionButton();
   await refreshAccount();
-  toast("钱包已连接");
+  toast(t("walletConnected"));
 }
 
 function disconnectWallet() {
   resetConnectionState();
-  toast("已断开连接");
+  toast(t("walletDisconnected"));
 }
 
 async function toggleWalletConnection() {
@@ -569,26 +768,19 @@ async function refreshAccount() {
 }
 
 async function loadPaymentConfig() {
-  const status = $("paymentStatus");
   try {
-    const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
-    if (state.selectedPlan === "free") {
-      status.textContent = "免费版无需支付。";
-    } else if (config.mode !== "live") {
-      status.textContent = "当前为预览模式，不会发起真实支付。";
-    } else if (!config.ready) {
-      status.textContent = `支付配置缺少：${config.missing.join(", ")}`;
-    } else {
-      status.textContent = `${config.total_amount} ${config.asset} / ${config.chain_name}`;
-    }
+    state.paymentConfig = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+    state.paymentError = "";
   } catch (error) {
-    status.textContent = error.message;
+    state.paymentConfig = null;
+    state.paymentError = error.message;
   }
+  renderPaymentStatus();
 }
 
 async function enableFreePlan() {
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   await api("/api/subscription/free-trial", {
@@ -596,24 +788,24 @@ async function enableFreePlan() {
     body: JSON.stringify({ debox_user_id: state.deboxUserId }),
   });
   await refreshAccount();
-  toast("免费版已启用");
+  toast(t("freeEnabled"));
 }
 
 async function payOrRenew() {
   if (!state.deboxUserId || !state.walletAddress) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   if (state.selectedPlan === "free") {
     await enableFreePlan();
     return;
   }
-  if (!confirm("订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。")) {
+  if (!confirm(t("refundConfirm"))) {
     return;
   }
   const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
   if (config.mode !== "live") {
-    toast("当前是预览模式，未发起真实支付。");
+    toast(t("previewNoPayment"));
     return;
   }
   const provider = walletProvider();
@@ -635,28 +827,37 @@ async function payOrRenew() {
     body: JSON.stringify({ order_id: prepared.order.id, tx_hash: txHash }),
   });
   await refreshAccount();
-  toast("订阅已生效");
+  toast(t("subscriptionActive"));
 }
 
 async function lookupToken() {
   const token = $("tokenAddressInput").value.trim();
   if (!token) {
-    $("tokenInfoBox").textContent = "填写代币合约后可识别 Token 信息。";
+    state.tokenInfo = null;
+    state.tokenError = "";
+    renderTokenInfo();
     return;
   }
   try {
     const data = await api(`/api/debox/token?contract_address=${encodeURIComponent(token)}&chain_key=${encodeURIComponent($("chainSelect").value)}`);
     const source = profileData(data);
-    $("tokenInfoBox").textContent = `识别结果：${source.name || "-"} (${source.symbol || "-"}) · 精度 ${source.decimal || source.decimals || "-"}`;
+    state.tokenInfo = {
+      name: source.name || "-",
+      symbol: source.symbol || "-",
+      decimals: source.decimal || source.decimals || "-",
+    };
+    state.tokenError = "";
   } catch (error) {
-    $("tokenInfoBox").textContent = `代币识别失败：${error.message}`;
+    state.tokenInfo = null;
+    state.tokenError = error.message;
   }
+  renderTokenInfo();
 }
 
 async function queryBalance() {
   const address = $("walletAddressInput").value.trim();
   if (!address) {
-    toast("请填写钱包地址。");
+    toast(t("enterWallet"));
     return;
   }
   const query = new URLSearchParams({
@@ -665,14 +866,14 @@ async function queryBalance() {
   });
   const token = $("tokenAddressInput").value.trim();
   if (token) query.set("token_address", token);
-  const data = await api(`/api/chain/balance?${query.toString()}`);
-  $("balanceBox").innerHTML = `当前余额：<strong>${escapeHtml(data.value)} ${escapeHtml(data.symbol)}</strong> · ${escapeHtml(data.chain_name)}`;
+  state.balanceInfo = await api(`/api/chain/balance?${query.toString()}`);
+  renderBalanceInfo();
 }
 
 async function createRule(event) {
   event.preventDefault();
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   const targetType = $("targetTypeSelect").value;
@@ -691,21 +892,22 @@ async function createRule(event) {
       notification_chat_type: targetType,
       notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
       notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
+      notification_language: $("ruleLanguageSelect").value,
     }),
   });
   await refreshAccount();
-  toast("监控规则已创建");
+  toast(t("ruleCreated"));
 }
 
 async function deleteRule(ruleId) {
   await api(`/api/watch-rules/${ruleId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
   await refreshAccount();
-  toast("监控规则已删除");
+  toast(t("ruleDeleted"));
 }
 
 async function restoreRule(ruleId) {
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   state.entitlement = await api(`/api/watch-rules/${ruleId}/restore`, {
@@ -716,15 +918,41 @@ async function restoreRule(ruleId) {
   renderSubscription();
   renderGroups();
   renderRules();
-  toast("监控规则已恢复");
+  toast(t("ruleRestored"));
+}
+
+async function updateRuleLanguage(ruleId, select) {
+  if (!state.deboxUserId) {
+    select.value = select.dataset.currentLanguage || "zh";
+    toast(t("connectFirst"));
+    return;
+  }
+  const previousLanguage = select.dataset.currentLanguage || "zh";
+  select.disabled = true;
+  try {
+    const result = await api(`/api/watch-rules/${ruleId}/notification-language`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        debox_user_id: state.deboxUserId,
+        language: select.value,
+      }),
+    });
+    state.entitlement = result.entitlement;
+    renderRules();
+    toast(t("ruleLanguageUpdated"));
+  } catch (error) {
+    select.disabled = false;
+    select.value = previousLanguage;
+    toast(localizedApiError(error.message));
+  }
 }
 
 async function deletePausedRules() {
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
-  if (!confirm("确定删除所有已暂停规则吗？删除后不可恢复。")) {
+  if (!confirm(t("deletePausedConfirm"))) {
     return;
   }
   const result = await api(`/api/watch-rules/paused?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, {
@@ -735,13 +963,13 @@ async function deletePausedRules() {
   renderSubscription();
   renderGroups();
   renderRules();
-  toast(`已删除 ${result.deleted || 0} 条暂停规则`);
+  toast(t("pausedDeleted", { count: result.deleted || 0 }));
 }
 
 async function saveSummary(event) {
   event.preventDefault();
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   await api("/api/subscription/summary-settings", {
@@ -754,22 +982,23 @@ async function saveSummary(event) {
       chat_type: $("summaryTargetSelect").value,
       chat_id: $("summaryTargetSelect").value === "group" ? $("summaryGroupSelect").value : "",
       label: $("summaryLabelInput").value.trim(),
+      language: $("summaryLanguageInput").value,
     }),
   });
   await refreshAccount();
-  toast("每日摘要设置已保存");
+  toast(t("summarySaved"));
 }
 
 async function addGroup(event) {
   event.preventDefault();
   if (!state.deboxUserId) {
-    toast("请先连接钱包。");
+    toast(t("connectFirst"));
     return;
   }
   const groupLink = $("groupIdInput").value.trim();
   const gid = parseDeBoxGroupLink(groupLink);
   if (!gid) {
-    toast("请输入正确的 DeBox 群链接。");
+    toast(t("invalidGroupLink"));
     return;
   }
   await api("/api/notification-groups", {
@@ -784,16 +1013,17 @@ async function addGroup(event) {
   $("groupIdInput").value = "";
   $("groupLabelInput").value = "";
   await refreshAccount();
-  toast("群通知已绑定");
+  toast(t("groupBound"));
 }
 
 async function deleteGroup(groupId) {
   await api(`/api/notification-groups/${groupId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
   await refreshAccount();
-  toast("群通知已删除");
+  toast(t("groupDeleted"));
 }
 
 function bindEvents() {
+  $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", toggleWalletConnection);
   $("freeTrialBtn").addEventListener("click", enableFreePlan);
   $("payBtn").addEventListener("click", payOrRenew);
@@ -836,6 +1066,7 @@ function bindEvents() {
 }
 
 async function boot() {
+  applyStaticTranslations();
   bindEvents();
   updateTargetVisibility();
   updateSummaryTargetVisibility();
@@ -845,5 +1076,5 @@ async function boot() {
 }
 
 boot().catch((error) => {
-  toast(error.message);
+  toast(localizedApiError(error.message));
 });

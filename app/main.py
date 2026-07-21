@@ -32,7 +32,9 @@ from app.db import (
     list_notification_groups,
     list_user_watch_rules,
     update_daily_summary_settings,
+    update_watch_rule_notification_language,
 )
+from app.languages import require_language
 from app.openapi_service import group_info, is_group_joined, token_info, user_info
 from app.payment_service import payment_configuration, prepare_payment, verify_payment
 from app.plans import ALL_RULE_TYPES, public_plans, public_rule_types
@@ -88,6 +90,7 @@ class WatchRuleInput(BaseModel):
     notification_chat_id: str = ""
     notification_chat_type: str = "private"
     notification_label: str = ""
+    notification_language: str = "zh"
 
 
 class GroupInput(BaseModel):
@@ -120,6 +123,11 @@ class RestoreWatchRuleInput(BaseModel):
     debox_user_id: str
 
 
+class RuleLanguageInput(BaseModel):
+    debox_user_id: str
+    language: str
+
+
 class SummarySettingsInput(BaseModel):
     debox_user_id: str
     enabled: bool = True
@@ -128,6 +136,7 @@ class SummarySettingsInput(BaseModel):
     chat_type: str = "private"
     chat_id: str = ""
     label: str = ""
+    language: str = "zh"
 
 
 @app.on_event("startup")
@@ -228,6 +237,7 @@ def save_summary_settings(payload: SummarySettingsInput) -> dict:
         if chat_type not in {"private", "group"}:
             raise ValueError("每日摘要推送对象只能是私聊或群聊。")
         require_summary_target(user_id, chat_type)
+        language = require_language(payload.language)
         validate_push_time(payload.push_time)
         timezone_name = validate_summary_timezone(payload.timezone)
         chat_id = user_id if chat_type == "private" else payload.chat_id.strip()
@@ -241,6 +251,7 @@ def save_summary_settings(payload: SummarySettingsInput) -> dict:
             chat_type=chat_type,
             chat_id=chat_id,
             label=payload.label.strip() or ("私聊摘要" if chat_type == "private" else chat_id),
+            language=language,
         )
         return {"subscription": subscription, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
@@ -312,6 +323,7 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
             notification_chat_id=chat_id,
             notification_chat_type=payload.notification_chat_type.strip().lower(),
             notification_label=label,
+            notification_language=require_language(payload.notification_language),
             last_value=last_value,
         )
         current_entitlement = (
@@ -366,7 +378,27 @@ def restore_monitor_rule(rule_id: int, payload: RestoreWatchRuleInput) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.patch("/api/watch-rules/{rule_id}/notification-language")
+def change_rule_notification_language(rule_id: int, payload: RuleLanguageInput) -> dict:
+    try:
+        user_id = payload.debox_user_id.strip()
+        if not user_id:
+            raise ValueError("缺少 debox_user_id。")
+        rule = update_watch_rule_notification_language(
+            rule_id,
+            user_id,
+            require_language(payload.language),
+        )
+        return {
+            "rule": rule,
+            "entitlement": entitlement(user_id, create_trial=False),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def validate_rule_input(payload: WatchRuleInput) -> None:
+    require_language(payload.notification_language)
     if payload.rule_type not in ALL_RULE_TYPES:
         raise ValueError("不支持的监控类型。")
     if Decimal(payload.threshold) < 0:

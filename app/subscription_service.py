@@ -19,6 +19,7 @@ from app.db import (
     set_free_watch_rule,
     wallet_is_monitored,
 )
+from app.languages import normalize_language
 from app.plans import get_plan, public_plan
 
 
@@ -184,6 +185,7 @@ def entitlement(debox_user_id: str, create_trial: bool = True) -> dict:
             "chat_type": (subscription or {}).get("daily_summary_chat_type", "private"),
             "chat_id": (subscription or {}).get("daily_summary_chat_id", ""),
             "label": (subscription or {}).get("daily_summary_label", ""),
+            "language": normalize_language((subscription or {}).get("daily_summary_language")),
         },
     }
 

@@ -8,6 +8,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.config import settings
+from app.languages import DEFAULT_LANGUAGE, normalize_language
 
 
 UTC = timezone.utc
@@ -59,6 +60,7 @@ def initialize_database() -> None:
                     daily_summary_chat_type TEXT NOT NULL DEFAULT 'private',
                     daily_summary_chat_id TEXT NOT NULL DEFAULT '',
                     daily_summary_label TEXT NOT NULL DEFAULT '',
+                    daily_summary_language TEXT NOT NULL DEFAULT 'zh',
                     daily_summary_last_sent_date TEXT NOT NULL DEFAULT '',
                     scheduled_push_last_sent_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -81,6 +83,7 @@ def initialize_database() -> None:
                     notification_chat_id TEXT NOT NULL,
                     notification_chat_type TEXT NOT NULL DEFAULT 'private',
                     notification_label TEXT NOT NULL DEFAULT '',
+                    notification_language TEXT NOT NULL DEFAULT 'zh',
                     enabled INTEGER NOT NULL DEFAULT 1,
                     run_status TEXT NOT NULL DEFAULT 'active',
                     last_value TEXT,
@@ -142,6 +145,7 @@ def initialize_database() -> None:
                 CREATE TABLE IF NOT EXISTS user_preferences (
                     debox_user_id TEXT PRIMARY KEY,
                     free_watch_rule_id INTEGER REFERENCES watch_rules(id) ON DELETE SET NULL,
+                    bot_language TEXT NOT NULL DEFAULT 'zh',
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -164,6 +168,7 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS target_address TEXT",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS target_label TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS notification_label TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS notification_language TEXT NOT NULL DEFAULT 'zh'",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS run_status TEXT NOT NULL DEFAULT 'active'",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS last_value TEXT",
         "ALTER TABLE watch_rules ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ",
@@ -173,8 +178,10 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_chat_type TEXT NOT NULL DEFAULT 'private'",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_chat_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_label TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_language TEXT NOT NULL DEFAULT 'zh'",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_last_sent_date TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS scheduled_push_last_sent_at TIMESTAMPTZ",
+        "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS bot_language TEXT NOT NULL DEFAULT 'zh'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS plan_code TEXT NOT NULL DEFAULT 'standard'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS chain_key TEXT NOT NULL DEFAULT 'bsc'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS chain_id INTEGER NOT NULL DEFAULT 56",
@@ -406,8 +413,10 @@ def create_watch_rule(
     notification_chat_id: str,
     notification_chat_type: str,
     notification_label: str,
+    notification_language: str,
     last_value: str | None,
 ) -> dict:
+    notification_language = normalize_language(notification_language)
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -416,9 +425,10 @@ def create_watch_rule(
                     debox_user_id, chain_key, chain_id, wallet_address,
                     token_address, target_address, target_label, rule_type,
                     threshold, notification_chat_id, notification_chat_type,
-                    notification_label, run_status, last_value, last_checked_at
+                    notification_label, notification_language, run_status,
+                    last_value, last_checked_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, NOW())
                 RETURNING *
                 """,
                 (
@@ -434,6 +444,7 @@ def create_watch_rule(
                     notification_chat_id,
                     notification_chat_type,
                     notification_label,
+                    notification_language,
                     last_value,
                 ),
             )
@@ -472,6 +483,29 @@ def get_watch_rule(rule_id: int, debox_user_id: str) -> dict | None:
                 (rule_id, debox_user_id),
             )
             return serialize(cur.fetchone())
+
+
+def update_watch_rule_notification_language(
+    rule_id: int,
+    debox_user_id: str,
+    language: str,
+) -> dict:
+    language = normalize_language(language)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE watch_rules
+                SET notification_language = %s
+                WHERE id = %s AND debox_user_id = %s
+                RETURNING *
+                """,
+                (language, rule_id, debox_user_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("规则不存在或已删除。")
+            return serialize(row) or {}
 
 
 def restore_watch_rule(rule_id: int, debox_user_id: str) -> dict:
@@ -562,7 +596,30 @@ def get_user_preferences(debox_user_id: str) -> dict:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM user_preferences WHERE debox_user_id = %s", (debox_user_id,))
-            return serialize(cur.fetchone()) or {"debox_user_id": debox_user_id, "free_watch_rule_id": None}
+            preferences = serialize(cur.fetchone()) or {
+                "debox_user_id": debox_user_id,
+                "free_watch_rule_id": None,
+                "bot_language": DEFAULT_LANGUAGE,
+            }
+            preferences["bot_language"] = normalize_language(preferences.get("bot_language"))
+            return preferences
+
+
+def set_bot_language(debox_user_id: str, language: str) -> dict:
+    language = normalize_language(language)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_preferences (debox_user_id, bot_language, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (debox_user_id)
+                DO UPDATE SET bot_language = EXCLUDED.bot_language, updated_at = NOW()
+                RETURNING *
+                """,
+                (debox_user_id, language),
+            )
+            return serialize(cur.fetchone()) or {}
 
 
 def set_free_watch_rule(debox_user_id: str, rule_id: int) -> dict:
@@ -826,7 +883,9 @@ def update_daily_summary_settings(
     chat_type: str,
     chat_id: str,
     label: str,
+    language: str,
 ) -> dict:
+    language = normalize_language(language)
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -837,7 +896,8 @@ def update_daily_summary_settings(
                     daily_summary_timezone = %s,
                     daily_summary_chat_type = %s,
                     daily_summary_chat_id = %s,
-                    daily_summary_label = %s
+                    daily_summary_label = %s,
+                    daily_summary_language = %s
                 WHERE debox_user_id = %s AND status = 'active' AND expires_at > NOW()
                 RETURNING *
                 """,
@@ -848,6 +908,7 @@ def update_daily_summary_settings(
                     chat_type,
                     chat_id,
                     label,
+                    language,
                     debox_user_id,
                 ),
             )
