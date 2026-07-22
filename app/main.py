@@ -52,7 +52,9 @@ from app.openapi_service import group_info, is_group_joined, token_info, user_in
 from app.payment_service import payment_configuration, prepare_payment, verify_payment
 from app.plans import ALL_RULE_TYPES, public_plans, public_rule_types
 from app.subscription_service import (
+    activate_complimentary_plan,
     choose_free_watch_rule,
+    complimentary_access,
     entitlement,
     enable_free_plan,
     require_group_slot,
@@ -305,7 +307,9 @@ def post_auth_logout(request: Request, response: Response) -> dict:
 
 @app.get("/api/subscription/current")
 def current_subscription(identity: dict = Depends(require_authenticated_session)) -> dict:
-    return entitlement(identity["debox_user_id"])
+    result = entitlement(identity["debox_user_id"])
+    result["complimentary_access"] = complimentary_access(identity["wallet_address"])
+    return result
 
 
 @app.post("/api/subscription/free-trial")
@@ -313,6 +317,24 @@ def enable_free_plan_endpoint(identity: dict = Depends(require_authenticated_ses
     user_id = identity["debox_user_id"]
     enable_free_plan(user_id)
     return entitlement(user_id, create_trial=False)
+
+
+@app.post("/api/subscription/complimentary")
+def activate_complimentary_plan_endpoint(
+    payload: PreparePaymentInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
+    try:
+        activation = activate_complimentary_plan(
+            identity["debox_user_id"],
+            identity["wallet_address"],
+            payload.plan_code,
+        )
+        current = entitlement(identity["debox_user_id"], create_trial=False)
+        current["complimentary_access"] = complimentary_access(identity["wallet_address"])
+        return {"activation": activation, "entitlement": current}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/subscription/summary-settings")

@@ -188,6 +188,18 @@ def initialize_database() -> None:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS complimentary_grants (
+                    wallet_address TEXT PRIMARY KEY,
+                    debox_user_id TEXT NOT NULL,
+                    plan_code TEXT NOT NULL,
+                    starts_at TIMESTAMPTZ NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
             _migrate(cur)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_user ON watch_rules (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules (enabled)")
@@ -200,6 +212,7 @@ def initialize_database() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges (expires_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions (expires_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_complimentary_grants_user ON complimentary_grants (debox_user_id)")
             cur.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_tx_hash_unique
@@ -502,6 +515,8 @@ def _activate_subscription(
     debox_user_id: str,
     plan_code: str,
     days: int,
+    *,
+    allow_renewal: bool = True,
 ) -> dict:
     start = now_utc()
     cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (debox_user_id,))
@@ -525,7 +540,7 @@ def _activate_subscription(
         (debox_user_id,),
     )
     active = cur.fetchone()
-    if active and active["plan_code"] == plan_code:
+    if active and active["plan_code"] == plan_code and allow_renewal:
         cur.execute(
             """
             UPDATE subscriptions
@@ -554,6 +569,70 @@ def _activate_subscription(
         (debox_user_id, plan_code, start, start + timedelta(days=days), 0, debox_user_id),
     )
     return serialize(cur.fetchone()) or {}
+
+
+def get_complimentary_grant(wallet_address: str) -> dict | None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM complimentary_grants
+                WHERE LOWER(wallet_address) = LOWER(%s)
+                """,
+                (wallet_address,),
+            )
+            return serialize(cur.fetchone())
+
+
+def activate_complimentary_subscription(
+    debox_user_id: str,
+    wallet_address: str,
+    plan_code: str,
+    days: int,
+) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                (f"complimentary:{wallet_address.lower()}",),
+            )
+            cur.execute(
+                """
+                SELECT 1
+                FROM complimentary_grants
+                WHERE LOWER(wallet_address) = LOWER(%s)
+                """,
+                (wallet_address,),
+            )
+            if cur.fetchone():
+                raise ValueError("该白名单钱包已经领取过免费套餐。")
+
+            subscription = _activate_subscription(
+                cur,
+                debox_user_id,
+                plan_code,
+                days,
+                allow_renewal=False,
+            )
+            cur.execute(
+                """
+                INSERT INTO complimentary_grants (
+                    wallet_address, debox_user_id, plan_code, starts_at, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    wallet_address.lower(),
+                    debox_user_id,
+                    plan_code,
+                    subscription["starts_at"],
+                    subscription["expires_at"],
+                ),
+            )
+            grant = serialize(cur.fetchone()) or {}
+            return {"subscription": subscription, "grant": grant}
 
 
 def create_order(

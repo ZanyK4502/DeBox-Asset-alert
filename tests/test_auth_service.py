@@ -81,6 +81,7 @@ class AuthServiceTests(unittest.TestCase):
         protected_paths = {
             "/api/subscription/current",
             "/api/subscription/free-trial",
+            "/api/subscription/complimentary",
             "/api/subscription/summary-settings",
             "/api/watch-rules",
             "/api/watch-rules/paused",

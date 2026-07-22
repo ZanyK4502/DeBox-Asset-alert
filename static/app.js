@@ -460,6 +460,17 @@ function renderPlans() {
       loadPaymentConfig();
     });
   });
+  const complimentary = state.entitlement?.complimentary_access;
+  const complimentaryAvailable = Boolean(
+    complimentary?.available && !currentPaidPlan && state.selectedPlan !== "free"
+  );
+  const complimentaryActive = Boolean(complimentary?.used && currentPaidPlan);
+  $("payBtn").textContent = complimentaryAvailable
+    ? t("complimentaryActivate")
+    : complimentaryActive
+      ? t("currentPlanButton")
+      : t("payRenew");
+  $("payBtn").disabled = complimentaryActive;
 }
 
 function renderProfile() {
@@ -685,7 +696,13 @@ function updateRuleFields() {
 function renderPaymentStatus() {
   const status = $("paymentStatus");
   const config = state.paymentConfig;
-  if (state.paymentError) {
+  const complimentary = state.entitlement?.complimentary_access;
+  const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
+  if (complimentary?.available && !currentPaidPlan && state.selectedPlan !== "free") {
+    status.textContent = t("complimentaryAvailable");
+  } else if (complimentary?.used && currentPaidPlan) {
+    status.textContent = t("complimentaryActive", { date: complimentary.expires_at || "-" });
+  } else if (state.paymentError) {
     status.textContent = localizedApiError(state.paymentError);
   } else if (!config) {
     status.textContent = "";
@@ -879,6 +896,29 @@ async function payOrRenew() {
   }
   if (state.selectedPlan === "free") {
     await enableFreePlan();
+    return;
+  }
+  const complimentary = state.entitlement?.complimentary_access;
+  const hasPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
+  if (complimentary?.available && !hasPaidPlan) {
+    const planName = localizedPlan(state.plans.find((plan) => plan.code === state.selectedPlan)).name;
+    if (!confirm(t("complimentaryConfirm", { plan: planName }))) {
+      return;
+    }
+    const button = $("payBtn");
+    button.disabled = true;
+    try {
+      await api("/api/subscription/complimentary", {
+        method: "POST",
+        body: JSON.stringify({ plan_code: state.selectedPlan }),
+      });
+      await refreshAccount();
+      toast(t("complimentaryActivated"));
+    } catch (error) {
+      toast(localizedApiError(error.message));
+    } finally {
+      renderPlans();
+    }
     return;
   }
   if (!confirm(t("refundConfirm"))) {

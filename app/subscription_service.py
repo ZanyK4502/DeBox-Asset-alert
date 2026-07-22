@@ -4,11 +4,13 @@ from datetime import datetime, timezone
 from math import ceil
 
 from app.db import (
+    activate_complimentary_subscription,
     activate_subscription,
     count_notification_groups,
     count_user_wallets,
     count_user_watch_rules,
     get_active_subscription,
+    get_complimentary_grant,
     get_watch_rule,
     get_user_preferences,
     has_paid_subscription_history,
@@ -19,11 +21,59 @@ from app.db import (
     set_free_watch_rule,
     wallet_is_monitored,
 )
+from app.chain_service import validate_address
+from app.config import settings
 from app.languages import normalize_language
 from app.plans import get_plan, public_plan
 
 
 UTC = timezone.utc
+COMPLIMENTARY_DAYS = 30
+
+
+def _complimentary_wallets() -> set[str]:
+    wallets = set()
+    for value in settings.complimentary_wallet_addresses.split(","):
+        try:
+            wallets.add(validate_address(value.strip()))
+        except ValueError:
+            continue
+    return wallets
+
+
+def complimentary_access(wallet_address: str) -> dict:
+    try:
+        wallet = validate_address(wallet_address)
+    except ValueError:
+        return {"eligible": False, "used": False, "available": False}
+    eligible = wallet in _complimentary_wallets()
+    grant = get_complimentary_grant(wallet) if eligible else None
+    return {
+        "eligible": eligible,
+        "used": grant is not None,
+        "available": eligible and grant is None,
+        "plan_code": (grant or {}).get("plan_code", ""),
+        "expires_at": (grant or {}).get("expires_at"),
+    }
+
+
+def activate_complimentary_plan(
+    debox_user_id: str,
+    wallet_address: str,
+    plan_code: str,
+) -> dict:
+    wallet = validate_address(wallet_address)
+    if wallet not in _complimentary_wallets():
+        raise ValueError("当前钱包不在免费开通白名单中。")
+    plan = get_plan(plan_code)
+    if plan["code"] not in {"standard", "professional"}:
+        raise ValueError("白名单只能选择标准版或专业版。")
+    return activate_complimentary_subscription(
+        debox_user_id,
+        wallet,
+        plan["code"],
+        COMPLIMENTARY_DAYS,
+    )
 
 
 def _days_remaining(subscription: dict | None) -> int:

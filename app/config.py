@@ -45,6 +45,7 @@ class Settings:
     subscription_days: int = int(env("SUBSCRIPTION_DAYS", "30"))
     payment_recipient_address: str = env("PAYMENT_RECIPIENT_ADDRESS")
     payment_mode: str = env("PAYMENT_MODE", "preview").lower()
+    complimentary_wallet_addresses: str = env("COMPLIMENTARY_WALLET_ADDRESSES")
 
 
 settings = Settings()
