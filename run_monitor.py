@@ -4,6 +4,7 @@ import time
 
 from app.db import initialize_database
 from app.monitor_service import check_all_rules, send_due_scheduled_reports
+from app.payment_service import reconcile_confirming_payments
 
 
 INTERVAL_SECONDS = 60
@@ -15,6 +16,7 @@ def run() -> None:
         try:
             result = {
                 "rules": check_all_rules(),
+                "payments": reconcile_confirming_payments(),
                 "scheduled_reports": send_due_scheduled_reports(),
             }
             print(json.dumps(result, ensure_ascii=False), flush=True)

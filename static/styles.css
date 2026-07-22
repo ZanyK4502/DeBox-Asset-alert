@@ -319,6 +319,11 @@ button:disabled {
   background: #10241a;
 }
 
+.plan-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .refund-note {
   margin: 10px 0 0;
   color: var(--muted);
@@ -352,6 +357,13 @@ label {
   color: var(--muted);
   font-size: 13px;
   font-weight: 740;
+}
+
+.field-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
 input,

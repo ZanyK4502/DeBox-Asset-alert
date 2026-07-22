@@ -157,6 +157,25 @@ class NoditClient:
             raise RuntimeError("Unexpected Nodit API response")
         return data
 
+    def rpc(self, profile: dict, method: str, params: list) -> Any:
+        url = f"https://{profile['chain']}-{profile['network']}.nodit.io"
+        response = self.session.post(
+            url,
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Nodit Node API error {response.status_code}: {response.text[:300]}"
+            )
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError("Unexpected Nodit Node API response")
+        if data.get("error"):
+            error = data["error"]
+            raise RuntimeError(str(error.get("message") if isinstance(error, dict) else error))
+        return data.get("result")
+
 
 @lru_cache
 def nodit_client() -> NoditClient:
@@ -252,6 +271,42 @@ def transaction_by_hash(tx_hash: str, chain_key: str | None = None) -> dict:
         "blockchain/getTransactionByHash",
         {"transactionHash": validate_transaction_hash(tx_hash), "withBalanceChanges": True},
     )
+
+
+def rpc_transaction_by_hash(tx_hash: str, chain_key: str | None = None) -> dict | None:
+    profile = chain_profile(chain_key)
+    result = nodit_client().rpc(
+        profile,
+        "eth_getTransactionByHash",
+        [validate_transaction_hash(tx_hash)],
+    )
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        raise RuntimeError("Unexpected transaction response")
+    return result
+
+
+def transaction_receipt(tx_hash: str, chain_key: str | None = None) -> dict | None:
+    profile = chain_profile(chain_key)
+    result = nodit_client().rpc(
+        profile,
+        "eth_getTransactionReceipt",
+        [validate_transaction_hash(tx_hash)],
+    )
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        raise RuntimeError("Unexpected transaction receipt response")
+    return result
+
+
+def latest_block_number(chain_key: str | None = None) -> int:
+    profile = chain_profile(chain_key)
+    result = nodit_client().rpc(profile, "eth_blockNumber", [])
+    if not isinstance(result, str) or not result.startswith("0x"):
+        raise RuntimeError("Unexpected latest block response")
+    return int(result, 16)
 
 
 def _items(payload: Any) -> list:

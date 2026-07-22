@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
@@ -12,6 +13,7 @@ from app.languages import DEFAULT_LANGUAGE, normalize_language
 
 
 UTC = timezone.utc
+SUMMARY_LOCK_NAMESPACE = 7_220_026
 
 
 def now_utc() -> datetime:
@@ -63,6 +65,7 @@ def initialize_database() -> None:
                     daily_summary_language TEXT NOT NULL DEFAULT 'zh',
                     daily_summary_last_sent_date TEXT NOT NULL DEFAULT '',
                     scheduled_push_last_sent_at TIMESTAMPTZ,
+                    daily_summary_last_period_end_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -110,7 +113,11 @@ def initialize_database() -> None:
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     expires_at TIMESTAMPTZ NOT NULL,
-                    completed_at TIMESTAMPTZ
+                    completed_at TIMESTAMPTZ,
+                    tx_block_number BIGINT,
+                    tx_confirmations INTEGER NOT NULL DEFAULT 0,
+                    verified_at TIMESTAMPTZ,
+                    verification_error TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -123,6 +130,11 @@ def initialize_database() -> None:
                     previous_value TEXT,
                     current_value TEXT,
                     notification_message_id TEXT,
+                    notification_status TEXT NOT NULL DEFAULT 'sent',
+                    notification_error TEXT NOT NULL DEFAULT '',
+                    notification_attempts INTEGER NOT NULL DEFAULT 0,
+                    notification_attempted_at TIMESTAMPTZ,
+                    notification_sent_at TIMESTAMPTZ,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
                 """
@@ -150,6 +162,32 @@ def initialize_database() -> None:
                 )
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    wallet_address TEXT NOT NULL,
+                    nonce_hash TEXT NOT NULL UNIQUE,
+                    message TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    used_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    debox_user_id TEXT NOT NULL,
+                    wallet_address TEXT NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
             _migrate(cur)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_user ON watch_rules (debox_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_watch_rules_enabled ON watch_rules (enabled)")
@@ -159,6 +197,45 @@ def initialize_database() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_events_rule ON alert_events (watch_rule_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON alert_events (created_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_groups_user ON notification_groups (debox_user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges (expires_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (debox_user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions (expires_at)")
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_tx_hash_unique
+                ON orders (LOWER(tx_hash))
+                WHERE tx_hash IS NOT NULL AND tx_hash <> ''
+                """
+            )
+            cur.execute(
+                """
+                WITH ranked_open_orders AS (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY debox_user_id
+                               ORDER BY
+                                   CASE WHEN status = 'confirming' THEN 0 ELSE 1 END,
+                                   created_at DESC,
+                                   id DESC
+                           ) AS position
+                    FROM orders
+                    WHERE status IN ('pending', 'confirming')
+                )
+                UPDATE orders
+                SET status = 'expired',
+                    verification_error = 'superseded during payment migration'
+                FROM ranked_open_orders
+                WHERE orders.id = ranked_open_orders.id
+                  AND ranked_open_orders.position > 1
+                """
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_one_open_per_user
+                ON orders (debox_user_id)
+                WHERE status IN ('pending', 'confirming')
+                """
+            )
 
 
 def _migrate(cur: psycopg.Cursor) -> None:
@@ -181,6 +258,7 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_language TEXT NOT NULL DEFAULT 'zh'",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_last_sent_date TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS scheduled_push_last_sent_at TIMESTAMPTZ",
+        "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS daily_summary_last_period_end_at TIMESTAMPTZ",
         "ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS bot_language TEXT NOT NULL DEFAULT 'zh'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS plan_code TEXT NOT NULL DEFAULT 'standard'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS chain_key TEXT NOT NULL DEFAULT 'bsc'",
@@ -203,6 +281,15 @@ def _migrate(cur: psycopg.Cursor) -> None:
         "ALTER TABLE orders ALTER COLUMN expires_at SET DEFAULT (NOW() + INTERVAL '20 minutes')",
         "ALTER TABLE orders ALTER COLUMN expires_at SET NOT NULL",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tx_block_number BIGINT",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS tx_confirmations INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS verification_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notification_status TEXT NOT NULL DEFAULT 'sent'",
+        "ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notification_error TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notification_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notification_attempted_at TIMESTAMPTZ",
+        "ALTER TABLE alert_events ADD COLUMN IF NOT EXISTS notification_sent_at TIMESTAMPTZ",
     ]
     for statement in statements:
         cur.execute(statement)
@@ -219,6 +306,133 @@ def expire_pending_orders() -> int:
                 """
             )
             return cur.rowcount
+
+
+def cleanup_auth_records() -> None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM auth_challenges
+                WHERE expires_at < NOW() - INTERVAL '1 day'
+                   OR used_at < NOW() - INTERVAL '1 day'
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM auth_sessions
+                WHERE expires_at < NOW() - INTERVAL '30 days'
+                   OR revoked_at < NOW() - INTERVAL '30 days'
+                """
+            )
+
+
+def create_auth_challenge(
+    challenge_id: str,
+    wallet_address: str,
+    nonce_hash: str,
+    message: str,
+    expires_at: datetime,
+) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO auth_challenges (
+                    challenge_id, wallet_address, nonce_hash, message, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (challenge_id, wallet_address, nonce_hash, message, expires_at),
+            )
+            return serialize(cur.fetchone()) or {}
+
+
+def get_active_auth_challenge(challenge_id: str, wallet_address: str) -> dict | None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM auth_challenges
+                WHERE challenge_id = %s
+                  AND LOWER(wallet_address) = LOWER(%s)
+                  AND used_at IS NULL
+                  AND expires_at > NOW()
+                """,
+                (challenge_id, wallet_address),
+            )
+            return serialize(cur.fetchone())
+
+
+def consume_auth_challenge(challenge_id: str, wallet_address: str) -> bool:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE auth_challenges
+                SET used_at = NOW()
+                WHERE challenge_id = %s
+                  AND LOWER(wallet_address) = LOWER(%s)
+                  AND used_at IS NULL
+                  AND expires_at > NOW()
+                """,
+                (challenge_id, wallet_address),
+            )
+            return cur.rowcount == 1
+
+
+def create_auth_session(
+    token_hash: str,
+    debox_user_id: str,
+    wallet_address: str,
+    expires_at: datetime,
+) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO auth_sessions (
+                    token_hash, debox_user_id, wallet_address, expires_at
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (token_hash, debox_user_id, wallet_address, expires_at),
+            )
+            return serialize(cur.fetchone()) or {}
+
+
+def get_active_auth_session(token_hash: str) -> dict | None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE auth_sessions
+                SET last_seen_at = NOW()
+                WHERE token_hash = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > NOW()
+                RETURNING *
+                """,
+                (token_hash,),
+            )
+            return serialize(cur.fetchone())
+
+
+def revoke_auth_session(token_hash: str) -> bool:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = NOW()
+                WHERE token_hash = %s AND revoked_at IS NULL
+                """,
+                (token_hash,),
+            )
+            return cur.rowcount == 1
 
 
 def expire_active_subscriptions() -> int:
@@ -278,58 +492,68 @@ def has_paid_subscription_history(debox_user_id: str) -> bool:
 
 
 def activate_subscription(debox_user_id: str, plan_code: str, days: int) -> dict:
-    start = now_utc()
     with connect() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE subscriptions
-                SET status = 'expired'
-                WHERE debox_user_id = %s AND status = 'active' AND expires_at < NOW()
-                """,
-                (debox_user_id,),
-            )
-            cur.execute(
-                """
-                SELECT *
-                FROM subscriptions
-                WHERE debox_user_id = %s AND status = 'active' AND expires_at > NOW()
-                ORDER BY expires_at DESC
-                LIMIT 1
-                """,
-                (debox_user_id,),
-            )
-            active = cur.fetchone()
-            if active and active["plan_code"] == plan_code:
-                cur.execute(
-                    """
-                    UPDATE subscriptions
-                    SET expires_at = expires_at + (%s || ' days')::interval
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (days, active["id"]),
-                )
-                return serialize(cur.fetchone()) or {}
-            if active and active["plan_code"] == "free" and plan_code != "free":
-                cur.execute("UPDATE subscriptions SET status = 'upgraded' WHERE id = %s", (active["id"],))
-            elif active:
-                raise ValueError("当前订阅未到期，暂时不能切换套餐；同套餐可以提前续费。")
+            return _activate_subscription(cur, debox_user_id, plan_code, days)
 
-            daily_summary = 0 if plan_code == "free" else 1
-            cur.execute(
-                """
-                INSERT INTO subscriptions (
-                    debox_user_id, plan_code, status, starts_at, expires_at,
-                    daily_summary_enabled, daily_summary_chat_type,
-                    daily_summary_chat_id, daily_summary_label
-                )
-                VALUES (%s, %s, 'active', %s, %s, %s, 'private', %s, '私聊摘要')
-                RETURNING *
-                """,
-                (debox_user_id, plan_code, start, start + timedelta(days=days), daily_summary, debox_user_id),
-            )
-            return serialize(cur.fetchone()) or {}
+
+def _activate_subscription(
+    cur: psycopg.Cursor,
+    debox_user_id: str,
+    plan_code: str,
+    days: int,
+) -> dict:
+    start = now_utc()
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (debox_user_id,))
+    cur.execute(
+        """
+        UPDATE subscriptions
+        SET status = 'expired'
+        WHERE debox_user_id = %s AND status = 'active' AND expires_at < NOW()
+        """,
+        (debox_user_id,),
+    )
+    cur.execute(
+        """
+        SELECT *
+        FROM subscriptions
+        WHERE debox_user_id = %s AND status = 'active' AND expires_at > NOW()
+        ORDER BY expires_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (debox_user_id,),
+    )
+    active = cur.fetchone()
+    if active and active["plan_code"] == plan_code:
+        cur.execute(
+            """
+            UPDATE subscriptions
+            SET expires_at = expires_at + (%s || ' days')::interval
+            WHERE id = %s
+            RETURNING *
+            """,
+            (days, active["id"]),
+        )
+        return serialize(cur.fetchone()) or {}
+    if active and active["plan_code"] == "free" and plan_code != "free":
+        cur.execute("UPDATE subscriptions SET status = 'upgraded' WHERE id = %s", (active["id"],))
+    elif active:
+        raise ValueError("当前订阅未到期，暂时不能切换套餐；同套餐可以提前续费。")
+
+    cur.execute(
+        """
+        INSERT INTO subscriptions (
+            debox_user_id, plan_code, status, starts_at, expires_at,
+            daily_summary_enabled, daily_summary_chat_type,
+            daily_summary_chat_id, daily_summary_label
+        )
+        VALUES (%s, %s, 'active', %s, %s, %s, 'private', %s, '私聊摘要')
+        RETURNING *
+        """,
+        (debox_user_id, plan_code, start, start + timedelta(days=days), 0, debox_user_id),
+    )
+    return serialize(cur.fetchone()) or {}
 
 
 def create_order(
@@ -347,30 +571,65 @@ def create_order(
 ) -> dict:
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (debox_user_id,))
             cur.execute(
                 """
-                INSERT INTO orders (
-                    debox_user_id, payer_address, plan_code, chain_key, chain_id,
-                    token_address, token_symbol, token_decimals, total_amount,
-                    recipient_address, expires_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING *
+                SELECT plan_code
+                FROM subscriptions
+                WHERE debox_user_id = %s AND status = 'active' AND expires_at > NOW()
+                ORDER BY expires_at DESC
+                LIMIT 1
                 """,
-                (
-                    debox_user_id,
-                    payer_address,
-                    plan_code,
-                    chain_key,
-                    chain_id,
-                    token_address,
-                    token_symbol,
-                    token_decimals,
-                    total_amount,
-                    recipient_address,
-                    now_utc() + timedelta(minutes=20),
-                ),
+                (debox_user_id,),
             )
+            active = cur.fetchone()
+            if active and active["plan_code"] not in {"free", plan_code}:
+                raise ValueError("当前付费套餐未到期，只能续费同一套餐；到期后才能选择其他套餐。")
+            cur.execute(
+                """
+                SELECT 1 FROM orders
+                WHERE debox_user_id = %s AND status = 'confirming'
+                LIMIT 1
+                """,
+                (debox_user_id,),
+            )
+            if cur.fetchone():
+                raise ValueError("已有一笔支付正在链上确认，请等待确认完成后再操作。")
+            cur.execute(
+                """
+                UPDATE orders
+                SET status = 'expired', verification_error = 'replaced by a newer payment order'
+                WHERE debox_user_id = %s AND status = 'pending'
+                """,
+                (debox_user_id,),
+            )
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO orders (
+                        debox_user_id, payer_address, plan_code, chain_key, chain_id,
+                        token_address, token_symbol, token_decimals, total_amount,
+                        recipient_address, expires_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        debox_user_id,
+                        payer_address,
+                        plan_code,
+                        chain_key,
+                        chain_id,
+                        token_address,
+                        token_symbol,
+                        token_decimals,
+                        total_amount,
+                        recipient_address,
+                        now_utc() + timedelta(minutes=20),
+                    ),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                raise ValueError("已有一笔支付正在处理，请勿重复提交。") from exc
             return serialize(cur.fetchone()) or {}
 
 
@@ -381,22 +640,146 @@ def get_order(order_id: int) -> dict | None:
             return serialize(cur.fetchone())
 
 
-def complete_order(order_id: int, tx_hash: str) -> dict:
+def claim_order_transaction(
+    order_id: int,
+    debox_user_id: str,
+    payer_address: str,
+    tx_hash: str,
+) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    UPDATE orders
+                    SET status = 'confirming',
+                        tx_hash = %s,
+                        verified_at = NOW(),
+                        verification_error = ''
+                    WHERE id = %s
+                      AND debox_user_id = %s
+                      AND LOWER(payer_address) = LOWER(%s)
+                      AND (
+                          (status = 'pending' AND expires_at > NOW())
+                          OR status = 'confirming'
+                      )
+                      AND (tx_hash IS NULL OR tx_hash = '' OR LOWER(tx_hash) = LOWER(%s))
+                    RETURNING *
+                    """,
+                    (tx_hash, order_id, debox_user_id, payer_address, tx_hash),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                raise ValueError("这笔链上交易已经用于其他订单。") from exc
+            row = cur.fetchone()
+            if not row:
+                cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+                existing = cur.fetchone()
+                if existing and existing["status"] == "paid" and str(existing.get("tx_hash") or "").lower() == tx_hash.lower():
+                    return serialize(existing) or {}
+                raise ValueError("订单不存在、已失效，或不属于当前登录钱包。")
+            return serialize(row) or {}
+
+
+def update_order_verification(
+    order_id: int,
+    *,
+    status: str,
+    block_number: int | None = None,
+    confirmations: int = 0,
+    error: str = "",
+) -> dict:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE orders
-                SET status = 'paid', tx_hash = %s, completed_at = NOW()
-                WHERE id = %s AND status IN ('pending', 'preview')
+                SET status = %s,
+                    tx_block_number = %s,
+                    tx_confirmations = %s,
+                    verified_at = NOW(),
+                    verification_error = %s
+                WHERE id = %s AND status <> 'paid'
                 RETURNING *
                 """,
-                (tx_hash, order_id),
+                (status, block_number, max(0, confirmations), error[:500], order_id),
             )
             row = cur.fetchone()
             if not row:
-                raise ValueError("订单不存在或已经处理。")
+                cur.execute("SELECT * FROM orders WHERE id = %s", (order_id,))
+                row = cur.fetchone()
+            if not row:
+                raise ValueError("订单不存在。")
             return serialize(row) or {}
+
+
+def list_confirming_orders(limit: int = 50) -> list[dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM orders
+                WHERE status = 'confirming' AND tx_hash IS NOT NULL AND tx_hash <> ''
+                ORDER BY verified_at ASC NULLS FIRST, id ASC
+                LIMIT %s
+                """,
+                (max(1, min(int(limit), 200)),),
+            )
+            return serialize_many(cur.fetchall())
+
+
+def finalize_paid_order(
+    order_id: int,
+    tx_hash: str,
+    block_number: int,
+    confirmations: int,
+    subscription_days: int,
+) -> tuple[dict, dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE id = %s FOR UPDATE", (order_id,))
+            order = cur.fetchone()
+            if not order:
+                raise ValueError("订单不存在。")
+            if order["status"] == "paid":
+                if str(order.get("tx_hash") or "").lower() != tx_hash.lower():
+                    raise ValueError("订单已由其他交易完成。")
+                cur.execute(
+                    """
+                    SELECT * FROM subscriptions
+                    WHERE debox_user_id = %s AND status = 'active' AND expires_at > NOW()
+                    ORDER BY expires_at DESC LIMIT 1
+                    """,
+                    (order["debox_user_id"],),
+                )
+                return serialize(order) or {}, serialize(cur.fetchone()) or {}
+            if order["status"] != "confirming" or str(order.get("tx_hash") or "").lower() != tx_hash.lower():
+                raise ValueError("订单不在可完成状态。")
+
+            subscription = _activate_subscription(
+                cur,
+                order["debox_user_id"],
+                order["plan_code"],
+                subscription_days,
+            )
+            cur.execute(
+                """
+                UPDATE orders
+                SET status = 'paid',
+                    tx_block_number = %s,
+                    tx_confirmations = %s,
+                    verified_at = NOW(),
+                    verification_error = '',
+                    completed_at = NOW()
+                WHERE id = %s AND status = 'confirming'
+                RETURNING *
+                """,
+                (block_number, confirmations, order_id),
+            )
+            paid_order = cur.fetchone()
+            if not paid_order:
+                raise ValueError("订单已被其他请求处理。")
+            return serialize(paid_order) or {}, subscription
 
 
 def create_watch_rule(
@@ -769,36 +1152,145 @@ def create_alert_event(
     previous_value: str | None,
     current_value: str | None,
     notification_message_id: str | None = None,
+    notification_status: str = "pending",
 ) -> dict:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO alert_events (
-                    watch_rule_id, event_type, previous_value, current_value, notification_message_id
+                    watch_rule_id, event_type, previous_value, current_value,
+                    notification_message_id, notification_status
                 )
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (watch_rule_id, event_type, previous_value, current_value, notification_message_id),
+                (
+                    watch_rule_id,
+                    event_type,
+                    previous_value,
+                    current_value,
+                    notification_message_id,
+                    notification_status,
+                ),
             )
             return serialize(cur.fetchone()) or {}
 
 
-def list_recent_alert_events(debox_user_id: str, hours: int = 24, limit: int = 50) -> list[dict]:
+def update_alert_event_notification(
+    event_id: int,
+    *,
+    status: str,
+    message_id: str | None = None,
+    error: str = "",
+) -> dict:
+    if status not in {"sent", "failed"}:
+        raise ValueError("通知状态无效。")
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT ae.*, wr.chain_key, wr.wallet_address, wr.token_address, wr.rule_type, wr.target_address
+                UPDATE alert_events
+                SET notification_message_id = %s,
+                    notification_status = %s,
+                    notification_error = %s,
+                    notification_attempts = notification_attempts + 1,
+                    notification_attempted_at = NOW(),
+                    notification_sent_at = CASE WHEN %s = 'sent' THEN NOW() ELSE NULL END
+                WHERE id = %s
+                RETURNING *
+                """,
+                (message_id, status, error[:500], status, event_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("提醒事件不存在。")
+            return serialize(row) or {}
+
+
+def daily_summary_statistics(
+    debox_user_id: str,
+    period_start: datetime,
+    period_end: datetime,
+) -> dict:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH active_rules AS MATERIALIZED (
+                    SELECT id, wallet_address, rule_type
+                    FROM watch_rules
+                    WHERE debox_user_id = %s
+                      AND enabled = 1
+                      AND run_status = 'active'
+                ),
+                rule_stats AS (
+                    SELECT
+                        COUNT(*) AS rule_count,
+                        COUNT(DISTINCT LOWER(wallet_address)) AS wallet_count,
+                        COUNT(*) FILTER (
+                            WHERE rule_type IN (
+                                'balance_change', 'incoming', 'outgoing', 'balance_threshold'
+                            )
+                        ) AS asset_rule_count,
+                        COUNT(*) FILTER (WHERE rule_type = 'approval_change') AS approval_rule_count,
+                        COUNT(*) FILTER (WHERE rule_type = 'address_interaction') AS interaction_rule_count
+                    FROM active_rules
+                ),
+                event_stats AS (
+                    SELECT
+                        COUNT(*) AS event_count,
+                        COUNT(*) FILTER (
+                            WHERE ae.event_type IN (
+                                'balance_change', 'incoming', 'outgoing', 'balance_threshold'
+                            )
+                        ) AS asset_event_count,
+                        COUNT(*) FILTER (WHERE ae.event_type = 'approval_change') AS approval_event_count,
+                        COUNT(*) FILTER (WHERE ae.event_type = 'address_interaction') AS interaction_event_count,
+                        COUNT(*) FILTER (WHERE ae.notification_status = 'failed') AS failed_notification_count
+                    FROM alert_events ae
+                    JOIN active_rules ar ON ar.id = ae.watch_rule_id
+                    WHERE ae.created_at >= %s
+                      AND ae.created_at < %s
+                )
+                SELECT *
+                FROM rule_stats
+                CROSS JOIN event_stats
+                """,
+                (debox_user_id, period_start, period_end),
+            )
+            row = cur.fetchone() or {}
+            return {key: int(value or 0) for key, value in row.items()}
+
+
+def list_summary_recent_events(
+    debox_user_id: str,
+    period_start: datetime,
+    period_end: datetime,
+    limit: int = 5,
+) -> list[dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ae.*, wr.chain_key, wr.wallet_address, wr.token_address,
+                       wr.rule_type, wr.target_address
                 FROM alert_events ae
                 JOIN watch_rules wr ON wr.id = ae.watch_rule_id
                 WHERE wr.debox_user_id = %s
-                  AND ae.created_at >= NOW() - (%s || ' hours')::interval
-                ORDER BY ae.created_at DESC
+                  AND wr.enabled = 1
+                  AND wr.run_status = 'active'
+                  AND ae.created_at >= %s
+                  AND ae.created_at < %s
+                ORDER BY ae.created_at DESC, ae.id DESC
                 LIMIT %s
                 """,
-                (debox_user_id, hours, max(1, min(int(limit), 500))),
+                (
+                    debox_user_id,
+                    period_start,
+                    period_end,
+                    max(1, min(int(limit), 20)),
+                ),
             )
             return serialize_many(cur.fetchall())
 
@@ -860,9 +1352,42 @@ def count_notification_groups(debox_user_id: str) -> int:
             return int(cur.fetchone()["count"])
 
 
-def delete_notification_group(group_id: int, debox_user_id: str) -> bool:
+def delete_notification_group(group_id: int, debox_user_id: str) -> dict:
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM notification_groups
+                WHERE id = %s AND debox_user_id = %s
+                FOR UPDATE
+                """,
+                (group_id, debox_user_id),
+            )
+            group = cur.fetchone()
+            if group is None:
+                raise ValueError("群通知不存在或已经解绑。")
+
+            cur.execute(
+                """
+                SELECT id
+                FROM subscriptions
+                WHERE debox_user_id = %s
+                  AND status = 'active'
+                  AND expires_at > NOW()
+                  AND daily_summary_chat_type = 'group'
+                  AND daily_summary_chat_id = %s
+                ORDER BY id ASC
+                """,
+                (debox_user_id, group["gid"]),
+            )
+            subscription_ids = [int(row["id"]) for row in cur.fetchall()]
+            for subscription_id in subscription_ids:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s, %s)",
+                    (SUMMARY_LOCK_NAMESPACE, subscription_id),
+                )
+
             cur.execute(
                 """
                 UPDATE notification_groups
@@ -871,7 +1396,39 @@ def delete_notification_group(group_id: int, debox_user_id: str) -> bool:
                 """,
                 (group_id, debox_user_id),
             )
-            return cur.rowcount > 0
+            fallbacks = []
+            if subscription_ids:
+                cur.execute(
+                    """
+                    UPDATE subscriptions
+                    SET daily_summary_chat_type = 'private',
+                        daily_summary_chat_id = %s
+                    WHERE id = ANY(%s)
+                    RETURNING *
+                    """,
+                    (debox_user_id, subscription_ids),
+                )
+                fallbacks = cur.fetchall()
+            return {
+                "group": serialize(group) or {},
+                "summary_fallbacks": serialize_many(fallbacks),
+            }
+
+
+def disable_daily_summaries(subscription_ids: list[int], debox_user_id: str) -> int:
+    if not subscription_ids:
+        return 0
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE subscriptions
+                SET daily_summary_enabled = 0
+                WHERE debox_user_id = %s AND id = ANY(%s)
+                """,
+                (debox_user_id, subscription_ids),
+            )
+            return cur.rowcount
 
 
 def update_daily_summary_settings(
@@ -918,7 +1475,7 @@ def update_daily_summary_settings(
             return serialize(row) or {}
 
 
-def list_due_scheduled_subscriptions(limit: int = 100) -> list[dict]:
+def list_due_scheduled_subscriptions(after_id: int = 0, limit: int = 100) -> list[dict]:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -928,23 +1485,72 @@ def list_due_scheduled_subscriptions(limit: int = 100) -> list[dict]:
                 WHERE status = 'active'
                   AND expires_at > NOW()
                   AND daily_summary_enabled = 1
-                ORDER BY daily_summary_time ASC
+                  AND id > %s
+                ORDER BY id ASC
                 LIMIT %s
                 """,
-                (max(1, min(int(limit), 1000)),),
+                (max(0, int(after_id)), max(1, min(int(limit), 1000))),
             )
             return serialize_many(cur.fetchall())
 
 
-def mark_scheduled_push_sent(subscription_id: int, sent_date: str) -> None:
+def get_scheduled_subscription(subscription_id: int) -> dict | None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM subscriptions
+                WHERE id = %s
+                  AND status = 'active'
+                  AND expires_at > NOW()
+                  AND daily_summary_enabled = 1
+                LIMIT 1
+                """,
+                (subscription_id,),
+            )
+            return serialize(cur.fetchone())
+
+
+@contextmanager
+def scheduled_summary_lock(subscription_id: int) -> Iterator[bool]:
+    conn = connect()
+    acquired = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s, %s) AS acquired",
+                (SUMMARY_LOCK_NAMESPACE, subscription_id),
+            )
+            acquired = bool(cur.fetchone()["acquired"])
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s, %s)",
+                        (SUMMARY_LOCK_NAMESPACE, subscription_id),
+                    )
+            except Exception:
+                pass
+        conn.close()
+
+
+def mark_scheduled_push_sent(
+    subscription_id: int,
+    sent_date: str,
+    period_end: datetime,
+) -> None:
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE subscriptions
                 SET daily_summary_last_sent_date = %s,
-                    scheduled_push_last_sent_at = NOW()
+                    scheduled_push_last_sent_at = NOW(),
+                    daily_summary_last_period_end_at = %s
                 WHERE id = %s
                 """,
-                (sent_date, subscription_id),
+                (sent_date, period_end, subscription_id),
             )

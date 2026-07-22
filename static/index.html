@@ -42,6 +42,8 @@
         </div>
         <div id="plansGrid" class="plans"></div>
         <p class="refund-note" data-i18n="refundNotice">订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。</p>
+        <p class="refund-note" data-i18n="planSwitchNotice">付费套餐未到期时仅支持续费同一套餐，到期后可选择其他套餐。</p>
+        <p class="refund-note" data-i18n="paymentNotice">使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。</p>
         <div class="action-line">
           <button id="payBtn" class="primary" type="button" data-i18n="payRenew">支付 / 续费</button>
           <span id="paymentStatus" class="muted"></span>
@@ -73,6 +75,7 @@
           <label data-i18n-label="ruleType">
             规则类型
             <select id="ruleTypeSelect"></select>
+            <small id="ruleDescription" class="field-note"></small>
           </label>
           <label data-i18n-label="tokenContract">
             代币合约
@@ -138,6 +141,7 @@
           <span id="summaryCapability" class="badge muted" data-i18n="notConnected">未连接</span>
         </div>
         <form id="summaryForm" class="form-grid summary-grid">
+          <div class="notice muted" data-i18n="summaryNotice">每期统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。</div>
           <label class="switch-line" data-i18n-label="enableSummary">
             <input id="summaryEnabledInput" type="checkbox" />
             开启每日摘要

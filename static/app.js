@@ -47,6 +47,10 @@ function localizedRuleLabel(code) {
   return I18N.rules[state.uiLanguage]?.[code] || code;
 }
 
+function localizedRuleDescription(code) {
+  return I18N.ruleDescriptions[state.uiLanguage]?.[code] || "";
+}
+
 function localizedApiError(message) {
   const value = String(message || "").trim();
   if (state.uiLanguage === "zh" || !/[\u3400-\u9fff]/u.test(value)) return value || t("requestFailed");
@@ -170,19 +174,51 @@ function toast(message) {
 }
 
 async function api(path, options = {}) {
+  const { headers = {}, ...requestOptions } = options;
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    credentials: "same-origin",
+    ...requestOptions,
+    headers: { "Content-Type": "application/json", ...headers },
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(localizedApiError(data.detail || data.message || t("requestFailed")));
+    const message = response.status === 401
+      ? t("sessionExpired")
+      : localizedApiError(data.detail || data.message || t("requestFailed"));
+    const error = new Error(message);
+    error.status = response.status;
+    if (response.status === 401 && path !== "/api/auth/session") {
+      resetConnectionState();
+    }
+    throw error;
   }
   return data;
 }
 
 function walletProvider() {
   return window.deboxWallet || window.ethereum || null;
+}
+
+function utf8ToHex(value) {
+  return `0x${[...new TextEncoder().encode(value)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+async function signWalletMessage(provider, message, walletAddress) {
+  const encodedMessage = utf8ToHex(message);
+  try {
+    return await provider.request({
+      method: "personal_sign",
+      params: [encodedMessage, walletAddress],
+    });
+  } catch (error) {
+    if (error?.code === 4001) throw error;
+    return provider.request({
+      method: "personal_sign",
+      params: [walletAddress, encodedMessage],
+    });
+  }
 }
 
 function shortAddress(address) {
@@ -367,6 +403,7 @@ function resetConnectionState() {
   renderBalanceInfo();
   $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
+  renderPlans();
   updateConnectionButton();
 }
 
@@ -397,13 +434,18 @@ function renderRuleTypes() {
 }
 
 function renderPlans() {
+  const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code)
+    ? currentPlan().code
+    : "";
+  $("freeTrialBtn").disabled = Boolean(currentPaidPlan);
   $("plansGrid").innerHTML = state.plans
     .map((plan) => {
       const active = plan.code === state.selectedPlan ? " active" : "";
+      const locked = Boolean(currentPaidPlan && plan.code !== currentPaidPlan);
       const text = localizedPlan(plan);
       const price = plan.price === "0" ? t("freePrice") : `${plan.price} ${plan.asset || "USDT"}`;
       return `
-        <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}">
+        <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}>
           <span>${escapeHtml(text.name)}</span>
           <strong>${escapeHtml(price)}</strong>
           <small>${escapeHtml(text.description)}</small>
@@ -637,6 +679,7 @@ function updateRuleFields() {
   $("targetAddressWrap").hidden = !needsTarget;
   $("targetLabelWrap").hidden = !needsTarget;
   $("tokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
+  $("ruleDescription").textContent = localizedRuleDescription(type);
 }
 
 function renderPaymentStatus() {
@@ -707,36 +750,57 @@ async function connectWallet() {
   }
   const accounts = await provider.request({ method: "eth_requestAccounts" });
   state.walletAddress = accounts?.[0] || "";
+  if (!state.walletAddress) {
+    throw new Error(t("walletAccountMissing"));
+  }
   $("walletAddressInput").value = state.walletAddress;
 
-  let profile = null;
-  try {
-    profile = await provider.request({ method: "debox_getUserInfo" });
-  } catch (_) {
-    profile = null;
-  }
-  if (!profile && state.walletAddress) {
-    try {
-      profile = await api(`/api/debox/user?wallet_address=${encodeURIComponent(state.walletAddress)}`);
-    } catch (_) {
-      profile = null;
-    }
-  }
-  const deboxUserId = deboxUserIdFromProfile(profile);
-  if (!deboxUserId) {
-    resetConnectionState();
-    showIdentityModal();
-    return;
-  }
-  state.profile = profile;
-  state.deboxUserId = deboxUserId;
+  const challenge = await api("/api/auth/challenge", {
+    method: "POST",
+    body: JSON.stringify({ wallet_address: state.walletAddress }),
+  });
+  toast(t("signingIdentity"));
+  const signature = await signWalletMessage(provider, challenge.message, state.walletAddress);
+  const authenticated = await api("/api/auth/verify", {
+    method: "POST",
+    body: JSON.stringify({
+      challenge_id: challenge.challenge_id,
+      wallet_address: state.walletAddress,
+      signature,
+    }),
+  });
+  state.walletAddress = authenticated.wallet_address;
+  state.profile = authenticated.profile || { user_id: authenticated.debox_user_id };
+  state.deboxUserId = authenticated.debox_user_id;
+  $("walletAddressInput").value = state.walletAddress;
   renderProfile();
   updateConnectionButton();
   await refreshAccount();
   toast(t("walletConnected"));
 }
 
-function disconnectWallet() {
+async function restoreSession() {
+  try {
+    const authenticated = await api("/api/auth/session");
+    state.walletAddress = authenticated.wallet_address;
+    state.deboxUserId = authenticated.debox_user_id;
+    state.profile = authenticated.profile || { user_id: authenticated.debox_user_id };
+    $("walletAddressInput").value = state.walletAddress;
+    renderProfile();
+    updateConnectionButton();
+    await refreshAccount();
+    return true;
+  } catch (error) {
+    resetConnectionState();
+    if (error.status && error.status !== 401) {
+      toast(localizedApiError(error.message));
+    }
+    return false;
+  }
+}
+
+async function disconnectWallet() {
+  await api("/api/auth/logout", { method: "POST" });
   resetConnectionState();
   toast(t("walletDisconnected"));
 }
@@ -750,17 +814,35 @@ async function toggleWalletConnection() {
     await new Promise((resolve) => setTimeout(resolve, 140));
   }
   if (state.deboxUserId) {
-    disconnectWallet();
+    try {
+      await disconnectWallet();
+    } catch (error) {
+      toast(localizedApiError(error.message));
+    }
     return;
   }
-  await connectWallet();
+  try {
+    await connectWallet();
+  } catch (error) {
+    resetConnectionState();
+    if (error.status === 403) {
+      showIdentityModal();
+      return;
+    }
+    toast(error?.code === 4001 ? t("signatureCancelled") : localizedApiError(error.message));
+  }
 }
 
 async function refreshAccount() {
   if (!state.deboxUserId) return;
-  const current = await api(`/api/subscription/current?debox_user_id=${encodeURIComponent(state.deboxUserId)}`);
+  const current = await api("/api/subscription/current");
   state.entitlement = current;
   state.groups = current.groups || [];
+  const activePlanCode = current.plan?.code;
+  if (["standard", "professional"].includes(activePlanCode)) {
+    state.selectedPlan = activePlanCode;
+  }
+  renderPlans();
   renderSubscription();
   renderGroups();
   renderRules();
@@ -785,7 +867,6 @@ async function enableFreePlan() {
   }
   await api("/api/subscription/free-trial", {
     method: "POST",
-    body: JSON.stringify({ debox_user_id: state.deboxUserId }),
   });
   await refreshAccount();
   toast(t("freeEnabled"));
@@ -803,31 +884,80 @@ async function payOrRenew() {
   if (!confirm(t("refundConfirm"))) {
     return;
   }
-  const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
-  if (config.mode !== "live") {
-    toast(t("previewNoPayment"));
-    return;
+  const button = $("payBtn");
+  button.disabled = true;
+  try {
+    const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+    if (config.mode !== "live") {
+      toast(t("previewNoPayment"));
+      return;
+    }
+    if (!config.ready) {
+      throw new Error(t("paymentMissing", { items: config.missing.join(", ") }));
+    }
+    const provider = walletProvider();
+    if (!provider?.request) {
+      throw new Error(t("browserNoWallet"));
+    }
+    const accounts = await provider.request({ method: "eth_accounts" });
+    if (!accounts?.[0] || accounts[0].toLowerCase() !== state.walletAddress.toLowerCase()) {
+      throw new Error(t("paymentWalletMismatch"));
+    }
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: config.chain_id_hex }] });
+    const prepared = await api("/api/payment/prepare", {
+      method: "POST",
+      body: JSON.stringify({ plan_code: state.selectedPlan }),
+    });
+    const txHash = await provider.request({
+      method: "eth_sendTransaction",
+      params: [prepared.transactions[0].request],
+    });
+    const result = await waitForPaymentConfirmation(prepared.order.id, txHash);
+    if (result.payment_status === "paid") {
+      await refreshAccount();
+      toast(t("subscriptionActive"));
+    }
+  } catch (error) {
+    toast(error?.code === 4001 ? t("paymentCancelled") : localizedApiError(error.message));
+  } finally {
+    button.disabled = false;
   }
-  const provider = walletProvider();
-  await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: config.chain_id_hex }] });
-  const prepared = await api("/api/payment/prepare", {
-    method: "POST",
-    body: JSON.stringify({
-      payer_address: state.walletAddress,
-      debox_user_id: state.deboxUserId,
-      plan_code: state.selectedPlan,
-    }),
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForPaymentConfirmation(orderId, txHash) {
+  let lastConfirmations = 0;
+  const maxAttempts = 45;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const result = await api("/api/payment/verify", {
+        method: "POST",
+        body: JSON.stringify({ order_id: orderId, tx_hash: txHash }),
+      });
+      if (result.payment_status === "paid") return result;
+      if (result.payment_status === "failed") {
+        const error = new Error(result.error || t("paymentVerificationFailed"));
+        error.status = 400;
+        throw error;
+      }
+      lastConfirmations = Number(result.confirmations || 0);
+      $("paymentStatus").textContent = t("paymentConfirming", {
+        current: lastConfirmations,
+        required: result.required_confirmations || 3,
+      });
+    } catch (error) {
+      if (error.status && error.status < 500) throw error;
+    }
+    await wait(4000);
+  }
+  $("paymentStatus").textContent = t("paymentContinuing", {
+    current: lastConfirmations,
+    required: 3,
   });
-  const txHash = await provider.request({
-    method: "eth_sendTransaction",
-    params: [prepared.transactions[0].request],
-  });
-  await api("/api/payment/verify", {
-    method: "POST",
-    body: JSON.stringify({ order_id: prepared.order.id, tx_hash: txHash }),
-  });
-  await refreshAccount();
-  toast(t("subscriptionActive"));
+  return { payment_status: "confirming" };
 }
 
 async function lookupToken() {
@@ -888,7 +1018,6 @@ async function createRule(event) {
       target_label: $("targetLabelInput").value.trim(),
       rule_type: $("ruleTypeSelect").value,
       threshold: $("thresholdInput").value || "0",
-      debox_user_id: state.deboxUserId,
       notification_chat_type: targetType,
       notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
       notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
@@ -900,7 +1029,7 @@ async function createRule(event) {
 }
 
 async function deleteRule(ruleId) {
-  await api(`/api/watch-rules/${ruleId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
+  await api(`/api/watch-rules/${ruleId}`, { method: "DELETE" });
   await refreshAccount();
   toast(t("ruleDeleted"));
 }
@@ -912,7 +1041,6 @@ async function restoreRule(ruleId) {
   }
   state.entitlement = await api(`/api/watch-rules/${ruleId}/restore`, {
     method: "POST",
-    body: JSON.stringify({ debox_user_id: state.deboxUserId }),
   });
   state.groups = state.entitlement.groups || [];
   renderSubscription();
@@ -933,7 +1061,6 @@ async function updateRuleLanguage(ruleId, select) {
     const result = await api(`/api/watch-rules/${ruleId}/notification-language`, {
       method: "PATCH",
       body: JSON.stringify({
-        debox_user_id: state.deboxUserId,
         language: select.value,
       }),
     });
@@ -955,7 +1082,7 @@ async function deletePausedRules() {
   if (!confirm(t("deletePausedConfirm"))) {
     return;
   }
-  const result = await api(`/api/watch-rules/paused?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, {
+  const result = await api("/api/watch-rules/paused", {
     method: "DELETE",
   });
   state.entitlement = result.entitlement;
@@ -975,7 +1102,6 @@ async function saveSummary(event) {
   await api("/api/subscription/summary-settings", {
     method: "POST",
     body: JSON.stringify({
-      debox_user_id: state.deboxUserId,
       enabled: $("summaryEnabledInput").checked,
       push_time: $("summaryTimeInput").value || "20:00",
       timezone: normalizeSummaryTimezone($("summaryTimezoneInput").value),
@@ -1004,8 +1130,6 @@ async function addGroup(event) {
   await api("/api/notification-groups", {
     method: "POST",
     body: JSON.stringify({
-      debox_user_id: state.deboxUserId,
-      wallet_address: state.walletAddress,
       gid: groupLink,
       label: $("groupLabelInput").value.trim(),
     }),
@@ -1017,9 +1141,15 @@ async function addGroup(event) {
 }
 
 async function deleteGroup(groupId) {
-  await api(`/api/notification-groups/${groupId}?debox_user_id=${encodeURIComponent(state.deboxUserId)}`, { method: "DELETE" });
+  const result = await api(`/api/notification-groups/${groupId}`, { method: "DELETE" });
   await refreshAccount();
-  toast(t("groupDeleted"));
+  if (result.summary_disabled) {
+    toast(t("groupDeletedSummaryDisabled"));
+  } else if (result.summary_target_changed) {
+    toast(t("groupDeletedSummaryPrivate"));
+  } else {
+    toast(t("groupDeleted"));
+  }
 }
 
 function bindEvents() {
@@ -1072,7 +1202,9 @@ async function boot() {
   updateSummaryTargetVisibility();
   updateConnectionButton();
   await loadBootData();
-  await loadPaymentConfig();
+  if (!(await restoreSession())) {
+    await loadPaymentConfig();
+  }
 }
 
 boot().catch((error) => {

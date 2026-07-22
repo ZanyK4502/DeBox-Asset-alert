@@ -5,13 +5,23 @@ import hmac
 import re
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
 from app.bot_service import handle_webhook_payload, public_app_url, record_webhook_event, write_status
+from app.auth_service import (
+    AUTH_COOKIE_NAME,
+    SESSION_TTL,
+    AuthenticationError,
+    DeBoxIdentityError,
+    authenticated_session,
+    create_wallet_challenge,
+    revoke_session,
+    verify_wallet_challenge,
+)
 from app.chain_service import (
     balance,
     chain_profile,
@@ -23,6 +33,7 @@ from app.config import ROOT_DIR, settings
 from app.db import (
     create_notification_group,
     create_watch_rule,
+    disable_daily_summaries,
     delete_paused_watch_rules,
     delete_notification_group,
     delete_watch_rule,
@@ -34,7 +45,9 @@ from app.db import (
     update_daily_summary_settings,
     update_watch_rule_notification_language,
 )
-from app.languages import require_language
+from app.debox_service import send_notification
+from app.languages import normalize_language, require_language
+from app.monitor_service import check_rule
 from app.openapi_service import group_info, is_group_joined, token_info, user_info
 from app.payment_service import payment_configuration, prepare_payment, verify_payment
 from app.plans import ALL_RULE_TYPES, public_plans, public_rule_types
@@ -86,7 +99,6 @@ class WatchRuleInput(BaseModel):
     target_label: str = ""
     rule_type: str = "balance_change"
     threshold: str = "0"
-    debox_user_id: str
     notification_chat_id: str = ""
     notification_chat_type: str = "private"
     notification_label: str = ""
@@ -94,15 +106,11 @@ class WatchRuleInput(BaseModel):
 
 
 class GroupInput(BaseModel):
-    debox_user_id: str
     gid: str
     label: str = ""
-    wallet_address: str = ""
 
 
 class PreparePaymentInput(BaseModel):
-    payer_address: str
-    debox_user_id: str
     plan_code: str = "standard"
 
 
@@ -111,25 +119,11 @@ class VerifyPaymentInput(BaseModel):
     tx_hash: str
 
 
-class FreeTrialInput(BaseModel):
-    debox_user_id: str
-
-
-class FreeWatchRuleInput(BaseModel):
-    debox_user_id: str
-
-
-class RestoreWatchRuleInput(BaseModel):
-    debox_user_id: str
-
-
 class RuleLanguageInput(BaseModel):
-    debox_user_id: str
     language: str
 
 
 class SummarySettingsInput(BaseModel):
-    debox_user_id: str
     enabled: bool = True
     push_time: str = "20:00"
     timezone: str = "Asia/Shanghai"
@@ -137,6 +131,47 @@ class SummarySettingsInput(BaseModel):
     chat_id: str = ""
     label: str = ""
     language: str = "zh"
+
+
+class AuthChallengeInput(BaseModel):
+    wallet_address: str
+
+
+class AuthVerifyInput(BaseModel):
+    challenge_id: str
+    wallet_address: str
+    signature: str
+
+
+def require_authenticated_session(request: Request) -> dict:
+    session = authenticated_session(request.cookies.get(AUTH_COOKIE_NAME, ""))
+    if session is None:
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新连接钱包。")
+    return session
+
+
+def secure_auth_cookie(request: Request) -> bool:
+    forwarded_protocol = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return (
+        forwarded_protocol == "https"
+        or request.url.scheme == "https"
+        or settings.app_env.lower() == "production"
+        or settings.public_app_url.lower().startswith("https://")
+    )
+
+
+def authenticated_user_payload(session: dict) -> dict:
+    user_id = str(session["debox_user_id"])
+    try:
+        profile = user_info(user_id=user_id)
+    except Exception:
+        profile = {"user_id": user_id}
+    return {
+        "debox_user_id": user_id,
+        "wallet_address": session["wallet_address"],
+        "expires_at": session["expires_at"],
+        "profile": profile,
+    }
 
 
 @app.on_event("startup")
@@ -214,25 +249,79 @@ def get_chains() -> list[dict]:
     return supported_chains()
 
 
+@app.post("/api/auth/challenge")
+def post_auth_challenge(payload: AuthChallengeInput, request: Request) -> dict:
+    try:
+        return create_wallet_challenge(payload.wallet_address, request.url.netloc)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/verify")
+def post_auth_verify(payload: AuthVerifyInput, request: Request, response: Response) -> dict:
+    try:
+        result = verify_wallet_challenge(
+            payload.challenge_id,
+            payload.wallet_address,
+            payload.signature,
+        )
+    except DeBoxIdentityError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session_token = result.pop("session_token")
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=session_token,
+        max_age=int(SESSION_TTL.total_seconds()),
+        httponly=True,
+        secure=secure_auth_cookie(request),
+        samesite="lax",
+        path="/",
+    )
+    return result
+
+
+@app.get("/api/auth/session")
+def get_auth_session(identity: dict = Depends(require_authenticated_session)) -> dict:
+    return authenticated_user_payload(identity)
+
+
+@app.post("/api/auth/logout")
+def post_auth_logout(request: Request, response: Response) -> dict:
+    revoke_session(request.cookies.get(AUTH_COOKIE_NAME, ""))
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path="/",
+        secure=secure_auth_cookie(request),
+        httponly=True,
+        samesite="lax",
+    )
+    return {"ok": True}
+
+
 @app.get("/api/subscription/current")
-def current_subscription(debox_user_id: str) -> dict:
-    if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
-    return entitlement(debox_user_id)
+def current_subscription(identity: dict = Depends(require_authenticated_session)) -> dict:
+    return entitlement(identity["debox_user_id"])
 
 
 @app.post("/api/subscription/free-trial")
-def enable_free_plan_endpoint(payload: FreeTrialInput) -> dict:
-    enable_free_plan(payload.debox_user_id)
-    return entitlement(payload.debox_user_id, create_trial=False)
+def enable_free_plan_endpoint(identity: dict = Depends(require_authenticated_session)) -> dict:
+    user_id = identity["debox_user_id"]
+    enable_free_plan(user_id)
+    return entitlement(user_id, create_trial=False)
 
 
 @app.post("/api/subscription/summary-settings")
-def save_summary_settings(payload: SummarySettingsInput) -> dict:
+def save_summary_settings(
+    payload: SummarySettingsInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
     try:
-        user_id = payload.debox_user_id.strip()
-        if not user_id:
-            raise ValueError("请先连接 DeBox 钱包。")
+        user_id = identity["debox_user_id"]
         chat_type = payload.chat_type.strip().lower()
         if chat_type not in {"private", "group"}:
             raise ValueError("每日摘要推送对象只能是私聊或群聊。")
@@ -274,24 +363,23 @@ def validate_summary_timezone(value: str) -> str:
 
 
 @app.get("/api/watch-rules")
-def get_watch_rules(debox_user_id: str) -> dict:
-    if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
-    return {"rules": list_user_watch_rules(debox_user_id)}
+def get_watch_rules(identity: dict = Depends(require_authenticated_session)) -> dict:
+    return {"rules": list_user_watch_rules(identity["debox_user_id"])}
 
 
 @app.post("/api/watch-rules")
-def post_watch_rule(payload: WatchRuleInput) -> dict:
+def post_watch_rule(
+    payload: WatchRuleInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
     try:
         validate_rule_input(payload)
-        user_id = payload.debox_user_id.strip()
-        if not user_id:
-            raise ValueError("请先连接 DeBox 钱包。")
+        user_id = identity["debox_user_id"]
 
         profile = chain_profile(payload.chain_key)
         wallet_address = payload.wallet_address.strip()
         plan = require_rule_creation(user_id, payload.notification_chat_type.strip().lower(), wallet_address, payload.rule_type)
-        chat_id, label = notification_target(payload)
+        chat_id, label = notification_target(payload, user_id)
 
         token_address = (payload.token_address or "").strip() or None
         target_address = (payload.target_address or "").strip() or None
@@ -307,7 +395,7 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
             baseline = balance(wallet_address, token_address, profile["key"])
             wallet_address = baseline["wallet_address"]
             token_address = baseline["token_address"]
-            last_value = baseline["value"]
+            last_value = None if payload.rule_type == "balance_threshold" else baseline["value"]
             baseline_payload = baseline
 
         rule = create_watch_rule(
@@ -331,59 +419,63 @@ def post_watch_rule(payload: WatchRuleInput) -> dict:
             if plan["code"] == "free"
             else entitlement(user_id, create_trial=False)
         )
-        return {"rule": rule, "baseline": baseline_payload, "entitlement": current_entitlement}
+        initial_check = None
+        if payload.rule_type == "balance_threshold":
+            initial_check = check_rule({**rule, "effective_plan_code": plan["code"]})
+        return {
+            "rule": rule,
+            "baseline": baseline_payload,
+            "initial_check": initial_check,
+            "entitlement": current_entitlement,
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/watch-rules/paused")
-def remove_paused_watch_rules(debox_user_id: str) -> dict:
+def remove_paused_watch_rules(identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        if not debox_user_id:
-            raise ValueError("缺少 debox_user_id。")
-        deleted = delete_paused_watch_rules(debox_user_id)
-        return {"ok": True, "deleted": deleted, "entitlement": entitlement(debox_user_id, create_trial=False)}
+        user_id = identity["debox_user_id"]
+        deleted = delete_paused_watch_rules(user_id)
+        return {"ok": True, "deleted": deleted, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.delete("/api/watch-rules/{rule_id}")
-def remove_watch_rule(rule_id: int, debox_user_id: str) -> dict:
+def remove_watch_rule(rule_id: int, identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        if not debox_user_id:
-            raise ValueError("缺少 debox_user_id。")
-        delete_watch_rule(rule_id, debox_user_id)
-        return {"ok": True, "entitlement": entitlement(debox_user_id, create_trial=False)}
+        user_id = identity["debox_user_id"]
+        delete_watch_rule(rule_id, user_id)
+        return {"ok": True, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/watch-rules/{rule_id}/free-monitor")
-def set_free_monitor_rule(rule_id: int, payload: FreeWatchRuleInput) -> dict:
+def set_free_monitor_rule(rule_id: int, identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        if not payload.debox_user_id:
-            raise ValueError("缺少 debox_user_id。")
-        return choose_free_watch_rule(payload.debox_user_id, rule_id)
+        return choose_free_watch_rule(identity["debox_user_id"], rule_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/watch-rules/{rule_id}/restore")
-def restore_monitor_rule(rule_id: int, payload: RestoreWatchRuleInput) -> dict:
+def restore_monitor_rule(rule_id: int, identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        if not payload.debox_user_id:
-            raise ValueError("缺少 debox_user_id。")
-        return restore_paused_watch_rule(payload.debox_user_id, rule_id)
+        return restore_paused_watch_rule(identity["debox_user_id"], rule_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.patch("/api/watch-rules/{rule_id}/notification-language")
-def change_rule_notification_language(rule_id: int, payload: RuleLanguageInput) -> dict:
+def change_rule_notification_language(
+    rule_id: int,
+    payload: RuleLanguageInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
     try:
-        user_id = payload.debox_user_id.strip()
-        if not user_id:
-            raise ValueError("缺少 debox_user_id。")
+        user_id = identity["debox_user_id"]
         rule = update_watch_rule_notification_language(
             rule_id,
             user_id,
@@ -410,17 +502,17 @@ def validate_rule_input(payload: WatchRuleInput) -> None:
         raise ValueError("指定地址交互提醒需要填写目标地址或合约。")
 
 
-def notification_target(payload: WatchRuleInput) -> tuple[str, str]:
+def notification_target(payload: WatchRuleInput, debox_user_id: str) -> tuple[str, str]:
     chat_type = payload.notification_chat_type.strip().lower()
     if chat_type not in {"private", "group"}:
         raise ValueError("通知目标只能是 private 或 group。")
     if chat_type == "private":
-        return payload.debox_user_id.strip(), "私聊通知"
+        return debox_user_id, "私聊通知"
 
     gid = payload.notification_chat_id.strip()
     if not gid:
         raise ValueError("专业版群通知需要选择一个已绑定的群。")
-    group = get_notification_group(payload.debox_user_id, gid)
+    group = get_notification_group(debox_user_id, gid)
     if group is None:
         raise ValueError("这个群还没有绑定，请先在群通知设置中添加。")
     return gid, payload.notification_label.strip() or group.get("name") or gid
@@ -435,13 +527,8 @@ def get_balance(address: str, token_address: str | None = None, chain_key: str =
 
 
 @app.get("/api/debox/user")
-def get_debox_user(user_id: str = "", wallet_address: str = "") -> dict:
-    try:
-        if not user_id and not wallet_address:
-            raise ValueError("需要提供 user_id 或 wallet_address。")
-        return user_info(user_id=user_id, wallet_address=wallet_address)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+def get_debox_user(identity: dict = Depends(require_authenticated_session)) -> dict:
+    return authenticated_user_payload(identity)["profile"]
 
 
 @app.get("/api/debox/token")
@@ -454,19 +541,15 @@ def get_debox_token(contract_address: str, chain_key: str = "bsc") -> dict:
 
 
 @app.get("/api/notification-groups")
-def get_groups(debox_user_id: str) -> dict:
-    if not debox_user_id:
-        raise HTTPException(status_code=400, detail="缺少 debox_user_id。")
-    return {"groups": list_notification_groups(debox_user_id)}
+def get_groups(identity: dict = Depends(require_authenticated_session)) -> dict:
+    return {"groups": list_notification_groups(identity["debox_user_id"])}
 
 
 @app.post("/api/notification-groups")
-def post_group(payload: GroupInput) -> dict:
+def post_group(payload: GroupInput, identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        user_id = payload.debox_user_id.strip()
+        user_id = identity["debox_user_id"]
         gid = parse_debox_group_link(payload.gid)
-        if not user_id:
-            raise ValueError("请先连接 DeBox 钱包。")
         if not gid:
             raise ValueError("请输入正确的 DeBox 群链接。")
         existing = get_notification_group(user_id, gid)
@@ -474,10 +557,9 @@ def post_group(payload: GroupInput) -> dict:
             return {"group": existing, "already_exists": True, "entitlement": entitlement(user_id, create_trial=False)}
         require_group_slot(user_id)
         group = group_info(gid)
-        if payload.wallet_address.strip():
-            joined = is_group_joined(gid, payload.wallet_address.strip())
-            if not group_joined(joined):
-                raise ValueError("当前钱包似乎不是该群成员，请确认后再绑定。")
+        joined = is_group_joined(gid, identity["wallet_address"])
+        if not group_joined(joined):
+            raise ValueError("当前钱包似乎不是该群成员，请确认后再绑定。")
         saved = create_notification_group(user_id, gid, payload.label.strip() or group_name(group, gid))
         return {"group": saved, "source": group, "entitlement": entitlement(user_id, create_trial=False)}
     except Exception as exc:
@@ -485,12 +567,39 @@ def post_group(payload: GroupInput) -> dict:
 
 
 @app.delete("/api/notification-groups/{group_id}")
-def delete_group(group_id: int, debox_user_id: str) -> dict:
+def delete_group(group_id: int, identity: dict = Depends(require_authenticated_session)) -> dict:
     try:
-        if not debox_user_id:
-            raise ValueError("缺少 debox_user_id。")
-        delete_notification_group(group_id, debox_user_id)
-        return {"ok": True, "entitlement": entitlement(debox_user_id, create_trial=False)}
+        user_id = identity["debox_user_id"]
+        deletion = delete_notification_group(group_id, user_id)
+        fallbacks = deletion["summary_fallbacks"]
+        enabled_fallbacks = [row for row in fallbacks if bool(row.get("daily_summary_enabled"))]
+        confirmation_sent = False
+        summary_disabled = False
+
+        if enabled_fallbacks:
+            language = normalize_language(enabled_fallbacks[0].get("daily_summary_language"))
+            text = (
+                "<b>Daily summary</b><br/>The group was unbound. Your daily summary now goes to this private chat."
+                if language == "en"
+                else "<b>每日摘要</b><br/>原群已解绑，每日摘要已自动切换为本人私聊。"
+            )
+            try:
+                send_notification(user_id, "private", text)
+                confirmation_sent = True
+            except Exception:
+                disable_daily_summaries(
+                    [int(row["id"]) for row in enabled_fallbacks],
+                    user_id,
+                )
+                summary_disabled = True
+
+        return {
+            "ok": True,
+            "summary_target_changed": bool(fallbacks),
+            "summary_confirmation_sent": confirmation_sent,
+            "summary_disabled": summary_disabled,
+            "entitlement": entitlement(user_id, create_trial=False),
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -524,17 +633,30 @@ def get_payment_config(plan_code: str = "standard") -> dict:
 
 
 @app.post("/api/payment/prepare")
-def post_prepare_payment(payload: PreparePaymentInput) -> dict:
+def post_prepare_payment(
+    payload: PreparePaymentInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
     try:
-        return prepare_payment(payload.payer_address, payload.debox_user_id, payload.plan_code)
+        return prepare_payment(identity["debox_user_id"], identity["wallet_address"], payload.plan_code)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/payment/verify")
-def post_verify_payment(payload: VerifyPaymentInput) -> dict:
+def post_verify_payment(
+    payload: VerifyPaymentInput,
+    identity: dict = Depends(require_authenticated_session),
+) -> dict:
     try:
-        return verify_payment(payload.order_id, payload.tx_hash)
+        return verify_payment(
+            payload.order_id,
+            payload.tx_hash,
+            identity["debox_user_id"],
+            identity["wallet_address"],
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="链上节点暂时不可用，请稍后重试。") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

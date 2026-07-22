@@ -38,7 +38,7 @@ RULE_TYPE_DESCRIPTIONS = {
     "balance_change": "余额发生任意变化时推送通知。",
     "incoming": "余额增加并达到阈值时推送通知。",
     "outgoing": "余额减少并达到阈值时推送通知。",
-    "balance_threshold": "余额达到或低于阈值时推送通知。",
+    "balance_threshold": "余额首次达到或低于阈值时提醒一次；持续低于不重复，恢复后再次跌破会重新提醒。",
     "approval_change": "钱包对指定合约的代币授权额度发生变化时推送通知。",
     "address_interaction": "钱包与指定地址或合约发生交互时推送通知。",
 }

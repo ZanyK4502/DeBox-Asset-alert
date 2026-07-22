@@ -193,12 +193,15 @@ def menu_text(language: str = DEFAULT_LANGUAGE) -> str:
             "<b>DeBox Asset Alert</b><br/>"
             "Monitor wallet addresses and token balance changes with real-time alerts from DeBox Bot.<br/><br/>"
             "Features include multi-chain balance monitoring, token detection, private alerts, "
-            "group alerts for Professional users, and daily summaries."
+            "group alerts for Professional users, and daily summaries.<br/><br/>"
+            "Open the monitoring dashboard and sign with your wallet to securely sign in. "
+            "Signing sends no transaction and uses no gas."
         )
     return (
         "<b>DeBox Asset Alert</b><br/>"
         "监控钱包地址或代币资产变化，通过 DeBox Bot 实时推送通知。<br/><br/>"
-        "支持：多链余额监控、代币识别、私聊通知、专业版群通知、每日摘要等。"
+        "支持：多链余额监控、代币识别、私聊通知、专业版群通知、每日摘要等。<br/><br/>"
+        "打开个人监控面板后，通过钱包签名完成安全登录；签名不会发起交易或消耗 Gas。"
     )
 
 
@@ -222,11 +225,13 @@ def features_text(language: str = DEFAULT_LANGUAGE) -> str:
             "• Balance change<br/>"
             "• Incoming transfer<br/>"
             "• Outgoing transfer<br/>"
-            "• Balance threshold<br/>"
+            "• Balance threshold: alerts immediately if the balance is already at or below the threshold when created; it does not repeat while below, and alerts again after recovery above the threshold and another drop<br/>"
             "• Approval change<br/>"
             "• Specified address interaction<br/><br/>"
             "<b>Standard</b> includes private alerts and daily summaries.<br/><br/>"
-            "<b>Professional</b> includes group alerts and more advanced rules."
+            "<b>Professional</b> includes group alerts and more advanced rules.<br/><br/>"
+            "Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours and includes notification failures.<br/><br/>"
+            "If a summary group is unbound, delivery switches to private chat. If private confirmation fails, the daily summary is turned off."
         )
     return (
         "<b>监控能力</b><br/><br/>"
@@ -236,11 +241,13 @@ def features_text(language: str = DEFAULT_LANGUAGE) -> str:
         "• 余额变化<br/>"
         "• 转入<br/>"
         "• 转出<br/>"
-        "• 余额阈值<br/>"
+        "• 余额阈值：创建规则时余额已达到或低于阈值会立即提醒一次；持续低于不重复，回升至阈值以上后再次跌破会重新提醒<br/>"
         "• 授权变化<br/>"
         "• 指定地址交互<br/><br/>"
         "<b>标准版</b>支持私聊通知和每日摘要；<br/><br/>"
-        "<b>专业版</b>支持群通知和更多高级规则。"
+        "<b>专业版</b>支持群通知和更多高级规则。<br/><br/>"
+        "每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。<br/><br/>"
+        "解绑摘要群后会自动切回本人私聊；若私聊确认失败，每日摘要会关闭。"
     )
 
 
@@ -252,7 +259,8 @@ def plans_text(language: str = DEFAULT_LANGUAGE) -> str:
             f"Standard: {settings.subscription_price} {settings.subscription_token_symbol} / "
             f"{settings.subscription_days} days, 3 wallets, 10 rules, including asset and approval monitoring.<br/><br/>"
             "Professional: 25 USDT / 30 days, 20 wallets, 100 rules, including group alerts and specified address interactions.<br/><br/>"
-            "Only one paid plan can be active at a time. Renewing the same plan extends its expiration date.<br/><br/>"
+            "While a paid plan is active, only the same plan can be renewed; choose another plan after it expires.<br/><br/>"
+            "Pay with USDT on BNB Chain. The subscription activates after 3 block confirmations; failed verification does not activate it.<br/><br/>"
             "Subscriptions take effect immediately. Digital service purchases are non-refundable, so please review the plan before purchase."
         )
     return (
@@ -261,7 +269,8 @@ def plans_text(language: str = DEFAULT_LANGUAGE) -> str:
         f"标准版：{settings.subscription_price} {settings.subscription_token_symbol} / "
         f"{settings.subscription_days} 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/><br/>"
         "专业版：25 USDT / 30 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>"
-        "同一时间只能有一个有效付费套餐；同套餐可提前续费并顺延到期时间。<br/><br/>"
+        "付费套餐有效期内只能续费同一套餐并顺延到期时间；套餐到期后才能选择其他套餐。<br/><br/>"
+        "使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。<br/><br/>"
         "订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。"
     )
 
