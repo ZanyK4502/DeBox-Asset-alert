@@ -182,14 +182,13 @@ def group_entry_markup(
     bot: boxbotapi.BotAPI | None = None,
     language: str = DEFAULT_LANGUAGE,
 ) -> boxbotapi.InlineKeyboardMarkup:
-    english = _is_english(language)
     buttons = []
     private_url = bot_private_chat_url(bot)
     app_url = public_app_url()
     if private_url:
-        buttons.append(_button_url("Message Bot" if english else "私聊 Bot", private_url))
+        buttons.append(_button_url("私聊 Bot / Message Bot", private_url))
     if app_url:
-        buttons.append(_button_url("Monitoring Dashboard" if english else "个人监控面板", app_url))
+        buttons.append(_button_url("监控面板 / Dashboard", app_url))
     if not buttons:
         return boxbotapi.NewInlineKeyboardMarkup()
     return boxbotapi.NewInlineKeyboardMarkup(boxbotapi.NewInlineKeyboardRow(*buttons))
@@ -218,9 +217,11 @@ def group_entry_text(message: boxbotapi.Message, language: str = DEFAULT_LANGUAG
     if message.From is not None:
         user_name = message.From.Name or message.From.UserId
     prefix = f"@{escape(user_name)} " if user_name else ""
-    if _is_english(language):
-        return f"{prefix}I am the DeBox Asset Alert assistant. Message the Bot or open your monitoring dashboard."
-    return f"{prefix}我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。"
+    return (
+        f"{prefix}我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。<br/><br/>"
+        "I'm the DeBox Asset Alert monitoring assistant. "
+        "Message the Bot or open your monitoring dashboard."
+    )
 
 
 def features_text(language: str = DEFAULT_LANGUAGE) -> str:
