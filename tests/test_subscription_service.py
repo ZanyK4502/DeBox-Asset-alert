@@ -141,6 +141,24 @@ class ComplimentaryAccessTests(unittest.TestCase):
 
 
 class ComplimentaryGrantDatabaseTests(unittest.TestCase):
+    @patch("app.db.connect")
+    def test_database_initialization_is_serialized(self, mock_connect) -> None:
+        connection = MagicMock()
+        cursor = MagicMock()
+        mock_connect.return_value.__enter__.return_value = connection
+        connection.cursor.return_value.__enter__.return_value = cursor
+
+        db.initialize_database()
+
+        cursor.execute.assert_any_call(
+            "SELECT pg_advisory_xact_lock(%s)",
+            (db.DATABASE_INIT_LOCK_NAMESPACE,),
+        )
+        self.assertEqual(
+            cursor.execute.call_args_list[0].args,
+            ("SELECT pg_advisory_xact_lock(%s)", (db.DATABASE_INIT_LOCK_NAMESPACE,)),
+        )
+
     @patch("app.db._activate_subscription")
     @patch("app.db.connect")
     def test_grant_is_recorded_in_the_same_transaction(self, mock_connect, mock_activate) -> None:

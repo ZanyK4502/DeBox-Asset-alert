@@ -14,6 +14,7 @@ from app.languages import DEFAULT_LANGUAGE, normalize_language
 
 UTC = timezone.utc
 SUMMARY_LOCK_NAMESPACE = 7_220_026
+DATABASE_INIT_LOCK_NAMESPACE = 7_220_026_001
 
 
 def now_utc() -> datetime:
@@ -47,6 +48,7 @@ def serialize_many(rows: list[dict]) -> list[dict]:
 def initialize_database() -> None:
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (DATABASE_INIT_LOCK_NAMESPACE,))
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS subscriptions (
