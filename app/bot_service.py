@@ -487,7 +487,7 @@ def handle_message(bot: boxbotapi.BotAPI, message: boxbotapi.Message) -> None:
     if message.Chat is None:
         return
     text = text_from_message(message).lower()
-    if text == "start":
+    if text in {"start", "/start"}:
         if message.Chat.Type == "group":
             send_group_entry(bot, message)
             return
@@ -597,7 +597,7 @@ def run() -> None:
                             update.Message.Chat is not None,
                             getattr(update.Message.Chat, "Type", ""),
                             bool(message_text),
-                            message_text == "start",
+                            message_text in {"start", "/start"},
                         )
                         handle_message(bot, update.Message)
                     elif update.CallbackQuery is not None:
