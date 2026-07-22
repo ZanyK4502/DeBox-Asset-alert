@@ -93,6 +93,14 @@ def user_id_from_message(message: boxbotapi.Message) -> str:
     ).strip()
 
 
+def text_from_message(message: boxbotapi.Message) -> str:
+    return str(
+        getattr(message, "Text", "")
+        or getattr(message, "TextRaw", "")
+        or ""
+    ).strip()
+
+
 def bot_language_for_user(debox_user_id: str) -> str:
     if not debox_user_id:
         return DEFAULT_LANGUAGE
@@ -478,7 +486,7 @@ def send_group_entry(bot: boxbotapi.BotAPI, message: boxbotapi.Message) -> None:
 def handle_message(bot: boxbotapi.BotAPI, message: boxbotapi.Message) -> None:
     if message.Chat is None:
         return
-    text = (message.Text or "").strip().lower()
+    text = text_from_message(message).lower()
     if text in {"/start", "start", "菜单", "menu"}:
         if message.Chat.Type == "group":
             send_group_entry(bot, message)
@@ -557,6 +565,7 @@ def run() -> None:
 
         update_config = boxbotapi.NewUpdate(0)
         update_config.Timeout = 10
+        last_health_log = 0.0
 
         while True:
             try:
@@ -568,12 +577,31 @@ def run() -> None:
                 continue
 
             write_status("running", "Long Polling is active", bot)
+            now = time.monotonic()
+            if updates or now - last_health_log >= 60:
+                logging.info(
+                    "Bot polling healthy: updates=%s offset=%s",
+                    len(updates),
+                    update_config.Offset,
+                )
+                last_health_log = now
             for update in updates:
                 update_config.Offset = max(update_config.Offset, update.Id + 1)
                 try:
                     if update.Message is not None:
+                        message_text = text_from_message(update.Message).lower()
+                        logging.info(
+                            "Received bot message: update=%s has_chat=%s chat_type=%s "
+                            "has_text=%s is_start=%s",
+                            update.Id,
+                            update.Message.Chat is not None,
+                            getattr(update.Message.Chat, "Type", ""),
+                            bool(message_text),
+                            message_text in {"/start", "start", "菜单", "menu"},
+                        )
                         handle_message(bot, update.Message)
                     elif update.CallbackQuery is not None:
+                        logging.info("Received bot callback: update=%s", update.Id)
                         handle_callback(bot, update.CallbackQuery)
                 except Exception:
                     logging.exception("Failed to handle update=%s", update.Id)

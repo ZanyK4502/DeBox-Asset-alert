@@ -1,9 +1,15 @@
 import unittest
+from types import SimpleNamespace
 
 from app import bot_service
 
 
 class BotProductCopyTests(unittest.TestCase):
+    def test_message_text_falls_back_to_raw_sdk_field(self) -> None:
+        message = SimpleNamespace(Text="", TextRaw=" /start ")
+
+        self.assertEqual(bot_service.text_from_message(message), "/start")
+
     def test_secure_sign_in_copy_is_available_in_both_languages(self) -> None:
         chinese = bot_service.menu_text("zh")
         english = bot_service.menu_text("en")
