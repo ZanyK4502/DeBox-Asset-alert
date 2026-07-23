@@ -14,6 +14,8 @@ import (
 var (
 	ErrActiveSubscriptionConflict = errors.New("an active subscription prevents this plan change")
 	ErrComplimentaryAlreadyUsed   = errors.New("complimentary access has already been used")
+	ErrGroupLimitReached          = errors.New("notification group limit reached")
+	ErrGroupNotificationDenied    = errors.New("group notification is not allowed")
 	ErrInvalidFreeWatchRule       = errors.New("watch rule is not eligible for the free plan")
 	ErrInvalidNotificationStatus  = errors.New("invalid notification status")
 	ErrNotFound                   = errors.New("record not found")
@@ -21,6 +23,10 @@ var (
 	ErrOrderInvalid               = errors.New("payment order is missing, expired, or not owned by the user")
 	ErrOrderTransactionUsed       = errors.New("transaction is already assigned to another order")
 	ErrPoolRequired               = errors.New("a PostgreSQL pool is required for this operation")
+	ErrRuleLimitReached           = errors.New("watch rule limit reached")
+	ErrRuleTypeDenied             = errors.New("watch rule type is not allowed")
+	ErrSubscriptionChanged        = errors.New("subscription changed during the operation")
+	ErrWalletLimitReached         = errors.New("monitored wallet limit reached")
 )
 
 type DBTX interface {
@@ -98,7 +104,7 @@ func collectOne[T any](ctx context.Context, db DBTX, sql string, args ...any) (T
 	if err != nil {
 		return zero, err
 	}
-	value, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[T])
+	value, err := pgx.CollectOneRow(rows, pgx.RowToStructByNameLax[T])
 	if err != nil {
 		return zero, err
 	}
@@ -121,7 +127,7 @@ func collectMany[T any](ctx context.Context, db DBTX, sql string, args ...any) (
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[T])
+	return pgx.CollectRows(rows, pgx.RowToStructByNameLax[T])
 }
 
 func collectInt64Rows(rows pgx.Rows) ([]int64, error) {

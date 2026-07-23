@@ -15,6 +15,10 @@ func TestLoadDefaults(t *testing.T) {
 		"APP_PORT",
 		"PORT",
 		"DEBOX_BOT_RECEIVE_MODE",
+		"SUBSCRIPTION_TOKEN_SYMBOL",
+		"SUBSCRIPTION_PRICE",
+		"SUBSCRIPTION_DAYS",
+		"COMPLIMENTARY_WALLET_ADDRESSES",
 	} {
 		t.Setenv(name, "")
 	}
@@ -35,6 +39,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ReceiveMode != defaultReceiveMode {
 		t.Fatalf("ReceiveMode = %q, want %q", cfg.ReceiveMode, defaultReceiveMode)
+	}
+	if cfg.SubscriptionTokenSymbol != defaultTokenSymbol {
+		t.Fatalf("SubscriptionTokenSymbol = %q, want %q", cfg.SubscriptionTokenSymbol, defaultTokenSymbol)
+	}
+	if cfg.SubscriptionPrice != defaultPlanPrice || cfg.SubscriptionDays != defaultPlanDays {
+		t.Fatalf("subscription price/days = %s/%d", cfg.SubscriptionPrice, cfg.SubscriptionDays)
 	}
 }
 
@@ -71,6 +81,49 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want invalid port error")
+	}
+}
+
+func TestLoadReadsSubscriptionSettings(t *testing.T) {
+	t.Setenv("SUBSCRIPTION_TOKEN_SYMBOL", "TEST")
+	t.Setenv("SUBSCRIPTION_PRICE", "12.5")
+	t.Setenv("SUBSCRIPTION_DAYS", "45")
+	t.Setenv("COMPLIMENTARY_WALLET_ADDRESSES", " 0xabc,0xdef ")
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SubscriptionTokenSymbol != "TEST" || cfg.SubscriptionPrice != "12.5" || cfg.SubscriptionDays != 45 {
+		t.Fatalf("subscription settings = %s/%s/%d", cfg.SubscriptionTokenSymbol, cfg.SubscriptionPrice, cfg.SubscriptionDays)
+	}
+	if cfg.ComplimentaryWalletAddresses != "0xabc,0xdef" {
+		t.Fatalf("ComplimentaryWalletAddresses = %q", cfg.ComplimentaryWalletAddresses)
+	}
+}
+
+func TestLoadRejectsInvalidSubscriptionSettings(t *testing.T) {
+	staticDir := testStaticDir(t)
+	tests := []struct {
+		name  string
+		price string
+		days  string
+	}{
+		{name: "invalid price", price: "abc", days: "30"},
+		{name: "negative price", price: "-1", days: "30"},
+		{name: "zero days", price: "10", days: "0"},
+		{name: "invalid days", price: "10", days: "later"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("SUBSCRIPTION_PRICE", test.price)
+			t.Setenv("SUBSCRIPTION_DAYS", test.days)
+			t.Setenv("STATIC_DIR", staticDir)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil")
+			}
+		})
 	}
 }
 

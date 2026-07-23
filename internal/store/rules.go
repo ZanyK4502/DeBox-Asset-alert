@@ -27,7 +27,15 @@ func (s *Store) CreateWatchRule(
 	ctx context.Context,
 	params CreateWatchRuleParams,
 ) (WatchRule, error) {
-	rule, err := collectOne[WatchRule](ctx, s.db, `
+	return createWatchRule(ctx, s.db, params)
+}
+
+func createWatchRule(
+	ctx context.Context,
+	db DBTX,
+	params CreateWatchRuleParams,
+) (WatchRule, error) {
+	rule, err := collectOne[WatchRule](ctx, db, `
 		INSERT INTO watch_rules (
 			debox_user_id, chain_key, chain_id, wallet_address,
 			token_address, target_address, target_label, rule_type,
@@ -242,8 +250,28 @@ func (s *Store) SetFreeWatchRule(
 	ruleID int64,
 ) (UserPreference, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (UserPreference, error) {
-		var eligible bool
-		if err := tx.QueryRow(ctx, `
+		if err := lockUser(ctx, tx, deboxUserID); err != nil {
+			return UserPreference{}, err
+		}
+		planCode, err := effectivePlanCode(ctx, tx, deboxUserID)
+		if err != nil {
+			return UserPreference{}, err
+		}
+		if planCode != "free" {
+			return UserPreference{}, ErrSubscriptionChanged
+		}
+		return setFreeWatchRule(ctx, tx, deboxUserID, ruleID)
+	})
+}
+
+func setFreeWatchRule(
+	ctx context.Context,
+	db DBTX,
+	deboxUserID string,
+	ruleID int64,
+) (UserPreference, error) {
+	var eligible bool
+	if err := db.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1
 				FROM watch_rules
@@ -255,33 +283,32 @@ func (s *Store) SetFreeWatchRule(
 					'balance_change', 'incoming', 'outgoing', 'balance_threshold'
 				  )
 			)
-		`, ruleID, deboxUserID).Scan(&eligible); err != nil {
-			return UserPreference{}, fmt.Errorf("check free watch rule: %w", err)
-		}
-		if !eligible {
-			return UserPreference{}, ErrInvalidFreeWatchRule
-		}
-		if _, err := tx.Exec(ctx, `
+	`, ruleID, deboxUserID).Scan(&eligible); err != nil {
+		return UserPreference{}, fmt.Errorf("check free watch rule: %w", err)
+	}
+	if !eligible {
+		return UserPreference{}, ErrInvalidFreeWatchRule
+	}
+	if _, err := db.Exec(ctx, `
 			UPDATE watch_rules
 			SET run_status = CASE WHEN id = $1 THEN 'active' ELSE 'paused' END
 			WHERE debox_user_id = $2 AND enabled = 1
-		`, ruleID, deboxUserID); err != nil {
-			return UserPreference{}, fmt.Errorf("activate free watch rule: %w", err)
-		}
-		preferences, err := collectOne[UserPreference](ctx, tx, `
+	`, ruleID, deboxUserID); err != nil {
+		return UserPreference{}, fmt.Errorf("activate free watch rule: %w", err)
+	}
+	preferences, err := collectOne[UserPreference](ctx, db, `
 			INSERT INTO user_preferences (debox_user_id, free_watch_rule_id, updated_at)
 			VALUES ($1, $2, NOW())
 			ON CONFLICT (debox_user_id)
 			DO UPDATE SET free_watch_rule_id = EXCLUDED.free_watch_rule_id, updated_at = NOW()
 			RETURNING `+userPreferenceColumns,
-			deboxUserID,
-			ruleID,
-		)
-		if err != nil {
-			return UserPreference{}, fmt.Errorf("save free watch rule: %w", err)
-		}
-		return preferences, nil
-	})
+		deboxUserID,
+		ruleID,
+	)
+	if err != nil {
+		return UserPreference{}, fmt.Errorf("save free watch rule: %w", err)
+	}
+	return preferences, nil
 }
 
 func (s *Store) PauseUserWatchRules(

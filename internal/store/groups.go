@@ -13,7 +13,17 @@ func (s *Store) CreateNotificationGroup(
 	gid string,
 	name string,
 ) (NotificationGroup, error) {
-	group, err := collectOne[NotificationGroup](ctx, s.db, `
+	return createNotificationGroup(ctx, s.db, deboxUserID, gid, name)
+}
+
+func createNotificationGroup(
+	ctx context.Context,
+	db DBTX,
+	deboxUserID string,
+	gid string,
+	name string,
+) (NotificationGroup, error) {
+	group, err := collectOne[NotificationGroup](ctx, db, `
 		INSERT INTO notification_groups (debox_user_id, gid, name, enabled)
 		VALUES ($1, $2, $3, 1)
 		ON CONFLICT (debox_user_id, gid)
