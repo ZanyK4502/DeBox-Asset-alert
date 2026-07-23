@@ -25,6 +25,8 @@ const (
 var ErrChainUnavailable = errors.New("chain node is temporarily unavailable")
 
 type Repository interface {
+	ExpirePendingOrders(context.Context) (int64, error)
+	ListConfirmingOrders(context.Context, int) ([]store.Order, error)
 	CreateOrder(context.Context, store.CreateOrderParams) (store.Order, error)
 	ClaimOrderTransaction(context.Context, int64, string, string, string) (store.Order, error)
 	UpdateOrderVerification(
@@ -258,6 +260,67 @@ type VerifyResult struct {
 	Confirmations         int                 `json:"confirmations"`
 	RequiredConfirmations int                 `json:"required_confirmations"`
 	Error                 string              `json:"error,omitempty"`
+}
+
+type ReconciliationError struct {
+	OrderID int64  `json:"order_id"`
+	Error   string `json:"error"`
+}
+
+type ReconciliationResult struct {
+	Checked    int                   `json:"checked"`
+	Expired    int64                 `json:"expired"`
+	Paid       int                   `json:"paid"`
+	Confirming int                   `json:"confirming"`
+	Failed     int                   `json:"failed"`
+	Errors     []ReconciliationError `json:"errors"`
+}
+
+func (s *Service) Reconcile(ctx context.Context, limit int) (ReconciliationResult, error) {
+	expired, err := s.repository.ExpirePendingOrders(ctx)
+	if err != nil {
+		return ReconciliationResult{}, err
+	}
+	orders, err := s.repository.ListConfirmingOrders(ctx, limit)
+	if err != nil {
+		return ReconciliationResult{}, err
+	}
+	result := ReconciliationResult{
+		Expired: expired,
+		Errors:  make([]ReconciliationError, 0),
+	}
+	for _, order := range orders {
+		verification, verifyErr := s.verifyClaimedOrder(ctx, order)
+		result.Checked++
+		if verifyErr != nil {
+			if _, updateErr := s.repository.UpdateOrderVerification(
+				ctx,
+				order.ID,
+				store.UpdateOrderVerificationParams{
+					Status:        "confirming",
+					BlockNumber:   order.TxBlockNumber,
+					Confirmations: int(order.TxConfirmations),
+					Error:         verifyErr.Error(),
+				},
+			); updateErr != nil {
+				verifyErr = errors.Join(verifyErr, updateErr)
+			}
+			result.Errors = append(result.Errors, ReconciliationError{
+				OrderID: order.ID,
+				Error:   verifyErr.Error(),
+			})
+			continue
+		}
+		switch verification.PaymentStatus {
+		case "paid":
+			result.Paid++
+		case "failed":
+			result.Failed++
+		default:
+			result.Confirming++
+		}
+	}
+	return result, nil
 }
 
 func (s *Service) Verify(

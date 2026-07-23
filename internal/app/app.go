@@ -28,7 +28,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var background sync.WaitGroup
-	background.Add(3)
+	background.Add(4)
 	go func() {
 		defer background.Done()
 		dependencies.bot.Run(runContext, logger)
@@ -36,6 +36,10 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	go func() {
 		defer background.Done()
 		dependencies.monitor.Run(runContext, logger)
+	}()
+	go func() {
+		defer background.Done()
+		dependencies.payment.Run(runContext, logger)
 	}()
 	go func() {
 		defer background.Done()

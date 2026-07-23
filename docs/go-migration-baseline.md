@@ -23,6 +23,27 @@ The `Procfile` starts `python run_all.py`, which supervises three processes:
 
 The static H5 is served from `static/`. PostgreSQL is the durable source of truth.
 
+The equivalent Go runtime is `cmd/server`. It owns the HTTP server and starts four
+context-managed background workers in the same process:
+
+1. DeBox Bot long polling when `DEBOX_BOT_RECEIVE_MODE=polling`
+2. Watch-rule monitoring
+3. Confirming-payment reconciliation and pending-order expiry
+4. Scheduled daily summaries
+
+Each singleton worker uses a PostgreSQL advisory lock, so a second application replica
+does not duplicate Bot polling, monitoring, or payment reconciliation. Summary delivery
+continues to use its existing per-subscription lock.
+
+The old local `run_tunnel.py` responsibility is available separately as:
+
+```text
+go run ./cmd/tunnel
+```
+
+It remains a development-only helper, publishes the verified localhost.run address to
+`data/public_url.txt`, and is never started by `cmd/server`.
+
 ## HTTP Contract
 
 The Python baseline exposes 30 application routes:

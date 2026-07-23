@@ -19,6 +19,10 @@ const (
 )
 
 type fakeRepository struct {
+	expireCalls   int
+	expired       int64
+	confirming    []store.Order
+	listErr       error
 	createdParams store.CreateOrderParams
 	createdOrder  store.Order
 	createErr     error
@@ -39,6 +43,18 @@ type fakeRepository struct {
 		confirmations    int
 		subscriptionDays int
 	}
+}
+
+func (f *fakeRepository) ExpirePendingOrders(context.Context) (int64, error) {
+	f.expireCalls++
+	return f.expired, nil
+}
+
+func (f *fakeRepository) ListConfirmingOrders(
+	context.Context,
+	int,
+) ([]store.Order, error) {
+	return f.confirming, f.listErr
 }
 
 func (f *fakeRepository) CreateOrder(
@@ -333,6 +349,53 @@ func TestVerifyReportsNodeFailuresAsUnavailable(t *testing.T) {
 	_, err := service.Verify(context.Background(), 7, testHash, "user-1", testPayer)
 	if !errors.Is(err, ErrChainUnavailable) {
 		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
+func TestReconcileExpiresPendingAndChecksConfirmingOrders(t *testing.T) {
+	repository := &fakeRepository{
+		expired:    2,
+		confirming: []store.Order{testOrder()},
+	}
+	service := testService(
+		t,
+		repository,
+		successfulBlockchain(t, 101, "10", testRecipient),
+		liveSettings(),
+	)
+
+	result, err := service.Reconcile(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.Expired != 2 ||
+		result.Checked != 1 ||
+		result.Confirming != 1 ||
+		result.Paid != 0 ||
+		result.Failed != 0 ||
+		len(result.Errors) != 0 {
+		t.Fatalf("unexpected reconciliation result: %#v", result)
+	}
+}
+
+func TestReconcileKeepsTransientVerificationFailuresForRetry(t *testing.T) {
+	order := testOrder()
+	order.TxConfirmations = 1
+	repository := &fakeRepository{confirming: []store.Order{order}}
+	service := testService(t, repository, &fakeBlockchain{
+		transactionErr: errors.New("timeout"),
+	}, liveSettings())
+
+	result, err := service.Reconcile(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.Checked != 1 ||
+		len(result.Errors) != 1 ||
+		repository.updated.Status != "confirming" ||
+		repository.updated.Confirmations != 1 ||
+		repository.updated.Error == "" {
+		t.Fatalf("unexpected retry result: %#v / %#v", result, repository.updated)
 	}
 }
 

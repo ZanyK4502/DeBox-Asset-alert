@@ -23,6 +23,7 @@ type dependencies struct {
 	httpapi httpapi.Dependencies
 	bot     *bot.Runner
 	monitor *monitor.Runner
+	payment *payment.Runner
 	summary *summary.Runner
 }
 
@@ -106,6 +107,13 @@ func buildDependencies(
 			TokenDecimals:    cfg.SubscriptionTokenDecimals,
 		},
 	)
+	paymentRunner := payment.NewRunner(
+		paymentService,
+		func(ctx context.Context) (payment.Lock, bool, error) {
+			return repository.TryPaymentReconciliationLock(ctx)
+		},
+		payment.DefaultInterval,
+	)
 	botService := bot.New(bot.Dependencies{
 		Client:        messenger,
 		Repository:    repository,
@@ -155,6 +163,7 @@ func buildDependencies(
 		},
 		bot:     botRunner,
 		monitor: monitorRunner,
+		payment: paymentRunner,
 		summary: summary.NewRunner(summaryExecutor, summary.DefaultInterval),
 	}, closeDependencies, nil
 }
