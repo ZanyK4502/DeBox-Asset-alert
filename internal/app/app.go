@@ -23,7 +23,19 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer closeDependencies()
-	return runServer(ctx, cfg, httpapi.New(cfg, dependencies), logger)
+
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		dependencies.monitor.Run(runContext, logger)
+	}()
+
+	err = runServer(runContext, cfg, httpapi.New(cfg, dependencies.httpapi), logger)
+	cancel()
+	<-monitorDone
+	return err
 }
 
 func runServer(
