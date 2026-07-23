@@ -4,6 +4,7 @@
     "builder": "RAILPACK"
   },
   "deploy": {
+    "startCommand": "./out",
     "healthcheckPath": "/api/ready",
     "healthcheckTimeout": 300
   }
