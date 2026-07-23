@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/httpapi"
 )
 
 func TestName(t *testing.T) {
@@ -47,7 +48,7 @@ func TestRunShutsDownWhenContextIsCanceled(t *testing.T) {
 	done := make(chan error, 1)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	go func() {
-		done <- Run(ctx, cfg, logger)
+		done <- runServer(ctx, cfg, httpapi.New(cfg), logger)
 	}()
 
 	readyURL := "http://" + cfg.Address() + "/api/ready"

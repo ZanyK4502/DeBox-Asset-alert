@@ -116,11 +116,15 @@ func testConfig(t *testing.T) config.Config {
 		}
 	}
 	return config.Config{
-		AppName:     "Test App",
-		Environment: "test",
-		Host:        "127.0.0.1",
-		Port:        8000,
-		ReceiveMode: "polling",
-		StaticDir:   dir,
+		AppName:                 "Test App",
+		Environment:             "test",
+		Host:                    "127.0.0.1",
+		Port:                    8000,
+		ReceiveMode:             "polling",
+		StaticDir:               dir,
+		ChainKey:                "bsc",
+		SubscriptionTokenSymbol: "USDT",
+		SubscriptionPrice:       "10",
+		SubscriptionDays:        30,
 	}
 }

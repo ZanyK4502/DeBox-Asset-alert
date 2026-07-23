@@ -15,6 +15,7 @@ func TestLoadDefaults(t *testing.T) {
 		"APP_PORT",
 		"PORT",
 		"DEBOX_BOT_RECEIVE_MODE",
+		"PUBLIC_APP_URL",
 		"DEBOX_BOT_API_KEY",
 		"DEBOX_BOT_API_SECRET",
 		"DEBOX_BOT_USER_ID",
@@ -61,6 +62,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadReadsExternalAPISettings(t *testing.T) {
+	t.Setenv("PUBLIC_APP_URL", " https://app.example/ ")
 	t.Setenv("DEBOX_BOT_API_KEY", " api-key ")
 	t.Setenv("DEBOX_BOT_API_SECRET", " api-secret ")
 	t.Setenv("DEBOX_BOT_USER_ID", " bot-user ")
@@ -78,6 +80,9 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	}
 	if cfg.DeBoxBotAPIKey != "api-key" || cfg.DeBoxBotAPISecret != "api-secret" || cfg.DeBoxBotUserID != "bot-user" {
 		t.Fatalf("unexpected DeBox bot settings")
+	}
+	if cfg.PublicAppURL != "https://app.example" {
+		t.Fatalf("PublicAppURL = %q", cfg.PublicAppURL)
 	}
 	if cfg.DeBoxOpenAPIBase != "https://debox.example" ||
 		cfg.DeBoxNotificationChatID != "user-1" ||

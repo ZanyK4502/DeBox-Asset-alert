@@ -18,9 +18,23 @@ const (
 )
 
 func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	dependencies, closeDependencies, err := buildDependencies(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer closeDependencies()
+	return runServer(ctx, cfg, httpapi.New(cfg, dependencies), logger)
+}
+
+func runServer(
+	ctx context.Context,
+	cfg config.Config,
+	handler http.Handler,
+	logger *slog.Logger,
+) error {
 	server := &http.Server{
 		Addr:              cfg.Address(),
-		Handler:           httpapi.New(cfg),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

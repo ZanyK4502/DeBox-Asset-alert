@@ -1,22 +1,85 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"path/filepath"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
 
 type handler struct {
-	cfg config.Config
+	cfg  config.Config
+	deps Dependencies
 }
 
-func New(cfg config.Config) http.Handler {
-	h := handler{cfg: cfg}
+type AuthService interface {
+	CreateWalletChallenge(context.Context, string, string) (auth.Challenge, error)
+	VerifyWalletChallenge(context.Context, string, string, string) (auth.Verification, error)
+	AuthenticatedSession(context.Context, string) (*store.AuthSession, error)
+	RevokeSession(context.Context, string) (bool, error)
+}
+
+type SubscriptionService interface {
+	Entitlement(context.Context, string) (subscription.Entitlement, error)
+	EnableFreePlan(context.Context, string) (*store.Subscription, error)
+	ComplimentaryAccess(context.Context, string) (subscription.ComplimentaryAccess, error)
+	ActivateComplimentaryPlan(context.Context, string, string, string) (store.ComplimentaryActivation, error)
+}
+
+type ChainService interface {
+	Balance(context.Context, string, string, string, string) (chain.BalanceResult, error)
+}
+
+type DeBoxService interface {
+	UserInfo(context.Context, string, string) (map[string]any, error)
+	TokenInfo(context.Context, string, int64) (map[string]any, error)
+}
+
+type Dependencies struct {
+	Auth          AuthService
+	Subscriptions SubscriptionService
+	Chain         ChainService
+	DeBox         DeBoxService
+	Catalog       *plans.Catalog
+}
+
+func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
+	deps := Dependencies{}
+	if len(dependencies) > 0 {
+		deps = dependencies[0]
+	}
+	if deps.Catalog == nil {
+		deps.Catalog, _ = plans.NewCatalog(
+			cfg.SubscriptionPrice,
+			cfg.SubscriptionDays,
+			cfg.SubscriptionTokenSymbol,
+		)
+	}
+	h := handler{cfg: cfg, deps: deps}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/ready", h.ready)
+	mux.HandleFunc("GET /api/plans", h.getPlans)
+	mux.HandleFunc("GET /api/chains", h.getChains)
+	mux.HandleFunc("POST /api/auth/challenge", h.postAuthChallenge)
+	mux.HandleFunc("POST /api/auth/verify", h.postAuthVerify)
+	mux.HandleFunc("GET /api/auth/session", h.getAuthSession)
+	mux.HandleFunc("POST /api/auth/logout", h.postAuthLogout)
+	mux.HandleFunc("GET /api/subscription/current", h.getCurrentSubscription)
+	mux.HandleFunc("POST /api/subscription/free-trial", h.postFreePlan)
+	mux.HandleFunc("POST /api/subscription/complimentary", h.postComplimentaryPlan)
+	mux.HandleFunc("GET /api/chain/balance", h.getBalance)
+	mux.HandleFunc("GET /api/debox/user", h.getDeBoxUser)
+	mux.HandleFunc("GET /api/debox/token", h.getDeBoxToken)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 	mux.HandleFunc("GET /", h.index)
 	return mux
@@ -50,4 +113,23 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]string{"detail": err.Error()})
+}
+
+func serviceUnavailable(w http.ResponseWriter) {
+	writeError(w, http.StatusServiceUnavailable, errors.New("服务尚未完成初始化。"))
+}
+
+func decodeJSON(r *http.Request, target any) error {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	if err := decoder.Decode(target); err != nil {
+		return errors.New("请求体必须是有效的 JSON。")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("请求体只能包含一个 JSON 对象。")
+	}
+	return nil
 }

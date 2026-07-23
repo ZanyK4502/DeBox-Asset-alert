@@ -32,6 +32,7 @@ type Config struct {
 	ReceiveMode                  string
 	StaticDir                    string
 	DatabaseURL                  string
+	PublicAppURL                 string
 	DeBoxBotAPIKey               string
 	DeBoxBotAPISecret            string
 	DeBoxBotUserID               string
@@ -67,6 +68,7 @@ func Load() (Config, error) {
 		ReceiveMode:                  strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_BOT_RECEIVE_MODE"), defaultReceiveMode)),
 		StaticDir:                    firstNonEmpty(os.Getenv("STATIC_DIR"), "static"),
 		DatabaseURL:                  strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		PublicAppURL:                 strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_APP_URL")), "/"),
 		DeBoxBotAPIKey:               strings.TrimSpace(os.Getenv("DEBOX_BOT_API_KEY")),
 		DeBoxBotAPISecret:            strings.TrimSpace(os.Getenv("DEBOX_BOT_API_SECRET")),
 		DeBoxBotUserID:               strings.TrimSpace(os.Getenv("DEBOX_BOT_USER_ID")),
