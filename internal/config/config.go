@@ -16,6 +16,9 @@ const (
 	defaultHost        = "0.0.0.0"
 	defaultPort        = 8000
 	defaultReceiveMode = "polling"
+	defaultDeBoxAPI    = "https://open.debox.pro"
+	defaultChainKey    = "bsc"
+	defaultNoditAPI    = "https://web3.nodit.io/v1"
 	defaultTokenSymbol = "USDT"
 	defaultPlanPrice   = "10"
 	defaultPlanDays    = 30
@@ -29,6 +32,15 @@ type Config struct {
 	ReceiveMode                  string
 	StaticDir                    string
 	DatabaseURL                  string
+	DeBoxBotAPIKey               string
+	DeBoxBotAPISecret            string
+	DeBoxBotUserID               string
+	DeBoxOpenAPIBase             string
+	DeBoxNotificationChatID      string
+	DeBoxNotificationChatType    string
+	ChainKey                     string
+	NoditAPIKey                  string
+	NoditBaseURL                 string
 	SubscriptionTokenSymbol      string
 	SubscriptionPrice            string
 	SubscriptionDays             int
@@ -55,6 +67,15 @@ func Load() (Config, error) {
 		ReceiveMode:                  strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_BOT_RECEIVE_MODE"), defaultReceiveMode)),
 		StaticDir:                    firstNonEmpty(os.Getenv("STATIC_DIR"), "static"),
 		DatabaseURL:                  strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DeBoxBotAPIKey:               strings.TrimSpace(os.Getenv("DEBOX_BOT_API_KEY")),
+		DeBoxBotAPISecret:            strings.TrimSpace(os.Getenv("DEBOX_BOT_API_SECRET")),
+		DeBoxBotUserID:               strings.TrimSpace(os.Getenv("DEBOX_BOT_USER_ID")),
+		DeBoxOpenAPIBase:             firstNonEmpty(os.Getenv("DEBOX_OPENAPI_BASE"), defaultDeBoxAPI),
+		DeBoxNotificationChatID:      strings.TrimSpace(os.Getenv("DEBOX_NOTIFICATION_CHAT_ID")),
+		DeBoxNotificationChatType:    strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_NOTIFICATION_CHAT_TYPE"), "private")),
+		ChainKey:                     strings.ToLower(firstNonEmpty(os.Getenv("CHAIN_KEY"), defaultChainKey)),
+		NoditAPIKey:                  strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
+		NoditBaseURL:                 firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
 		SubscriptionTokenSymbol:      firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
 		SubscriptionPrice:            firstNonEmpty(os.Getenv("SUBSCRIPTION_PRICE"), defaultPlanPrice),
 		SubscriptionDays:             days,

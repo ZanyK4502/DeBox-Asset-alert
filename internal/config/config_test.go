@@ -15,6 +15,15 @@ func TestLoadDefaults(t *testing.T) {
 		"APP_PORT",
 		"PORT",
 		"DEBOX_BOT_RECEIVE_MODE",
+		"DEBOX_BOT_API_KEY",
+		"DEBOX_BOT_API_SECRET",
+		"DEBOX_BOT_USER_ID",
+		"DEBOX_OPENAPI_BASE",
+		"DEBOX_NOTIFICATION_CHAT_ID",
+		"DEBOX_NOTIFICATION_CHAT_TYPE",
+		"CHAIN_KEY",
+		"NODIT_API_KEY",
+		"NODIT_BASE_URL",
 		"SUBSCRIPTION_TOKEN_SYMBOL",
 		"SUBSCRIPTION_PRICE",
 		"SUBSCRIPTION_DAYS",
@@ -40,11 +49,43 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ReceiveMode != defaultReceiveMode {
 		t.Fatalf("ReceiveMode = %q, want %q", cfg.ReceiveMode, defaultReceiveMode)
 	}
+	if cfg.DeBoxOpenAPIBase != defaultDeBoxAPI || cfg.ChainKey != defaultChainKey || cfg.NoditBaseURL != defaultNoditAPI {
+		t.Fatalf("external API defaults = %q/%q/%q", cfg.DeBoxOpenAPIBase, cfg.ChainKey, cfg.NoditBaseURL)
+	}
 	if cfg.SubscriptionTokenSymbol != defaultTokenSymbol {
 		t.Fatalf("SubscriptionTokenSymbol = %q, want %q", cfg.SubscriptionTokenSymbol, defaultTokenSymbol)
 	}
 	if cfg.SubscriptionPrice != defaultPlanPrice || cfg.SubscriptionDays != defaultPlanDays {
 		t.Fatalf("subscription price/days = %s/%d", cfg.SubscriptionPrice, cfg.SubscriptionDays)
+	}
+}
+
+func TestLoadReadsExternalAPISettings(t *testing.T) {
+	t.Setenv("DEBOX_BOT_API_KEY", " api-key ")
+	t.Setenv("DEBOX_BOT_API_SECRET", " api-secret ")
+	t.Setenv("DEBOX_BOT_USER_ID", " bot-user ")
+	t.Setenv("DEBOX_OPENAPI_BASE", " https://debox.example ")
+	t.Setenv("DEBOX_NOTIFICATION_CHAT_ID", " user-1 ")
+	t.Setenv("DEBOX_NOTIFICATION_CHAT_TYPE", "GROUP")
+	t.Setenv("CHAIN_KEY", "ETHEREUM")
+	t.Setenv("NODIT_API_KEY", " nodit-key ")
+	t.Setenv("NODIT_BASE_URL", " https://nodit.example/v1 ")
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DeBoxBotAPIKey != "api-key" || cfg.DeBoxBotAPISecret != "api-secret" || cfg.DeBoxBotUserID != "bot-user" {
+		t.Fatalf("unexpected DeBox bot settings")
+	}
+	if cfg.DeBoxOpenAPIBase != "https://debox.example" ||
+		cfg.DeBoxNotificationChatID != "user-1" ||
+		cfg.DeBoxNotificationChatType != "group" {
+		t.Fatalf("unexpected DeBox API settings")
+	}
+	if cfg.ChainKey != "ethereum" || cfg.NoditAPIKey != "nodit-key" || cfg.NoditBaseURL != "https://nodit.example/v1" {
+		t.Fatalf("unexpected Nodit settings")
 	}
 }
 

@@ -3,11 +3,13 @@ module github.com/ZanyK4502/DeBox-Asset-alert
 go 1.26.5
 
 require (
+	github.com/debox-pro/debox-chat-go-sdk v0.0.0-20260708090730-5319abc41169
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pashagolub/pgxmock/v4 v4.9.0
 )
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
