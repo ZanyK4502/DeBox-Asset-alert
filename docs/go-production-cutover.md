@@ -1,12 +1,12 @@
 # Go production cutover
 
-This runbook switches Railway from the Python compatibility bridge to the Go
-runtime without deleting Python or changing the database.
+This runbook documents the completed Railway switch from the Python
+compatibility bridge to the Go runtime without changing the database.
 
 ## Release boundary
 
-- The bridge commit keeps `web: python run_all.py`.
-- The cutover commit uses the Railpack Go provider and starts `./out`.
+- The bridge commit `bc79691` keeps `web: python run_all.py`.
+- The cutover commit `47ed191` uses the Railpack Go provider and starts `./out`.
 - `/api/ready` returns `200` only after the application can reach PostgreSQL.
 - Python and Go use the same PostgreSQL advisory lock keys for Bot polling,
   monitoring, payment reconciliation, and per-subscription summaries.
@@ -20,7 +20,6 @@ runtime without deleting Python or changing the database.
    `production` environment.
 3. Do not change secrets, payment addresses, Bot credentials, or `DATABASE_URL`.
 4. Record the active deployment ID and bridge/cutover commit IDs.
-5. Keep the Python source and `requirements.txt`; they are removed only in step 17.
 
 ## Release A: compatibility bridge
 
@@ -59,11 +58,13 @@ missing.
 
 ## Immediate rollback
 
-1. Use Railway Instant Rollback to reactivate the successful bridge deployment.
+1. Use Railway Instant Rollback to reactivate bridge deployment
+   `3566eb3c-ed46-4938-b3c6-6f8c2a23d259`.
 2. Wait for `/api/ready` to return `200`.
 3. Confirm Python reacquires the shared worker locks.
 4. Retest `/start`, H5 login, and existing rules.
-5. Revert the cutover configuration commit before the next source deployment.
+5. If a source deployment is required, redeploy bridge commit `bc79691` instead
+   of the current branch.
 
 Do not roll back database migrations. The bridge and Go runtimes use the same
 backward-compatible schema.
@@ -71,5 +72,6 @@ backward-compatible schema.
 ## Observation
 
 Railway healthchecks protect deployment startup but are not continuous runtime
-monitoring. Keep the deployment logs open during the switch and observe the Go
-deployment through at least one complete summary cycle before step 17.
+monitoring. Go deployment `cb8bf2cb-2613-4988-8b34-7221d3dd1d48` passed the
+healthcheck, Bot/H5 acceptance, and multiple complete worker cycles before
+step 17 began.

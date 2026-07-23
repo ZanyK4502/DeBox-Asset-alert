@@ -3,6 +3,10 @@
 This document freezes the observable Python application baseline before the Go rewrite.
 It contains no credentials and does not change production behavior.
 
+This is an archived migration record. Step 17 removed the Python runtime from
+the current source tree after the Go production deployment passed acceptance.
+The original baseline remains recoverable from the commit and tag below.
+
 ## Source Baseline
 
 - Commit: `102eb504bb2d65ea07d75f88bd4633e826b5a14d`
@@ -130,7 +134,6 @@ is clean before migration work begins.
 
 ## Cutover Rule
 
-Python remains the production runtime until the Go implementation passes contract,
-database integration, Bot, monitoring, summary, payment, and H5 acceptance checks. The
-production `main` branch and Railway start command must not be switched during incremental
-implementation.
+The Go implementation passed contract, database integration, Bot, monitoring,
+summary, payment, and H5 acceptance checks before production was switched.
+This rule is retained to document the migration boundary.

@@ -1,10 +1,11 @@
 # Go Migration Test Matrix
 
-Step 14 freezes the Python production behavior before the runtime switch. The
-Python suite remains the source baseline until Step 16 removes the Python
-runtime.
+Steps 14 through 16 froze the Python production behavior and verified the Go
+replacement before the runtime switch. Step 17 removed the Python runtime and
+its tests. The Go suite is now the executable source of truth; the table below
+is retained as the historical behavior mapping used during migration.
 
-## Python Baseline
+## Archived Python Baseline
 
 The 54 Python behavior tests are grouped as follows:
 
@@ -58,7 +59,6 @@ schemas are dropped after each test.
 & "C:\Program Files\Go\bin\go.exe" test ./...
 & "C:\Program Files\Go\bin\go.exe" vet ./...
 & "C:\Program Files\Go\bin\go.exe" build ./cmd/...
-.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 node --check static/app.js
 node --check static/i18n.js
 node tests/h5_contract_test.mjs
