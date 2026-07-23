@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/bot"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/debox"
@@ -20,6 +21,7 @@ import (
 
 type dependencies struct {
 	httpapi httpapi.Dependencies
+	bot     *bot.Runner
 	monitor *monitor.Runner
 	summary *summary.Runner
 }
@@ -104,6 +106,29 @@ func buildDependencies(
 			TokenDecimals:    cfg.SubscriptionTokenDecimals,
 		},
 	)
+	botService := bot.New(bot.Dependencies{
+		Client:        messenger,
+		Repository:    repository,
+		Subscriptions: subscriptions,
+		DeBox:         deboxClient,
+		Chain:         chainClient,
+		Catalog:       catalog,
+		Settings: bot.Settings{
+			PublicAppURL:             cfg.PublicAppURL,
+			BotUserID:                cfg.DeBoxBotUserID,
+			DefaultChainKey:          cfg.ChainKey,
+			SubscriptionTokenAddress: cfg.SubscriptionTokenAddress,
+		},
+	})
+	tryBotLock := func(ctx context.Context) (bot.Lock, bool, error) {
+		return repository.TryBotPollingLock(ctx)
+	}
+	botRunner := bot.NewRunner(
+		botService,
+		messenger,
+		cfg.ReceiveMode,
+		tryBotLock,
+	)
 
 	monitorRunner := monitor.NewRunner(
 		monitorExecutor,
@@ -125,8 +150,10 @@ func buildDependencies(
 			DeBox:         deboxClient,
 			Management:    managementService,
 			Payments:      paymentService,
+			Bot:           botService,
 			Catalog:       catalog,
 		},
+		bot:     botRunner,
 		monitor: monitorRunner,
 		summary: summary.NewRunner(summaryExecutor, summary.DefaultInterval),
 	}, closeDependencies, nil

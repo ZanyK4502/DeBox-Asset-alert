@@ -50,3 +50,17 @@ func (m *Messenger) SendNotification(chatID, chatType, text string) (string, err
 	}
 	return sent.MessageID, nil
 }
+
+func (m *Messenger) Send(config boxbotapi.Chattable) (boxbotapi.Message, error) {
+	return m.bot.Send(config)
+}
+
+func (m *Messenger) GetUpdates(
+	config boxbotapi.UpdateConfig,
+) ([]boxbotapi.Update, error) {
+	return m.bot.GetUpdates(config)
+}
+
+func (m *Messenger) Self() boxbotapi.User {
+	return m.bot.Self
+}

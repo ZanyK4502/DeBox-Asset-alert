@@ -38,6 +38,7 @@ type Config struct {
 	DeBoxBotAPIKey               string
 	DeBoxBotAPISecret            string
 	DeBoxBotUserID               string
+	DeBoxWebhookKey              string
 	DeBoxOpenAPIBase             string
 	DeBoxNotificationChatID      string
 	DeBoxNotificationChatType    string
@@ -89,6 +90,7 @@ func Load() (Config, error) {
 		DeBoxBotAPIKey:               strings.TrimSpace(os.Getenv("DEBOX_BOT_API_KEY")),
 		DeBoxBotAPISecret:            strings.TrimSpace(os.Getenv("DEBOX_BOT_API_SECRET")),
 		DeBoxBotUserID:               strings.TrimSpace(os.Getenv("DEBOX_BOT_USER_ID")),
+		DeBoxWebhookKey:              strings.TrimSpace(os.Getenv("DEBOX_WEBHOOK_KEY")),
 		DeBoxOpenAPIBase:             firstNonEmpty(os.Getenv("DEBOX_OPENAPI_BASE"), defaultDeBoxAPI),
 		DeBoxNotificationChatID:      strings.TrimSpace(os.Getenv("DEBOX_NOTIFICATION_CHAT_ID")),
 		DeBoxNotificationChatType:    strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_NOTIFICATION_CHAT_TYPE"), "private")),

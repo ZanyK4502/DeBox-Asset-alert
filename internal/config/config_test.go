@@ -19,6 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 		"DEBOX_BOT_API_KEY",
 		"DEBOX_BOT_API_SECRET",
 		"DEBOX_BOT_USER_ID",
+		"DEBOX_WEBHOOK_KEY",
 		"DEBOX_OPENAPI_BASE",
 		"DEBOX_NOTIFICATION_CHAT_ID",
 		"DEBOX_NOTIFICATION_CHAT_TYPE",
@@ -77,6 +78,7 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	t.Setenv("DEBOX_BOT_API_KEY", " api-key ")
 	t.Setenv("DEBOX_BOT_API_SECRET", " api-secret ")
 	t.Setenv("DEBOX_BOT_USER_ID", " bot-user ")
+	t.Setenv("DEBOX_WEBHOOK_KEY", " webhook-key ")
 	t.Setenv("DEBOX_OPENAPI_BASE", " https://debox.example ")
 	t.Setenv("DEBOX_NOTIFICATION_CHAT_ID", " user-1 ")
 	t.Setenv("DEBOX_NOTIFICATION_CHAT_TYPE", "GROUP")
@@ -91,6 +93,9 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	}
 	if cfg.DeBoxBotAPIKey != "api-key" || cfg.DeBoxBotAPISecret != "api-secret" || cfg.DeBoxBotUserID != "bot-user" {
 		t.Fatalf("unexpected DeBox bot settings")
+	}
+	if cfg.DeBoxWebhookKey != "webhook-key" {
+		t.Fatalf("DeBoxWebhookKey = %q", cfg.DeBoxWebhookKey)
 	}
 	if cfg.PublicAppURL != "https://app.example" {
 		t.Fatalf("PublicAppURL = %q", cfg.PublicAppURL)

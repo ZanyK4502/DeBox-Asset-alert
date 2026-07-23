@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/bot"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
@@ -71,6 +72,10 @@ type PaymentService interface {
 	Verify(context.Context, int64, string, string, string) (payment.VerifyResult, error)
 }
 
+type BotService interface {
+	HandleWebhookPayload(context.Context, []byte) (bot.HandleResult, error)
+}
+
 type Dependencies struct {
 	Auth          AuthService
 	Subscriptions SubscriptionService
@@ -78,6 +83,7 @@ type Dependencies struct {
 	DeBox         DeBoxService
 	Management    ManagementService
 	Payments      PaymentService
+	Bot           BotService
 	Catalog       *plans.Catalog
 }
 
@@ -120,6 +126,8 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/payment/config", h.getPaymentConfig)
 	mux.HandleFunc("POST /api/payment/prepare", h.postPreparePayment)
 	mux.HandleFunc("POST /api/payment/verify", h.postVerifyPayment)
+	mux.HandleFunc("GET /api/bot/webhook-status", h.getBotWebhookStatus)
+	mux.HandleFunc("POST /bot/webhook", h.postBotWebhook)
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
 	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
 	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)

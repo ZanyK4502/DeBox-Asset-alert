@@ -28,7 +28,11 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var background sync.WaitGroup
-	background.Add(2)
+	background.Add(3)
+	go func() {
+		defer background.Done()
+		dependencies.bot.Run(runContext, logger)
+	}()
 	go func() {
 		defer background.Done()
 		dependencies.monitor.Run(runContext, logger)
