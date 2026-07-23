@@ -11,7 +11,7 @@ from boxbotapi import configs as bot_config
 
 from app.chain_service import balance
 from app.config import ROOT_DIR, settings
-from app.db import get_user_preferences, initialize_database, set_bot_language
+from app.db import bot_polling_lock, get_user_preferences, initialize_database, set_bot_language
 from app.languages import DEFAULT_LANGUAGE, normalize_language
 from app.openapi_service import user_info
 from app.subscription_service import entitlement
@@ -555,6 +555,12 @@ def run() -> None:
         raise RuntimeError("Long Polling is disabled. Run the FastAPI service and configure /bot/webhook.")
 
     initialize_database()
+    logging.info("Waiting for the singleton Bot polling lock")
+    with bot_polling_lock():
+        _run_listener()
+
+
+def _run_listener() -> None:
     bot_config.Debug = False
     bot_config.MessageListener = True
     write_status("starting")

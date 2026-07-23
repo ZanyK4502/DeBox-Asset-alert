@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +51,39 @@ func TestReady(t *testing.T) {
 	}
 	if recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" {
 		t.Fatalf("Content-Type = %q", recorder.Header().Get("Content-Type"))
+	}
+}
+
+func TestReadyChecksDatabase(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "available", status: http.StatusOK},
+		{name: "unavailable", err: errors.New("database offline"), status: http.StatusServiceUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			handler := New(testConfig(t), Dependencies{
+				ReadyCheck: func(context.Context) error {
+					called = true
+					return test.err
+				},
+			})
+			request := httptest.NewRequest(http.MethodGet, "/api/ready", nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if !called || recorder.Code != test.status {
+				t.Fatalf(
+					"called/status = %v/%d, want true/%d",
+					called,
+					recorder.Code,
+					test.status,
+				)
+			}
+		})
 	}
 }
 

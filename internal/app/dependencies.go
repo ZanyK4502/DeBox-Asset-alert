@@ -160,6 +160,7 @@ func buildDependencies(
 			Payments:      paymentService,
 			Bot:           botService,
 			Catalog:       catalog,
+			ReadyCheck:    repository.Ping,
 		},
 		bot:     botRunner,
 		monitor: monitorRunner,

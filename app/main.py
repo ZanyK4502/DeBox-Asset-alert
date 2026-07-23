@@ -42,6 +42,7 @@ from app.db import (
     initialize_database,
     list_notification_groups,
     list_user_watch_rules,
+    ping_database,
     update_daily_summary_settings,
     update_watch_rule_notification_language,
 )
@@ -202,6 +203,15 @@ def health() -> dict:
         "environment": settings.app_env,
         "receive_mode": settings.debox_bot_receive_mode,
     }
+
+
+@app.get("/api/ready")
+def ready() -> dict:
+    try:
+        ping_database()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"ok": True, "status": "ready"}
 
 
 @app.get("/api/bot/webhook-status")

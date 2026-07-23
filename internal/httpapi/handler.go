@@ -85,6 +85,7 @@ type Dependencies struct {
 	Payments      PaymentService
 	Bot           BotService
 	Catalog       *plans.Catalog
+	ReadyCheck    func(context.Context) error
 }
 
 func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
@@ -153,7 +154,16 @@ func (h handler) health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (h handler) ready(w http.ResponseWriter, _ *http.Request) {
+func (h handler) ready(w http.ResponseWriter, r *http.Request) {
+	if h.deps.ReadyCheck != nil {
+		if err := h.deps.ReadyCheck(r.Context()); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"ok":     false,
+				"status": "database_unavailable",
+			})
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"status": "ready",

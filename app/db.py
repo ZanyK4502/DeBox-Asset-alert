@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Iterator
+from typing import Any, ContextManager, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
@@ -15,6 +15,9 @@ from app.languages import DEFAULT_LANGUAGE, normalize_language
 UTC = timezone.utc
 SUMMARY_LOCK_NAMESPACE = 7_220_026
 DATABASE_INIT_LOCK_NAMESPACE = 7_220_026_001
+MONITOR_EXECUTION_LOCK_KEY = 7_220_026_010
+PAYMENT_RECONCILIATION_LOCK_KEY = 7_220_026_011
+BOT_POLLING_LOCK_KEY = 7_220_026_012
 
 
 def now_utc() -> datetime:
@@ -25,6 +28,41 @@ def connect() -> psycopg.Connection:
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is required. Configure PostgreSQL before starting the app.")
     return psycopg.connect(settings.database_url, row_factory=dict_row)
+
+
+def ping_database() -> None:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+
+
+@contextmanager
+def singleton_worker_lock(lock_key: int) -> Iterator[None]:
+    conn = connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (int(lock_key),))
+        yield
+    finally:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (int(lock_key),))
+        except Exception:
+            pass
+        conn.close()
+
+
+def bot_polling_lock() -> ContextManager[None]:
+    return singleton_worker_lock(BOT_POLLING_LOCK_KEY)
+
+
+def monitor_execution_lock() -> ContextManager[None]:
+    return singleton_worker_lock(MONITOR_EXECUTION_LOCK_KEY)
+
+
+def payment_reconciliation_lock() -> ContextManager[None]:
+    return singleton_worker_lock(PAYMENT_RECONCILIATION_LOCK_KEY)
 
 
 def _json_value(value: Any) -> Any:
