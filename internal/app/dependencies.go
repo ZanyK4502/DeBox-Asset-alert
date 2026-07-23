@@ -10,6 +10,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/debox"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/httpapi"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -71,6 +72,18 @@ func buildDependencies(
 		Notifications:   messenger,
 		DefaultChainKey: cfg.ChainKey,
 	})
+	paymentService := payment.New(
+		repository,
+		chainClient,
+		catalog,
+		payment.Settings{
+			Mode:             cfg.PaymentMode,
+			RecipientAddress: cfg.PaymentRecipientAddress,
+			TokenAddress:     cfg.SubscriptionTokenAddress,
+			TokenSymbol:      cfg.SubscriptionTokenSymbol,
+			TokenDecimals:    cfg.SubscriptionTokenDecimals,
+		},
+	)
 
 	return httpapi.Dependencies{
 		Auth:          auth.New(repository, deboxClient),
@@ -78,6 +91,7 @@ func buildDependencies(
 		Chain:         chainClient,
 		DeBox:         deboxClient,
 		Management:    managementService,
+		Payments:      paymentService,
 		Catalog:       catalog,
 	}, closeDependencies, nil
 }

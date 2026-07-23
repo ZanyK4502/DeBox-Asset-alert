@@ -11,17 +11,19 @@ import (
 )
 
 const (
-	defaultAppName     = "DeBox Asset Alert"
-	defaultEnvironment = "development"
-	defaultHost        = "0.0.0.0"
-	defaultPort        = 8000
-	defaultReceiveMode = "polling"
-	defaultDeBoxAPI    = "https://open.debox.pro"
-	defaultChainKey    = "bsc"
-	defaultNoditAPI    = "https://web3.nodit.io/v1"
-	defaultTokenSymbol = "USDT"
-	defaultPlanPrice   = "10"
-	defaultPlanDays    = 30
+	defaultAppName       = "DeBox Asset Alert"
+	defaultEnvironment   = "development"
+	defaultHost          = "0.0.0.0"
+	defaultPort          = 8000
+	defaultReceiveMode   = "polling"
+	defaultDeBoxAPI      = "https://open.debox.pro"
+	defaultChainKey      = "bsc"
+	defaultNoditAPI      = "https://web3.nodit.io/v1"
+	defaultTokenSymbol   = "USDT"
+	defaultTokenDecimals = 18
+	defaultPlanPrice     = "10"
+	defaultPlanDays      = 30
+	defaultPaymentMode   = "preview"
 )
 
 type Config struct {
@@ -42,9 +44,13 @@ type Config struct {
 	ChainKey                     string
 	NoditAPIKey                  string
 	NoditBaseURL                 string
+	SubscriptionTokenAddress     string
 	SubscriptionTokenSymbol      string
+	SubscriptionTokenDecimals    int
 	SubscriptionPrice            string
 	SubscriptionDays             int
+	PaymentRecipientAddress      string
+	PaymentMode                  string
 	ComplimentaryWalletAddresses string
 }
 
@@ -58,6 +64,17 @@ func Load() (Config, error) {
 	days, err := strconv.Atoi(daysValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("SUBSCRIPTION_DAYS must be an integer: %q", daysValue)
+	}
+	decimalsValue := firstNonEmpty(
+		os.Getenv("SUBSCRIPTION_TOKEN_DECIMALS"),
+		strconv.Itoa(defaultTokenDecimals),
+	)
+	decimals, err := strconv.Atoi(decimalsValue)
+	if err != nil {
+		return Config{}, fmt.Errorf(
+			"SUBSCRIPTION_TOKEN_DECIMALS must be an integer: %q",
+			decimalsValue,
+		)
 	}
 
 	cfg := Config{
@@ -78,9 +95,13 @@ func Load() (Config, error) {
 		ChainKey:                     strings.ToLower(firstNonEmpty(os.Getenv("CHAIN_KEY"), defaultChainKey)),
 		NoditAPIKey:                  strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
 		NoditBaseURL:                 firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
+		SubscriptionTokenAddress:     strings.TrimSpace(os.Getenv("SUBSCRIPTION_TOKEN_ADDRESS")),
 		SubscriptionTokenSymbol:      firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
+		SubscriptionTokenDecimals:    decimals,
 		SubscriptionPrice:            firstNonEmpty(os.Getenv("SUBSCRIPTION_PRICE"), defaultPlanPrice),
 		SubscriptionDays:             days,
+		PaymentRecipientAddress:      strings.TrimSpace(os.Getenv("PAYMENT_RECIPIENT_ADDRESS")),
+		PaymentMode:                  strings.ToLower(firstNonEmpty(os.Getenv("PAYMENT_MODE"), defaultPaymentMode)),
 		ComplimentaryWalletAddresses: strings.TrimSpace(os.Getenv("COMPLIMENTARY_WALLET_ADDRESSES")),
 	}
 	if err := cfg.Validate(); err != nil {
@@ -108,6 +129,12 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.SubscriptionTokenSymbol) == "" {
 		return fmt.Errorf("SUBSCRIPTION_TOKEN_SYMBOL must not be empty")
+	}
+	if c.SubscriptionTokenDecimals < 0 {
+		return fmt.Errorf(
+			"SUBSCRIPTION_TOKEN_DECIMALS must not be negative: %d",
+			c.SubscriptionTokenDecimals,
+		)
 	}
 	indexPath := filepath.Join(c.StaticDir, "index.html")
 	if info, err := os.Stat(indexPath); err != nil {

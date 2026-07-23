@@ -25,9 +25,13 @@ func TestLoadDefaults(t *testing.T) {
 		"CHAIN_KEY",
 		"NODIT_API_KEY",
 		"NODIT_BASE_URL",
+		"SUBSCRIPTION_TOKEN_ADDRESS",
 		"SUBSCRIPTION_TOKEN_SYMBOL",
+		"SUBSCRIPTION_TOKEN_DECIMALS",
 		"SUBSCRIPTION_PRICE",
 		"SUBSCRIPTION_DAYS",
+		"PAYMENT_RECIPIENT_ADDRESS",
+		"PAYMENT_MODE",
 		"COMPLIMENTARY_WALLET_ADDRESSES",
 	} {
 		t.Setenv(name, "")
@@ -55,6 +59,13 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.SubscriptionTokenSymbol != defaultTokenSymbol {
 		t.Fatalf("SubscriptionTokenSymbol = %q, want %q", cfg.SubscriptionTokenSymbol, defaultTokenSymbol)
+	}
+	if cfg.SubscriptionTokenDecimals != defaultTokenDecimals || cfg.PaymentMode != defaultPaymentMode {
+		t.Fatalf(
+			"payment defaults = decimals %d/mode %q",
+			cfg.SubscriptionTokenDecimals,
+			cfg.PaymentMode,
+		)
 	}
 	if cfg.SubscriptionPrice != defaultPlanPrice || cfg.SubscriptionDays != defaultPlanDays {
 		t.Fatalf("subscription price/days = %s/%d", cfg.SubscriptionPrice, cfg.SubscriptionDays)
@@ -132,8 +143,12 @@ func TestLoadRejectsInvalidPort(t *testing.T) {
 
 func TestLoadReadsSubscriptionSettings(t *testing.T) {
 	t.Setenv("SUBSCRIPTION_TOKEN_SYMBOL", "TEST")
+	t.Setenv("SUBSCRIPTION_TOKEN_ADDRESS", " 0x1111111111111111111111111111111111111111 ")
+	t.Setenv("SUBSCRIPTION_TOKEN_DECIMALS", "6")
 	t.Setenv("SUBSCRIPTION_PRICE", "12.5")
 	t.Setenv("SUBSCRIPTION_DAYS", "45")
+	t.Setenv("PAYMENT_RECIPIENT_ADDRESS", " 0x2222222222222222222222222222222222222222 ")
+	t.Setenv("PAYMENT_MODE", "LIVE")
 	t.Setenv("COMPLIMENTARY_WALLET_ADDRESSES", " 0xabc,0xdef ")
 	t.Setenv("STATIC_DIR", testStaticDir(t))
 
@@ -143,6 +158,12 @@ func TestLoadReadsSubscriptionSettings(t *testing.T) {
 	}
 	if cfg.SubscriptionTokenSymbol != "TEST" || cfg.SubscriptionPrice != "12.5" || cfg.SubscriptionDays != 45 {
 		t.Fatalf("subscription settings = %s/%s/%d", cfg.SubscriptionTokenSymbol, cfg.SubscriptionPrice, cfg.SubscriptionDays)
+	}
+	if cfg.SubscriptionTokenAddress != "0x1111111111111111111111111111111111111111" ||
+		cfg.SubscriptionTokenDecimals != 6 ||
+		cfg.PaymentRecipientAddress != "0x2222222222222222222222222222222222222222" ||
+		cfg.PaymentMode != "live" {
+		t.Fatalf("unexpected payment settings: %#v", cfg)
 	}
 	if cfg.ComplimentaryWalletAddresses != "0xabc,0xdef" {
 		t.Fatalf("ComplimentaryWalletAddresses = %q", cfg.ComplimentaryWalletAddresses)

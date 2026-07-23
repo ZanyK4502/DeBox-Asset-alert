@@ -12,6 +12,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -64,12 +65,19 @@ type ManagementService interface {
 	DeleteNotificationGroup(context.Context, string, int64) (management.NotificationGroupDeletion, error)
 }
 
+type PaymentService interface {
+	Configuration(string) (payment.Configuration, error)
+	Prepare(context.Context, string, string, string) (payment.PrepareResult, error)
+	Verify(context.Context, int64, string, string, string) (payment.VerifyResult, error)
+}
+
 type Dependencies struct {
 	Auth          AuthService
 	Subscriptions SubscriptionService
 	Chain         ChainService
 	DeBox         DeBoxService
 	Management    ManagementService
+	Payments      PaymentService
 	Catalog       *plans.Catalog
 }
 
@@ -109,6 +117,9 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/chain/balance", h.getBalance)
 	mux.HandleFunc("GET /api/debox/user", h.getDeBoxUser)
 	mux.HandleFunc("GET /api/debox/token", h.getDeBoxToken)
+	mux.HandleFunc("GET /api/payment/config", h.getPaymentConfig)
+	mux.HandleFunc("POST /api/payment/prepare", h.postPreparePayment)
+	mux.HandleFunc("POST /api/payment/verify", h.postVerifyPayment)
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
 	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
 	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)
