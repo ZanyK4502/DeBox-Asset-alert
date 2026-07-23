@@ -9,6 +9,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/debox"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/httpapi"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -51,12 +52,32 @@ func buildDependencies(
 		closeDependencies()
 		return httpapi.Dependencies{}, func() {}, fmt.Errorf("create Nodit client: %w", err)
 	}
+	messenger, err := debox.NewMessenger(
+		cfg.DeBoxBotAPIKey,
+		cfg.DeBoxBotAPISecret,
+		cfg.DeBoxOpenAPIBase,
+		nil,
+	)
+	if err != nil {
+		closeDependencies()
+		return httpapi.Dependencies{}, func() {}, fmt.Errorf("create DeBox messenger: %w", err)
+	}
+	subscriptions := subscription.New(repository, catalog, cfg.ComplimentaryWalletAddresses)
+	managementService := management.New(management.Dependencies{
+		Repository:      repository,
+		Entitlements:    subscriptions,
+		Chain:           chainClient,
+		Groups:          deboxClient,
+		Notifications:   messenger,
+		DefaultChainKey: cfg.ChainKey,
+	})
 
 	return httpapi.Dependencies{
 		Auth:          auth.New(repository, deboxClient),
-		Subscriptions: subscription.New(repository, catalog, cfg.ComplimentaryWalletAddresses),
+		Subscriptions: subscriptions,
 		Chain:         chainClient,
 		DeBox:         deboxClient,
+		Management:    managementService,
 		Catalog:       catalog,
 	}, closeDependencies, nil
 }

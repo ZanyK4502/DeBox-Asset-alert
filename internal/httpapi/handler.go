@@ -11,6 +11,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -44,11 +45,31 @@ type DeBoxService interface {
 	TokenInfo(context.Context, string, int64) (map[string]any, error)
 }
 
+type ManagementService interface {
+	ListWatchRules(context.Context, string) ([]store.WatchRule, error)
+	CreateWatchRule(context.Context, string, management.WatchRuleInput) (management.WatchRuleCreation, error)
+	DeletePausedWatchRules(context.Context, string) (management.EntitlementResult, error)
+	DeleteWatchRule(context.Context, string, int64) (management.EntitlementResult, error)
+	ChooseFreeWatchRule(context.Context, string, int64) (subscription.Entitlement, error)
+	RestoreWatchRule(context.Context, string, int64) (subscription.Entitlement, error)
+	UpdateWatchRuleLanguage(context.Context, string, int64, string) (management.WatchRuleUpdate, error)
+	SaveSummarySettings(context.Context, string, management.SummarySettingsInput) (management.SummarySettingsResult, error)
+	ListNotificationGroups(context.Context, string) ([]store.NotificationGroup, error)
+	CreateNotificationGroup(
+		context.Context,
+		string,
+		string,
+		management.NotificationGroupInput,
+	) (management.NotificationGroupCreation, error)
+	DeleteNotificationGroup(context.Context, string, int64) (management.NotificationGroupDeletion, error)
+}
+
 type Dependencies struct {
 	Auth          AuthService
 	Subscriptions SubscriptionService
 	Chain         ChainService
 	DeBox         DeBoxService
+	Management    ManagementService
 	Catalog       *plans.Catalog
 }
 
@@ -77,9 +98,20 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/subscription/current", h.getCurrentSubscription)
 	mux.HandleFunc("POST /api/subscription/free-trial", h.postFreePlan)
 	mux.HandleFunc("POST /api/subscription/complimentary", h.postComplimentaryPlan)
+	mux.HandleFunc("POST /api/subscription/summary-settings", h.postSummarySettings)
+	mux.HandleFunc("GET /api/watch-rules", h.getWatchRules)
+	mux.HandleFunc("POST /api/watch-rules", h.postWatchRule)
+	mux.HandleFunc("DELETE /api/watch-rules/paused", h.deletePausedWatchRules)
+	mux.HandleFunc("DELETE /api/watch-rules/{rule_id}", h.deleteWatchRule)
+	mux.HandleFunc("POST /api/watch-rules/{rule_id}/free-monitor", h.postFreeMonitorRule)
+	mux.HandleFunc("POST /api/watch-rules/{rule_id}/restore", h.postRestoreWatchRule)
+	mux.HandleFunc("PATCH /api/watch-rules/{rule_id}/notification-language", h.patchWatchRuleLanguage)
 	mux.HandleFunc("GET /api/chain/balance", h.getBalance)
 	mux.HandleFunc("GET /api/debox/user", h.getDeBoxUser)
 	mux.HandleFunc("GET /api/debox/token", h.getDeBoxToken)
+	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
+	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
+	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 	mux.HandleFunc("GET /", h.index)
 	return mux
