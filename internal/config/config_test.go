@@ -52,6 +52,19 @@ func TestLoadPrefersAPPPort(t *testing.T) {
 	}
 }
 
+func TestLoadReadsDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "  postgres://example.invalid/app  ")
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://example.invalid/app" {
+		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
+	}
+}
+
 func TestLoadRejectsInvalidPort(t *testing.T) {
 	t.Setenv("APP_PORT", "not-a-port")
 	t.Setenv("STATIC_DIR", testStaticDir(t))

@@ -24,6 +24,7 @@ type Config struct {
 	Port        int
 	ReceiveMode string
 	StaticDir   string
+	DatabaseURL string
 }
 
 func Load() (Config, error) {
@@ -40,6 +41,7 @@ func Load() (Config, error) {
 		Port:        port,
 		ReceiveMode: strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_BOT_RECEIVE_MODE"), defaultReceiveMode)),
 		StaticDir:   firstNonEmpty(os.Getenv("STATIC_DIR"), "static"),
+		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")),
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
