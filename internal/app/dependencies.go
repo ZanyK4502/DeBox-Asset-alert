@@ -15,11 +15,13 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/summary"
 )
 
 type dependencies struct {
 	httpapi httpapi.Dependencies
 	monitor *monitor.Runner
+	summary *summary.Runner
 }
 
 func buildDependencies(
@@ -108,6 +110,13 @@ func buildDependencies(
 		tryMonitorLock,
 		monitor.DefaultInterval,
 	)
+	summaryExecutor := summary.New(summary.Dependencies{
+		Repository:    repository,
+		Notifications: messenger,
+		TryLock: func(ctx context.Context, subscriptionID int64) (summary.Lock, bool, error) {
+			return repository.TryScheduledSummaryLock(ctx, subscriptionID)
+		},
+	})
 	return dependencies{
 		httpapi: httpapi.Dependencies{
 			Auth:          auth.New(repository, deboxClient),
@@ -119,5 +128,6 @@ func buildDependencies(
 			Catalog:       catalog,
 		},
 		monitor: monitorRunner,
+		summary: summary.NewRunner(summaryExecutor, summary.DefaultInterval),
 	}, closeDependencies, nil
 }

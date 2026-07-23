@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
@@ -26,15 +27,20 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	monitorDone := make(chan struct{})
+	var background sync.WaitGroup
+	background.Add(2)
 	go func() {
-		defer close(monitorDone)
+		defer background.Done()
 		dependencies.monitor.Run(runContext, logger)
+	}()
+	go func() {
+		defer background.Done()
+		dependencies.summary.Run(runContext, logger)
 	}()
 
 	err = runServer(runContext, cfg, httpapi.New(cfg, dependencies.httpapi), logger)
 	cancel()
-	<-monitorDone
+	background.Wait()
 	return err
 }
 
