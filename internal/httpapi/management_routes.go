@@ -161,6 +161,138 @@ func (h handler) patchWatchRuleLanguage(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h handler) getCombinationRules(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+	if h.deps.Management == nil {
+		serviceUnavailable(w)
+		return
+	}
+	rules, err := h.deps.Management.ListCombinationRules(r.Context(), session.DeBoxUserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"combination_rules": rules})
+}
+
+func (h handler) postCombinationRule(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+	if h.deps.Management == nil {
+		serviceUnavailable(w)
+		return
+	}
+	input := management.DefaultCombinationRuleInput()
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := h.deps.Management.CreateCombinationRule(
+		r.Context(),
+		session.DeBoxUserID,
+		input,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handler) deleteCombinationRule(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.managementRuleRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	result, err := h.deps.Management.DeleteCombinationRule(
+		r.Context(),
+		session.DeBoxUserID,
+		combinationID,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handler) postRestoreCombinationRule(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.managementRuleRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	result, err := h.deps.Management.RestoreCombinationRule(
+		r.Context(),
+		session.DeBoxUserID,
+		combinationID,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handler) patchCombinationRuleLanguage(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.managementRuleRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	var input ruleLanguageInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := h.deps.Management.UpdateCombinationRuleLanguage(
+		r.Context(),
+		session.DeBoxUserID,
+		combinationID,
+		input.Language,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handler) getAggregateEvents(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+	if h.deps.Management == nil {
+		serviceUnavailable(w)
+		return
+	}
+	beforeID, err := optionalPositiveInt64(r.URL.Query().Get("before_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("before_id 必须是正整数。"))
+		return
+	}
+	limit, err := optionalPositiveInt(r.URL.Query().Get("limit"))
+	if err != nil || limit > 100 {
+		writeError(w, http.StatusBadRequest, errors.New("limit 必须是 1 到 100 之间的整数。"))
+		return
+	}
+	page, err := h.deps.Management.ListAggregationEventHistory(
+		r.Context(),
+		session.DeBoxUserID,
+		beforeID,
+		limit,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
 func (h handler) getNotificationGroups(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.requireSession(w, r)
 	if !ok {
@@ -220,6 +352,28 @@ func (h handler) deleteNotificationGroup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func optionalPositiveInt64(raw string) (int64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, errors.New("value must be a positive integer")
+	}
+	return value, nil
+}
+
+func optionalPositiveInt(raw string) (int, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, errors.New("value must be a positive integer")
+	}
+	return value, nil
 }
 
 func (h handler) managementRuleRequest(

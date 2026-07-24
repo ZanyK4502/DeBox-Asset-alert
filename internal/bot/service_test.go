@@ -193,7 +193,7 @@ func TestPrivateStartCommandsSendSavedLanguageMenu(t *testing.T) {
 			if !ok {
 				t.Fatalf("sent config type = %T", sent[0])
 			}
-			if !strings.Contains(message.Text, "Monitor wallet addresses") {
+			if !strings.Contains(message.Text, "Monitor on-chain addresses") {
 				t.Fatalf("menu text does not use saved English: %q", message.Text)
 			}
 			if message.ChatID != "chat-id" || message.ChatType != "private" {
@@ -259,7 +259,7 @@ func TestLanguageCallbackPersistsForClickingUser(t *testing.T) {
 		t.Fatalf("saved language = %q/%q", repository.setUserID, repository.setValue)
 	}
 	edit := client.sentConfigs()[0].(boxbotapi.EditMessageTextConfig)
-	if !strings.Contains(edit.Text, "Monitor wallet addresses") {
+	if !strings.Contains(edit.Text, "Monitor on-chain addresses") {
 		t.Fatalf("edited menu is not English: %q", edit.Text)
 	}
 }

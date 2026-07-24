@@ -311,6 +311,23 @@ func (f *fakeRepository) RestoreWatchRuleWithinQuota(
 	return store.WatchRule{}, f.restoreErr
 }
 
+func (f *fakeRepository) CreateCombinationRuleWithinQuota(
+	_ context.Context,
+	_ store.CreateCombinationRuleParams,
+	_ store.QuotaPolicy,
+) (store.CombinationRule, error) {
+	return store.CombinationRule{}, nil
+}
+
+func (f *fakeRepository) RestoreCombinationRuleWithinQuota(
+	_ context.Context,
+	_ int64,
+	_ string,
+	_ store.QuotaPolicy,
+) (store.CombinationRule, error) {
+	return store.CombinationRule{}, nil
+}
+
 func (f *fakeRepository) CreateNotificationGroupWithinQuota(
 	_ context.Context,
 	_ string,

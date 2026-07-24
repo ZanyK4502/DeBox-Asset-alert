@@ -13,9 +13,14 @@ const (
 	BalanceChange      = "balance_change"
 	Incoming           = "incoming"
 	Outgoing           = "outgoing"
-	BalanceThreshold   = "balance_threshold"
 	ApprovalChange     = "approval_change"
 	AddressInteraction = "address_interaction"
+
+	// BalanceThreshold is the persisted legacy code for the low-balance rule.
+	// Keep it stable so existing rules continue to run without a data migration.
+	BalanceThreshold     = "balance_threshold"
+	LowBalanceThreshold  = BalanceThreshold
+	HighBalanceThreshold = "balance_threshold_high"
 )
 
 var planOrder = []string{Free, Standard, Professional}
@@ -24,7 +29,8 @@ var ruleTypes = []RuleType{
 	{Code: BalanceChange, Label: "余额变化", Description: "余额发生任意变化时推送通知。"},
 	{Code: Incoming, Label: "转入提醒", Description: "余额增加并达到阈值时推送通知。"},
 	{Code: Outgoing, Label: "转出提醒", Description: "余额减少并达到阈值时推送通知。"},
-	{Code: BalanceThreshold, Label: "余额阈值", Description: "余额首次达到或低于阈值时提醒一次；持续低于不重复，恢复后再次跌破会重新提醒。"},
+	{Code: BalanceThreshold, Label: "低余额阈值", Description: "余额首次达到或低于阈值时提醒一次；持续低于不重复，恢复后再次跌破会重新提醒。"},
+	{Code: HighBalanceThreshold, Label: "高余额阈值", Description: "余额首次达到或高于阈值时提醒一次；持续高于不重复，回落后再次突破会重新提醒。"},
 	{Code: ApprovalChange, Label: "授权 / Approve 监控", Description: "钱包对指定合约的代币授权额度发生变化时推送通知。"},
 	{Code: AddressInteraction, Label: "指定地址交互提醒", Description: "钱包与指定地址或合约发生交互时推送通知。"},
 }
@@ -72,6 +78,18 @@ func (p Plan) AllowsSummaryTarget(chatType string) bool {
 	return false
 }
 
+func (p Plan) AllowsStageNotifications() bool {
+	return p.Code == Standard || p.Code == Professional
+}
+
+func (p Plan) AllowsCombinationRules() bool {
+	return p.Code == Professional
+}
+
+func IsBalanceThreshold(ruleType string) bool {
+	return ruleType == BalanceThreshold || ruleType == HighBalanceThreshold
+}
+
 type Catalog struct {
 	plans map[string]Plan
 }
@@ -101,7 +119,7 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			1,
 			0,
 			&dailyLimit,
-			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold},
+			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold},
 			false,
 			false,
 			nil,
@@ -117,7 +135,7 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			10,
 			0,
 			nil,
-			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, ApprovalChange},
+			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold, ApprovalChange},
 			false,
 			true,
 			[]string{"private"},
@@ -133,7 +151,7 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			100,
 			3,
 			nil,
-			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, ApprovalChange, AddressInteraction},
+			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold, ApprovalChange, AddressInteraction},
 			true,
 			true,
 			[]string{"private", "group"},

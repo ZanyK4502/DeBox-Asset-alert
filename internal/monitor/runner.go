@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const DefaultInterval = 60 * time.Second
+const (
+	DefaultInterval        = 60 * time.Second
+	historyCleanupInterval = 24 * time.Hour
+)
 
 type Lock interface {
 	Unlock(context.Context) error
@@ -15,9 +18,10 @@ type Lock interface {
 type TryLockFunc func(context.Context) (Lock, bool, error)
 
 type Runner struct {
-	executor *Executor
-	tryLock  TryLockFunc
-	interval time.Duration
+	executor      *Executor
+	tryLock       TryLockFunc
+	interval      time.Duration
+	lastCleanupAt time.Time
 }
 
 func NewRunner(executor *Executor, tryLock TryLockFunc, interval time.Duration) *Runner {
@@ -69,12 +73,32 @@ func (r *Runner) runCycle(ctx context.Context, logger *slog.Logger) {
 	result, err := r.executor.CheckAll(ctx, 200)
 	if err != nil {
 		logger.Error("monitor cycle failed", "error", err)
+	} else {
+		logger.Info(
+			"monitor cycle completed",
+			"checked", result.Checked,
+			"alerted", result.Alerted,
+			"errors", len(result.Errors),
+		)
+	}
+	r.cleanupHistory(ctx, logger)
+}
+
+func (r *Runner) cleanupHistory(ctx context.Context, logger *slog.Logger) {
+	now := time.Now()
+	if !r.lastCleanupAt.IsZero() && now.Sub(r.lastCleanupAt) < historyCleanupInterval {
 		return
 	}
+	result, err := r.executor.CleanupAggregationHistory(ctx)
+	if err != nil {
+		logger.Error("aggregation history cleanup failed", "error", err)
+		return
+	}
+	r.lastCleanupAt = now
 	logger.Info(
-		"monitor cycle completed",
-		"checked", result.Checked,
-		"alerted", result.Alerted,
-		"errors", len(result.Errors),
+		"aggregation history cleanup completed",
+		"notifications_deleted", result.NotificationsDeleted,
+		"events_deleted", result.EventsDeleted,
+		"windows_deleted", result.WindowsDeleted,
 	)
 }

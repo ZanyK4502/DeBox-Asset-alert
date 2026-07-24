@@ -15,14 +15,17 @@ import (
 )
 
 type fakeManagementService struct {
-	calls        []string
-	users        []string
-	groupWallet  string
-	watchInput   management.WatchRuleInput
-	summaryInput management.SummarySettingsInput
-	groupInput   management.NotificationGroupInput
-	language     string
-	ids          []int64
+	calls            []string
+	users            []string
+	groupWallet      string
+	watchInput       management.WatchRuleInput
+	summaryInput     management.SummarySettingsInput
+	groupInput       management.NotificationGroupInput
+	combinationInput management.CombinationRuleInput
+	language         string
+	ids              []int64
+	historyBeforeID  int64
+	historyLimit     int
 }
 
 func (f *fakeManagementService) record(call, userID string) {
@@ -99,6 +102,71 @@ func (f *fakeManagementService) UpdateWatchRuleLanguage(
 	return management.WatchRuleUpdate{}, nil
 }
 
+func (f *fakeManagementService) ListCombinationRules(
+	_ context.Context,
+	userID string,
+) ([]store.CombinationRule, error) {
+	f.record("list-combinations", userID)
+	return []store.CombinationRule{}, nil
+}
+
+func (f *fakeManagementService) CreateCombinationRule(
+	_ context.Context,
+	userID string,
+	input management.CombinationRuleInput,
+) (management.CombinationRuleCreation, error) {
+	f.record("create-combination", userID)
+	f.combinationInput = input
+	return management.CombinationRuleCreation{}, nil
+}
+
+func (f *fakeManagementService) DeleteCombinationRule(
+	_ context.Context,
+	userID string,
+	combinationID int64,
+) (management.EntitlementResult, error) {
+	f.record("delete-combination", userID)
+	f.ids = append(f.ids, combinationID)
+	return management.EntitlementResult{OK: true}, nil
+}
+
+func (f *fakeManagementService) RestoreCombinationRule(
+	_ context.Context,
+	userID string,
+	combinationID int64,
+) (management.CombinationRuleUpdate, error) {
+	f.record("restore-combination", userID)
+	f.ids = append(f.ids, combinationID)
+	return management.CombinationRuleUpdate{}, nil
+}
+
+func (f *fakeManagementService) UpdateCombinationRuleLanguage(
+	_ context.Context,
+	userID string,
+	combinationID int64,
+	language string,
+) (management.CombinationRuleUpdate, error) {
+	f.record("combination-language", userID)
+	f.ids = append(f.ids, combinationID)
+	f.language = language
+	return management.CombinationRuleUpdate{}, nil
+}
+
+func (f *fakeManagementService) ListAggregationEventHistory(
+	_ context.Context,
+	userID string,
+	beforeID int64,
+	limit int,
+) (store.AggregationHistoryPage, error) {
+	f.record("aggregate-events", userID)
+	f.historyBeforeID = beforeID
+	f.historyLimit = limit
+	return store.AggregationHistoryPage{
+		Events:        []store.AggregationHistoryEvent{},
+		RetentionDays: 30,
+	}, nil
+}
+
 func (f *fakeManagementService) SaveSummarySettings(
 	_ context.Context,
 	userID string,
@@ -173,6 +241,23 @@ func TestManagementRoutesUseAuthenticatedIdentityAndDefaults(t *testing.T) {
 			path:   "/api/watch-rules/7/notification-language",
 			body:   `{"language":"en"}`,
 		},
+		{method: http.MethodGet, path: "/api/combination-rules"},
+		{
+			method: http.MethodPost,
+			path:   "/api/combination-rules",
+			body:   `{}`,
+		},
+		{method: http.MethodDelete, path: "/api/combination-rules/9"},
+		{method: http.MethodPost, path: "/api/combination-rules/10/restore"},
+		{
+			method: http.MethodPatch,
+			path:   "/api/combination-rules/11/notification-language",
+			body:   `{"language":"en"}`,
+		},
+		{
+			method: http.MethodGet,
+			path:   "/api/aggregate-events?before_id=120&limit=25",
+		},
 		{method: http.MethodGet, path: "/api/notification-groups"},
 		{
 			method: http.MethodPost,
@@ -223,6 +308,63 @@ func TestManagementRoutesUseAuthenticatedIdentityAndDefaults(t *testing.T) {
 	if managementService.language != "en" ||
 		managementService.groupInput.Link != "https://m.debox.pro/group?id=group-1" {
 		t.Fatalf("language/group input = %q / %#v", managementService.language, managementService.groupInput)
+	}
+	if managementService.combinationInput.CycleType != "fixed" ||
+		managementService.combinationInput.CycleMinutes != 60 ||
+		managementService.combinationInput.NotificationChatType != "private" ||
+		managementService.combinationInput.NotificationLanguage != "zh" {
+		t.Fatalf("combination defaults = %#v", managementService.combinationInput)
+	}
+	if managementService.historyBeforeID != 120 ||
+		managementService.historyLimit != 25 {
+		t.Fatalf(
+			"history pagination = %d/%d",
+			managementService.historyBeforeID,
+			managementService.historyLimit,
+		)
+	}
+}
+
+func TestAggregateEventsRouteRejectsInvalidPagination(t *testing.T) {
+	authService := &fakeAuthService{session: &store.AuthSession{
+		DeBoxUserID:   "user-1",
+		WalletAddress: "0x1111111111111111111111111111111111111111",
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}}
+	handler := New(testConfig(t), Dependencies{
+		Auth:       authService,
+		Management: &fakeManagementService{},
+	})
+	for _, path := range []string{
+		"/api/aggregate-events?before_id=0",
+		"/api/aggregate-events?before_id=bad",
+		"/api/aggregate-events?limit=0",
+		"/api/aggregate-events?limit=101",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: "session-token"})
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, body = %s", path, recorder.Code, recorder.Body)
+		}
+	}
+}
+
+func TestAggregateEventsRouteRequiresAuthenticatedSession(t *testing.T) {
+	managementService := &fakeManagementService{}
+	handler := New(testConfig(t), Dependencies{
+		Auth:       &fakeAuthService{},
+		Management: managementService,
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/aggregate-events", nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+	if len(managementService.calls) != 0 {
+		t.Fatalf("management calls = %#v", managementService.calls)
 	}
 }
 

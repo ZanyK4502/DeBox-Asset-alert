@@ -178,7 +178,7 @@ func TestPublicPlansAndChains(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&plansBody); err != nil {
 		t.Fatalf("decode plans: %v", err)
 	}
-	if len(plansBody.Plans) != 3 || len(plansBody.RuleTypes) != 6 {
+	if len(plansBody.Plans) != 3 || len(plansBody.RuleTypes) != 7 {
 		t.Fatalf("unexpected plan catalog: %#v", plansBody)
 	}
 }

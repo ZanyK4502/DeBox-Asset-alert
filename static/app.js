@@ -24,10 +24,25 @@ const state = {
   tokenInfo: null,
   tokenError: "",
   balanceInfo: null,
+  combinationRules: [],
+  combinationMembers: [],
+  aggregateEvents: [],
+  aggregateStats: null,
+  aggregateRetentionDays: 30,
+  aggregateHasMore: false,
+  aggregateNextBeforeId: null,
+  aggregateLoading: false,
+  aggregateLoadingMore: false,
+  aggregateLoadError: "",
+  aggregateScrollPaused: false,
 };
 
 const $ = (id) => document.getElementById(id);
 const I18N = window.H5_I18N;
+let aggregateScrollFrame = 0;
+let aggregateScrollLastTime = 0;
+let aggregateScrollDirection = 1;
+let aggregateScrollHoverPaused = false;
 
 function t(key, values = {}) {
   const dictionary = I18N[state.uiLanguage] || I18N.zh;
@@ -136,11 +151,13 @@ function renderLocalizedState() {
   renderPlans();
   renderChains();
   renderRuleTypes();
+  renderCombinationDraft();
   renderProfile();
   renderSubscription(false);
   renderSummaryCapability();
   renderGroups();
   renderRules();
+  renderAggregateEvents();
   renderPaymentStatus();
   renderTokenInfo();
   renderBalanceInfo();
@@ -193,6 +210,14 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function guardAsync(handler) {
+  return (...args) => {
+    Promise.resolve(handler(...args)).catch((error) => {
+      toast(localizedApiError(error?.message));
+    });
+  };
 }
 
 function walletProvider() {
@@ -272,8 +297,25 @@ function currentPlan() {
   return state.entitlement?.plan || null;
 }
 
-function currentChain() {
-  const key = $("chainSelect").value || state.chains[0]?.key || "";
+function chainPickerIds(prefix = "") {
+  return prefix
+    ? {
+        select: `${prefix}ChainSelect`,
+        picker: `${prefix}ChainPicker`,
+        button: `${prefix}ChainPickerButton`,
+        menu: `${prefix}ChainPickerMenu`,
+      }
+    : {
+        select: "chainSelect",
+        picker: "chainPicker",
+        button: "chainPickerButton",
+        menu: "chainPickerMenu",
+      };
+}
+
+function currentChain(prefix = "") {
+  const ids = chainPickerIds(prefix);
+  const key = $(ids.select).value || state.chains[0]?.key || "";
   return state.chains.find((chain) => chain.key === key) || state.chains[0] || null;
 }
 
@@ -285,10 +327,11 @@ function chainOptionHtml(chain) {
   `;
 }
 
-function renderChainPicker() {
-  const selected = currentChain();
-  const button = $("chainPickerButton");
-  const menu = $("chainPickerMenu");
+function renderChainPicker(prefix = "") {
+  const ids = chainPickerIds(prefix);
+  const selected = currentChain(prefix);
+  const button = $(ids.button);
+  const menu = $(ids.menu);
   if (!selected) {
     button.textContent = t("selectChain");
     menu.innerHTML = "";
@@ -304,11 +347,11 @@ function renderChainPicker() {
       `
     )
     .join("");
-  document.querySelectorAll("[data-chain]").forEach((option) => {
+  menu.querySelectorAll("[data-chain]").forEach((option) => {
     option.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      selectChain(option.dataset.chain);
+      selectChain(option.dataset.chain, prefix);
     });
     option.addEventListener("click", (event) => {
       event.preventDefault();
@@ -317,9 +360,15 @@ function renderChainPicker() {
   });
 }
 
-function closeChainPicker() {
-  $("chainPickerMenu").hidden = true;
-  $("chainPickerButton").setAttribute("aria-expanded", "false");
+function closeChainPicker(prefix = "") {
+  const ids = chainPickerIds(prefix);
+  $(ids.menu).hidden = true;
+  $(ids.button).setAttribute("aria-expanded", "false");
+}
+
+function closeAllChainPickers() {
+  closeChainPicker();
+  closeChainPicker("combination");
 }
 
 function shieldTapThrough(duration = 260) {
@@ -331,49 +380,53 @@ function shieldTapThrough(duration = 260) {
   }, duration);
 }
 
-function toggleChainPicker() {
-  const menu = $("chainPickerMenu");
+function toggleChainPicker(prefix = "") {
+  const ids = chainPickerIds(prefix);
+  const menu = $(ids.menu);
   const willOpen = menu.hidden;
+  closeAllChainPickers();
   menu.hidden = !willOpen;
-  $("chainPickerButton").setAttribute("aria-expanded", String(willOpen));
+  $(ids.button).setAttribute("aria-expanded", String(willOpen));
   if (willOpen) {
-    const active = $("chainPickerMenu").querySelector(".chain-picker-option.active");
+    const active = menu.querySelector(".chain-picker-option.active");
     active?.scrollIntoView({ block: "nearest" });
   }
 }
 
-function selectChain(chainKey) {
-  $("chainSelect").value = chainKey;
-  closeChainPicker();
+function selectChain(chainKey, prefix = "") {
+  const ids = chainPickerIds(prefix);
+  $(ids.select).value = chainKey;
+  closeChainPicker(prefix);
   shieldTapThrough();
-  $("chainSelect").dispatchEvent(new Event("change", { bubbles: true }));
-  closeChainPicker();
-  $("chainPickerButton").focus();
+  $(ids.select).dispatchEvent(new Event("change", { bubbles: true }));
+  closeChainPicker(prefix);
+  $(ids.button).focus();
 }
 
-function moveChainSelection(direction) {
+function moveChainSelection(direction, prefix = "") {
   if (!state.chains.length) return;
-  const currentKey = $("chainSelect").value || state.chains[0].key;
+  const ids = chainPickerIds(prefix);
+  const currentKey = $(ids.select).value || state.chains[0].key;
   const currentIndex = Math.max(0, state.chains.findIndex((chain) => chain.key === currentKey));
   const nextIndex = (currentIndex + direction + state.chains.length) % state.chains.length;
-  selectChain(state.chains[nextIndex].key);
-  $("chainPickerMenu").hidden = false;
-  $("chainPickerButton").setAttribute("aria-expanded", "true");
+  selectChain(state.chains[nextIndex].key, prefix);
+  $(ids.menu).hidden = false;
+  $(ids.button).setAttribute("aria-expanded", "true");
 }
 
-function handleChainPickerKeydown(event) {
+function handleChainPickerKeydown(event, prefix = "") {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    toggleChainPicker();
+    toggleChainPicker(prefix);
     return;
   }
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
-    moveChainSelection(event.key === "ArrowDown" ? 1 : -1);
+    moveChainSelection(event.key === "ArrowDown" ? 1 : -1, prefix);
     return;
   }
   if (event.key === "Escape") {
-    closeChainPicker();
+    closeChainPicker(prefix);
   }
 }
 
@@ -392,12 +445,23 @@ function resetConnectionState() {
   state.tokenInfo = null;
   state.tokenError = "";
   state.balanceInfo = null;
+  state.combinationRules = [];
+  state.combinationMembers = [];
+  state.aggregateEvents = [];
+  state.aggregateStats = null;
+  state.aggregateRetentionDays = 30;
+  state.aggregateHasMore = false;
+  state.aggregateNextBeforeId = null;
+  state.aggregateLoading = false;
+  state.aggregateLoadingMore = false;
+  state.aggregateLoadError = "";
+  state.aggregateScrollPaused = false;
   $("walletAddressInput").value = "";
   $("profileBox").innerHTML = t("noWallet");
   $("subscriptionBox").innerHTML = t("connectToView");
-  $("rulesList").innerHTML = "";
-  $("pausedRulesWrap").hidden = true;
-  $("pausedRulesList").innerHTML = "";
+  renderRules();
+  renderCombinationDraft();
+  renderAggregateEvents();
   $("groupsList").innerHTML = "";
   renderTokenInfo();
   renderBalanceInfo();
@@ -412,25 +476,31 @@ function showIdentityModal() {
 }
 
 function renderChains() {
-  const selectedChain = $("chainSelect").value;
-  $("chainSelect").innerHTML = state.chains
-    .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.name)}</option>`)
-    .join("");
-  if (state.chains.some((chain) => chain.key === selectedChain)) {
-    $("chainSelect").value = selectedChain;
-  }
-  renderChainPicker();
+  ["", "combination"].forEach((prefix) => {
+    const ids = chainPickerIds(prefix);
+    const selectedChain = $(ids.select).value;
+    $(ids.select).innerHTML = state.chains
+      .map((chain) => `<option value="${escapeHtml(chain.key)}">${escapeHtml(chain.name)}</option>`)
+      .join("");
+    if (state.chains.some((chain) => chain.key === selectedChain)) {
+      $(ids.select).value = selectedChain;
+    }
+    renderChainPicker(prefix);
+  });
 }
 
 function renderRuleTypes() {
-  const selectedRuleType = $("ruleTypeSelect").value;
-  $("ruleTypeSelect").innerHTML = state.ruleTypes
-    .map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(localizedRuleLabel(rule.code))}</option>`)
-    .join("");
-  if (state.ruleTypes.some((rule) => rule.code === selectedRuleType)) {
-    $("ruleTypeSelect").value = selectedRuleType;
-  }
+  ["ruleTypeSelect", "combinationRuleTypeSelect"].forEach((id) => {
+    const selectedRuleType = $(id).value;
+    $(id).innerHTML = state.ruleTypes
+      .map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(localizedRuleLabel(rule.code))}</option>`)
+      .join("");
+    if (state.ruleTypes.some((rule) => rule.code === selectedRuleType)) {
+      $(id).value = selectedRuleType;
+    }
+  });
   updateRuleFields();
+  updateCombinationMemberFields();
 }
 
 function renderPlans() {
@@ -528,22 +598,28 @@ function renderSubscription(syncSummary = true) {
 function renderGroups() {
   if (!state.deboxUserId) {
     $("groupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
+    $("combinationGroupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("summaryGroupSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("groupsList").innerHTML = "";
     return;
   }
   const selectedRuleGroup = $("groupTargetSelect").value;
+  const selectedCombinationGroup = $("combinationGroupTargetSelect").value;
   const selectedSummaryGroup = $("summaryGroupSelect").value;
   const options = state.groups.length
     ? state.groups.map((group) => `<option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>`).join("")
     : `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
   $("groupTargetSelect").innerHTML = options;
+  $("combinationGroupTargetSelect").innerHTML = options;
   $("summaryGroupSelect").innerHTML = options;
   if (state.groups.some((group) => group.gid === selectedRuleGroup)) {
     $("groupTargetSelect").value = selectedRuleGroup;
   }
   if (state.groups.some((group) => group.gid === selectedSummaryGroup)) {
     $("summaryGroupSelect").value = selectedSummaryGroup;
+  }
+  if (state.groups.some((group) => group.gid === selectedCombinationGroup)) {
+    $("combinationGroupTargetSelect").value = selectedCombinationGroup;
   }
 
   if (!state.groups.length) {
@@ -564,14 +640,23 @@ function renderGroups() {
       .join("");
   }
   document.querySelectorAll("[data-delete-group]").forEach((button) => {
-    button.addEventListener("click", () => deleteGroup(button.dataset.deleteGroup));
+    button.addEventListener("click", guardAsync(() => deleteGroup(button.dataset.deleteGroup)));
   });
   updateTargetVisibility();
+  updateCombinationTargetVisibility();
   updateSummaryTargetVisibility();
 }
 
 function ruleLabel(code) {
   return localizedRuleLabel(code);
+}
+
+function isThresholdlessRule(ruleType) {
+  return ruleType === "approval_change" || ruleType === "address_interaction";
+}
+
+function requiresPositiveThreshold(ruleType) {
+  return ["incoming", "outgoing", "balance_threshold", "balance_threshold_high"].includes(ruleType);
 }
 
 function localizedPauseReason(rule, plan) {
@@ -616,8 +701,24 @@ function ruleItemHtml(rule, paused = false) {
     <div class="list-item${paused ? " paused" : ""}">
       <div>
         <strong>${escapeHtml(ruleLabel(rule.rule_type))} / ${escapeHtml(rule.chain_key)}</strong>
-        <span>${escapeHtml(t("ruleThreshold", { address: shortAddress(rule.wallet_address), threshold: rule.threshold }))}</span>
+        <span>${escapeHtml(
+          isThresholdlessRule(rule.rule_type)
+            ? shortAddress(rule.wallet_address)
+            : t("ruleThreshold", { address: shortAddress(rule.wallet_address), threshold: rule.threshold })
+        )}</span>
         <small class="muted">${escapeHtml(rule.notification_chat_type === "group" ? rule.notification_label || rule.notification_chat_id : t("privateNotification"))}</small>
+        <div class="rule-meta">
+          <span>${escapeHtml(t("singleRuleLabel"))}</span>
+          <span>${escapeHtml(rule.delivery_mode === "stage" ? t("deliveryStage") : t("deliveryRealtime"))}</span>
+          ${
+            rule.delivery_mode === "stage"
+              ? `<span>${escapeHtml(t("cycleSummary", {
+                  minutes: rule.cycle_minutes,
+                  count: rule.trigger_count_threshold,
+                }))}</span>`
+              : ""
+          }
+        </div>
         ${paused ? `<small class="pause-reason">${escapeHtml(localizedPauseReason(rule, plan))}</small>` : ""}
       </div>
       <div class="list-actions">
@@ -635,32 +736,368 @@ function ruleItemHtml(rule, paused = false) {
   `;
 }
 
+function combinationIsActive(rule) {
+  return Number(rule?.enabled) === 1 && rule?.run_status === "active";
+}
+
+function combinationCanRestore(rule) {
+  return Number(rule?.enabled) === 1 && currentPlan()?.code === "professional";
+}
+
+function combinationItemHtml(combination, paused = false) {
+  const members = combination.members || [];
+  const memberSummary = members
+    .map((member) => {
+      const rule = member.rule || {};
+      return `${ruleLabel(rule.rule_type)} · ${shortAddress(rule.wallet_address)} · ${member.required_trigger_count}`;
+    })
+    .join(" / ");
+  return `
+    <div class="list-item${paused ? " paused" : ""}">
+      <div>
+        <strong>${escapeHtml(combination.note || t("combinationLabel"))}</strong>
+        <span>${escapeHtml(t("memberCount", { count: members.length }))}</span>
+        <small class="muted">${escapeHtml(combination.notification_chat_type === "group" ? combination.notification_label || combination.notification_chat_id : t("privateNotification"))}</small>
+        <div class="rule-meta">
+          <span>${escapeHtml(t("combinationLabel"))}</span>
+          <span>${escapeHtml(combination.cycle_type === "follow" ? t("followCycle") : t("fixedCycle"))}</span>
+          <span>${escapeHtml(t("cycleLength", { minutes: combination.cycle_minutes }))}</span>
+        </div>
+        <div class="combination-members-summary">${escapeHtml(memberSummary)}</div>
+        ${paused ? `<small class="pause-reason">${escapeHtml(t("rulePaused"))}</small>` : ""}
+      </div>
+      <div class="list-actions">
+        <label class="rule-language-control">
+          <span>${escapeHtml(t("notificationLanguage"))}</span>
+          <select data-combination-language="${escapeHtml(combination.id)}" data-current-language="${ruleLanguage(combination)}" aria-label="${escapeHtml(t("notificationLanguage"))}">
+            <option value="zh"${ruleLanguage(combination) === "zh" ? " selected" : ""}>${escapeHtml(t("chinese"))}</option>
+            <option value="en"${ruleLanguage(combination) === "en" ? " selected" : ""}>English</option>
+          </select>
+        </label>
+        ${
+          paused && combinationCanRestore(combination)
+            ? `<button class="secondary" type="button" data-restore-combination="${escapeHtml(combination.id)}">${escapeHtml(t("restoreMonitor"))}</button>`
+            : ""
+        }
+        <button class="secondary" type="button" data-delete-combination="${escapeHtml(combination.id)}">${escapeHtml(t("delete"))}</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderRules() {
   if (!state.deboxUserId) {
-    $("rulesList").innerHTML = "";
-    $("pausedRulesWrap").hidden = true;
-    $("pausedRulesList").innerHTML = "";
+    $("rulesList").innerHTML = `<div class="notice muted">${escapeHtml(t("noActiveRules"))}</div>`;
+    $("pausedRulesList").innerHTML = `<div class="notice muted">${escapeHtml(t("noPausedRules"))}</div>`;
+    $("deletePausedRulesBtn").disabled = true;
     return;
   }
-  const rules = state.entitlement?.active_rules || state.entitlement?.rules || [];
-  const pausedRules = state.entitlement?.paused_rules || [];
-  if (!rules.length) {
-    $("rulesList").innerHTML = `<div class="notice muted">${escapeHtml(pausedRules.length ? t("noActiveRules") : t("noRules"))}</div>`;
+  const rules = (state.entitlement?.active_rules || state.entitlement?.rules || [])
+    .filter((rule) => rule.rule_scope !== "combination");
+  const pausedRules = (state.entitlement?.paused_rules || [])
+    .filter((rule) => rule.rule_scope !== "combination");
+  const activeCombinations = state.combinationRules.filter(combinationIsActive);
+  const pausedCombinations = state.combinationRules.filter((rule) => !combinationIsActive(rule));
+  if (!rules.length && !activeCombinations.length) {
+    $("rulesList").innerHTML = `<div class="notice muted">${escapeHtml(t("noActiveRules"))}</div>`;
   } else {
-    $("rulesList").innerHTML = rules.map((rule) => ruleItemHtml(rule)).join("");
+    $("rulesList").innerHTML = [
+      ...rules.map((rule) => ruleItemHtml(rule)),
+      ...activeCombinations.map((rule) => combinationItemHtml(rule)),
+    ].join("");
   }
-  $("pausedRulesWrap").hidden = pausedRules.length === 0;
-  $("deletePausedRulesBtn").disabled = pausedRules.length === 0;
-  $("pausedRulesList").innerHTML = pausedRules.map((rule) => ruleItemHtml(rule, true)).join("");
+  const pausedCount = pausedRules.length + pausedCombinations.length;
+  $("deletePausedRulesBtn").disabled = pausedCount === 0;
+  $("pausedRulesList").innerHTML = pausedCount
+    ? [
+        ...pausedRules.map((rule) => ruleItemHtml(rule, true)),
+        ...pausedCombinations.map((rule) => combinationItemHtml(rule, true)),
+      ].join("")
+    : `<div class="notice muted">${escapeHtml(t("noPausedRules"))}</div>`;
   document.querySelectorAll("[data-delete-rule]").forEach((button) => {
-    button.addEventListener("click", () => deleteRule(button.dataset.deleteRule));
+    button.addEventListener("click", guardAsync(() => deleteRule(button.dataset.deleteRule)));
   });
   document.querySelectorAll("[data-restore-rule]").forEach((button) => {
-    button.addEventListener("click", () => restoreRule(button.dataset.restoreRule));
+    button.addEventListener("click", guardAsync(() => restoreRule(button.dataset.restoreRule)));
   });
   document.querySelectorAll("[data-rule-language]").forEach((select) => {
-    select.addEventListener("change", () => updateRuleLanguage(select.dataset.ruleLanguage, select));
+    select.addEventListener("change", guardAsync(() => updateRuleLanguage(select.dataset.ruleLanguage, select)));
   });
+  document.querySelectorAll("[data-delete-combination]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => deleteCombinationRule(button.dataset.deleteCombination)));
+  });
+  document.querySelectorAll("[data-restore-combination]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => restoreCombinationRule(button.dataset.restoreCombination)));
+  });
+  document.querySelectorAll("[data-combination-language]").forEach((select) => {
+    select.addEventListener("change", guardAsync(() => updateCombinationLanguage(select.dataset.combinationLanguage, select)));
+  });
+}
+
+function aggregateMetricHtml(label, value, placeholder = false) {
+  return `
+    <div class="aggregate-stat${placeholder ? " is-placeholder" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function aggregatePlaceholderRows() {
+  return Array.from({ length: 7 }, () => `
+    <div class="aggregate-event placeholder" aria-hidden="true">
+      <div class="aggregate-event-main">
+        <strong>-----</strong>
+        <span>-----</span>
+        <small>-----</small>
+      </div>
+      <div class="aggregate-event-side">
+        <strong>-----</strong>
+        <span>-----</span>
+      </div>
+    </div>
+  `).join("");
+}
+
+function aggregateEventStatus(event) {
+  switch (event.notification_status) {
+    case "sent":
+      return { text: t("notificationSent"), className: "" };
+    case "failed":
+      return { text: t("notificationFailed"), className: "failed" };
+    case "pending":
+      return { text: t("notificationPending"), className: "pending" };
+    default:
+      return { text: t("notificationNotSent"), className: "" };
+  }
+}
+
+function formatAggregateEventTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-----";
+  return new Intl.DateTimeFormat(state.uiLanguage === "en" ? "en" : "zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function aggregateEventValue(event) {
+  const previous = event.previous_value;
+  const current = event.current_value;
+  if (previous !== null && previous !== undefined && current !== null && current !== undefined) {
+    return t("aggregateValueChange", { previous, current });
+  }
+  if (current !== null && current !== undefined && String(current) !== "") return String(current);
+  return event.note || event.target_label || "-----";
+}
+
+function aggregateChainName(chainKey) {
+  return state.chains.find((chain) => chain.key === chainKey)?.name || chainKey || "-----";
+}
+
+function aggregateEventHtml(event) {
+  const combination = event.source_type === "combination";
+  const kind = t(combination ? "combinationEvent" : "stageEvent");
+  const title = combination
+    ? event.combination_note || t("combinationLabel")
+    : ruleLabel(event.rule_type);
+  const progress = combination
+    ? t("aggregateCombinationProgress", {
+        total: event.window_total_trigger_count,
+        required: event.required_trigger_count,
+      })
+    : t("aggregateProgress", {
+        current: event.window_total_trigger_count,
+        required: event.required_trigger_count,
+      });
+  const status = aggregateEventStatus(event);
+  return `
+    <article class="aggregate-event">
+      <div class="aggregate-event-main">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(`${kind} · ${aggregateChainName(event.chain_key)} · ${shortAddress(event.wallet_address)}`)}</span>
+        <small>${escapeHtml(aggregateEventValue(event))}</small>
+      </div>
+      <div class="aggregate-event-side">
+        <strong class="${status.className}">${escapeHtml(status.text)}</strong>
+        <span>${escapeHtml(progress)}</span>
+        <span>${escapeHtml(formatAggregateEventTime(event.occurred_at || event.detected_at || event.created_at))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function updateAggregateScrollStatus() {
+  const button = $("aggregateScrollToggleBtn");
+  const paused = state.aggregateScrollPaused || aggregateScrollHoverPaused;
+  button.textContent = t(paused ? "scrollPaused" : "autoScrolling");
+  button.classList.toggle("paused", paused);
+  button.setAttribute("aria-pressed", String(state.aggregateScrollPaused));
+}
+
+function animateAggregateEvents(timestamp) {
+  const viewport = $("aggregateEventViewport");
+  if (!viewport) {
+    aggregateScrollFrame = 0;
+    return;
+  }
+  const elapsed = aggregateScrollLastTime ? Math.min(timestamp - aggregateScrollLastTime, 80) : 0;
+  aggregateScrollLastTime = timestamp;
+  if (!state.aggregateScrollPaused && !aggregateScrollHoverPaused && !document.hidden) {
+    const maximum = viewport.scrollHeight - viewport.clientHeight;
+    if (maximum > 1) {
+      let next = viewport.scrollTop + aggregateScrollDirection * elapsed * 0.018;
+      if (next >= maximum) {
+        next = maximum;
+        aggregateScrollDirection = -1;
+      } else if (next <= 0) {
+        next = 0;
+        aggregateScrollDirection = 1;
+      }
+      viewport.scrollTop = next;
+    }
+  }
+  aggregateScrollFrame = requestAnimationFrame(animateAggregateEvents);
+}
+
+function startAggregateAutoScroll(reset = false) {
+  const viewport = $("aggregateEventViewport");
+  if (reset && viewport) {
+    viewport.scrollTop = 0;
+    aggregateScrollDirection = 1;
+  }
+  if (aggregateScrollFrame) return;
+  aggregateScrollLastTime = 0;
+  aggregateScrollFrame = requestAnimationFrame(animateAggregateEvents);
+}
+
+function setAggregateScrollPaused(paused) {
+  state.aggregateScrollPaused = paused;
+  updateAggregateScrollStatus();
+  startAggregateAutoScroll();
+}
+
+function renderAggregateEvents({ resetScroll = false } = {}) {
+  const connected = Boolean(state.deboxUserId);
+  const hasEvents = state.aggregateEvents.length > 0;
+  const hasStats = connected && !state.aggregateLoading && !state.aggregateLoadError && state.aggregateStats;
+  const showValues = Boolean(hasStats && Number(state.aggregateStats.event_count) > 0);
+  const stats = state.aggregateStats || {};
+  const metrics = [
+    [t("aggregateEvents"), stats.event_count],
+    [t("aggregateStageEvents"), stats.stage_event_count],
+    [t("aggregateCombinationEvents"), stats.combination_event_count],
+    [t("aggregateSentNotifications"), stats.sent_notification_count],
+  ];
+  $("aggregateEventStats").innerHTML = metrics
+    .map(([label, value]) => aggregateMetricHtml(label, showValues ? String(value ?? 0) : "-----", !showValues))
+    .join("");
+
+  const range = $("aggregateEventsRange");
+  const refreshButton = $("refreshAggregateEventsBtn");
+  const loadMoreButton = $("loadMoreAggregateEventsBtn");
+  refreshButton.disabled = !connected || state.aggregateLoading || state.aggregateLoadingMore;
+  if (!connected) {
+    range.textContent = t("notConnected");
+  } else if (state.aggregateLoading) {
+    range.textContent = t("aggregateEventsLoading");
+  } else if (state.aggregateLoadError) {
+    range.textContent = t("aggregateEventsLoadFailed");
+  } else {
+    range.textContent = t("aggregateRange", { days: state.aggregateRetentionDays });
+  }
+  range.classList.toggle("muted", !connected || state.aggregateLoading || Boolean(state.aggregateLoadError));
+
+  const list = $("aggregateEventList");
+  if (state.aggregateLoadError && !hasEvents) {
+    list.innerHTML = `
+      <div class="aggregate-event-error">
+        <div>
+          <p>${escapeHtml(t("aggregateEventsLoadFailed"))}</p>
+          <button class="secondary" type="button" data-retry-aggregate-events>${escapeHtml(t("aggregateEventsRetry"))}</button>
+        </div>
+      </div>
+    `;
+    list.querySelector("[data-retry-aggregate-events]")
+      ?.addEventListener("click", guardAsync(() => loadAggregateEvents()));
+  } else if (hasEvents) {
+    list.innerHTML = state.aggregateEvents.map(aggregateEventHtml).join("");
+  } else {
+    list.innerHTML = aggregatePlaceholderRows();
+  }
+
+  const loadedCount = $("aggregateLoadedCount");
+  if (!connected) {
+    loadedCount.textContent = t("aggregateEventsDisconnected");
+  } else if (state.aggregateLoading) {
+    loadedCount.textContent = t("aggregateEventsLoading");
+  } else if (state.aggregateLoadError) {
+    loadedCount.textContent = t("aggregateEventsLoadFailed");
+  } else if (!hasEvents) {
+    loadedCount.textContent = t("aggregateEventsEmpty");
+  } else if (state.aggregateHasMore) {
+    loadedCount.textContent = t("aggregateLoaded", {
+      loaded: state.aggregateEvents.length,
+      total: stats.event_count ?? state.aggregateEvents.length,
+    });
+  } else {
+    loadedCount.textContent = t("noMoreEvents");
+  }
+
+  loadMoreButton.hidden = !connected || !hasEvents || !state.aggregateHasMore;
+  loadMoreButton.disabled = state.aggregateLoadingMore;
+  loadMoreButton.textContent = t(state.aggregateLoadingMore ? "loadingMoreEvents" : "loadMoreEvents");
+  $("aggregateScrollToggleBtn").disabled = Boolean(state.aggregateLoadError && !hasEvents);
+  updateAggregateScrollStatus();
+  startAggregateAutoScroll(resetScroll);
+}
+
+async function loadAggregateEvents({ append = false } = {}) {
+  if (!state.deboxUserId || state.aggregateLoading || state.aggregateLoadingMore) return;
+  if (append && (!state.aggregateHasMore || !state.aggregateNextBeforeId)) return;
+  if (append) {
+    state.aggregateLoadingMore = true;
+  } else {
+    state.aggregateLoading = true;
+    state.aggregateLoadError = "";
+  }
+  renderAggregateEvents();
+  try {
+    const query = new URLSearchParams({ limit: "30" });
+    if (append) query.set("before_id", String(state.aggregateNextBeforeId));
+    const page = await api(`/api/aggregate-events?${query.toString()}`);
+    const incoming = Array.isArray(page.events) ? page.events : [];
+    if (append) {
+      const known = new Set(state.aggregateEvents.map((event) => String(event.id)));
+      state.aggregateEvents = [
+        ...state.aggregateEvents,
+        ...incoming.filter((event) => !known.has(String(event.id))),
+      ];
+    } else {
+      state.aggregateEvents = incoming;
+      state.aggregateScrollPaused = false;
+    }
+    state.aggregateStats = page.stats || null;
+    state.aggregateRetentionDays = Number(page.retention_days || 30);
+    state.aggregateHasMore = Boolean(page.has_more);
+    state.aggregateNextBeforeId = page.next_before_id || null;
+    state.aggregateLoadError = "";
+  } catch (error) {
+    state.aggregateLoadError = localizedApiError(error.message);
+    if (!append) {
+      state.aggregateEvents = [];
+      state.aggregateStats = null;
+      state.aggregateHasMore = false;
+      state.aggregateNextBeforeId = null;
+    }
+  } finally {
+    state.aggregateLoading = false;
+    state.aggregateLoadingMore = false;
+    renderAggregateEvents({ resetScroll: !append });
+  }
 }
 
 function fillSummaryForm() {
@@ -687,10 +1124,144 @@ function renderSummaryCapability() {
 function updateRuleFields() {
   const type = $("ruleTypeSelect").value;
   const needsTarget = type === "approval_change" || type === "address_interaction";
+  const thresholdless = isThresholdlessRule(type);
   $("targetAddressWrap").hidden = !needsTarget;
   $("targetLabelWrap").hidden = !needsTarget;
+  $("thresholdWrap").hidden = thresholdless;
   $("tokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
   $("ruleDescription").textContent = localizedRuleDescription(type);
+  $("thresholdHint").textContent = thresholdless
+    ? t("thresholdNotRequired")
+    : requiresPositiveThreshold(type)
+      ? t("thresholdPositiveRequired")
+      : t("thresholdZeroAllowed");
+  $("thresholdInput").min = requiresPositiveThreshold(type) ? "0.000001" : "0";
+  updateDeliveryModeFields();
+}
+
+function updateDeliveryModeFields() {
+  const stage = $("deliveryModeSelect").value === "stage";
+  $("stageSettingsWrap").hidden = !stage;
+  $("deliveryModeHint").textContent = t(stage ? "stageModeHint" : "realtimeModeHint");
+}
+
+function updateCombinationMemberFields() {
+  const type = $("combinationRuleTypeSelect").value;
+  const needsTarget = type === "approval_change" || type === "address_interaction";
+  const thresholdless = isThresholdlessRule(type);
+  $("combinationTargetAddressWrap").hidden = !needsTarget;
+  $("combinationTargetLabelWrap").hidden = !needsTarget;
+  $("combinationThresholdWrap").hidden = thresholdless;
+  $("combinationTokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
+  $("combinationRuleDescription").textContent = localizedRuleDescription(type);
+  $("combinationThresholdHint").textContent = thresholdless
+    ? t("thresholdNotRequired")
+    : requiresPositiveThreshold(type)
+      ? t("thresholdPositiveRequired")
+      : t("thresholdZeroAllowed");
+  $("combinationThresholdInput").min = requiresPositiveThreshold(type) ? "0.000001" : "0";
+}
+
+function setRuleCreationMode(mode) {
+  const combination = mode === "combination";
+  $("singleRulePanel").hidden = combination;
+  $("combinationRulePanel").hidden = !combination;
+  $("singleRuleModeBtn").classList.toggle("active", !combination);
+  $("combinationRuleModeBtn").classList.toggle("active", combination);
+  $("singleRuleModeBtn").setAttribute("aria-selected", String(!combination));
+  $("combinationRuleModeBtn").setAttribute("aria-selected", String(combination));
+}
+
+function updateCombinationTargetVisibility() {
+  $("combinationGroupTargetWrap").hidden = $("combinationTargetTypeSelect").value !== "group";
+}
+
+function validateRuleDraft(rule, requiredCount = null) {
+  if (!rule.wallet_address) throw new Error(t("enterMonitoredAddress"));
+  const threshold = Number(rule.threshold || 0);
+  if (requiresPositiveThreshold(rule.rule_type) && !(threshold > 0)) {
+    throw new Error(t("enterPositiveThreshold"));
+  }
+  if (rule.rule_type === "approval_change" && (!rule.token_address || !rule.target_address)) {
+    throw new Error(t("approvalFieldsRequired"));
+  }
+  if (rule.rule_type === "address_interaction" && !rule.target_address) {
+    throw new Error(t("interactionTargetRequired"));
+  }
+  if (requiredCount !== null && (!Number.isInteger(requiredCount) || requiredCount <= 0)) {
+    throw new Error(t("enterPositiveCount"));
+  }
+}
+
+function combinationMemberDraft() {
+  const ruleType = $("combinationRuleTypeSelect").value;
+  return {
+    client_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    required_trigger_count: Number($("combinationMemberTriggerInput").value),
+    rule: {
+      chain_key: $("combinationChainSelect").value,
+      wallet_address: $("combinationAddressInput").value.trim(),
+      token_address: $("combinationTokenAddressInput").value.trim() || null,
+      target_address: $("combinationTargetAddressInput").value.trim() || null,
+      target_label: $("combinationTargetLabelInput").value.trim(),
+      rule_type: ruleType,
+      threshold: isThresholdlessRule(ruleType) ? "0" : $("combinationThresholdInput").value || "0",
+      notification_language: $("combinationLanguageSelect").value,
+      delivery_mode: "realtime",
+      cycle_type: "fixed",
+      cycle_minutes: 60,
+      trigger_count_threshold: 1,
+    },
+  };
+}
+
+function resetCombinationMemberEditor() {
+  $("combinationTokenAddressInput").value = "";
+  $("combinationTargetAddressInput").value = "";
+  $("combinationTargetLabelInput").value = "";
+  $("combinationThresholdInput").value = "0";
+  $("combinationMemberTriggerInput").value = "1";
+  updateCombinationMemberFields();
+}
+
+function renderCombinationDraft() {
+  $("combinationMemberCount").textContent = String(state.combinationMembers.length);
+  $("combinationDraftList").innerHTML = state.combinationMembers.length
+    ? state.combinationMembers
+        .map(
+          (member) => `
+            <div class="member-draft-item">
+              <div>
+                <strong>${escapeHtml(ruleLabel(member.rule.rule_type))} / ${escapeHtml(member.rule.chain_key)}</strong>
+                <span>${escapeHtml(shortAddress(member.rule.wallet_address))} · ${escapeHtml(t("triggerCount"))} ${escapeHtml(member.required_trigger_count)}</span>
+              </div>
+              <button class="secondary" type="button" data-remove-member="${escapeHtml(member.client_id)}">${escapeHtml(t("removeMember"))}</button>
+            </div>
+          `
+        )
+        .join("")
+    : `<div class="notice muted">${escapeHtml(t("combinationNeedsTwoMembers"))}</div>`;
+  document.querySelectorAll("[data-remove-member]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.combinationMembers = state.combinationMembers.filter(
+        (member) => member.client_id !== button.dataset.removeMember
+      );
+      renderCombinationDraft();
+    });
+  });
+}
+
+function addCombinationMember() {
+  try {
+    const member = combinationMemberDraft();
+    validateRuleDraft(member.rule, member.required_trigger_count);
+    state.combinationMembers.push(member);
+    resetCombinationMemberEditor();
+    renderCombinationDraft();
+    toast(t("memberAdded"));
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function renderPaymentStatus() {
@@ -852,8 +1423,12 @@ async function toggleWalletConnection() {
 
 async function refreshAccount() {
   if (!state.deboxUserId) return;
-  const current = await api("/api/subscription/current");
+  const [current, combinations] = await Promise.all([
+    api("/api/subscription/current"),
+    api("/api/combination-rules"),
+  ]);
   state.entitlement = current;
+  state.combinationRules = combinations.combination_rules || [];
   state.groups = current.groups || [];
   const activePlanCode = current.plan?.code;
   if (["standard", "professional"].includes(activePlanCode)) {
@@ -863,7 +1438,10 @@ async function refreshAccount() {
   renderSubscription();
   renderGroups();
   renderRules();
-  await loadPaymentConfig();
+  await Promise.all([
+    loadPaymentConfig(),
+    loadAggregateEvents(),
+  ]);
 }
 
 async function loadPaymentConfig() {
@@ -1027,7 +1605,7 @@ async function lookupToken() {
 async function queryBalance() {
   const address = $("walletAddressInput").value.trim();
   if (!address) {
-    toast(t("enterWallet"));
+    toast(t("enterMonitoredAddress"));
     return;
   }
   const query = new URLSearchParams({
@@ -1048,24 +1626,86 @@ async function createRule(event) {
   }
   const targetType = $("targetTypeSelect").value;
   const selectedGroup = $("groupTargetSelect").selectedOptions[0];
+  const ruleType = $("ruleTypeSelect").value;
+  const deliveryMode = $("deliveryModeSelect").value;
+  const cycleMinutes = Number($("cycleMinutesInput").value);
+  const triggerCount = Number($("triggerCountInput").value);
+  const payload = {
+    chain_key: $("chainSelect").value,
+    wallet_address: $("walletAddressInput").value.trim(),
+    token_address: $("tokenAddressInput").value.trim() || null,
+    target_address: $("targetAddressInput").value.trim() || null,
+    target_label: $("targetLabelInput").value.trim(),
+    rule_type: ruleType,
+    threshold: isThresholdlessRule(ruleType) ? "0" : $("thresholdInput").value || "0",
+    notification_chat_type: targetType,
+    notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
+    notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
+    notification_language: $("ruleLanguageSelect").value,
+    delivery_mode: deliveryMode,
+    cycle_type: $("cycleTypeSelect").value,
+    cycle_minutes: deliveryMode === "stage" ? cycleMinutes : 60,
+    trigger_count_threshold: deliveryMode === "stage" ? triggerCount : 1,
+  };
+  try {
+    validateRuleDraft(payload);
+    if (deliveryMode === "stage") {
+      if (!Number.isInteger(cycleMinutes) || cycleMinutes <= 0) throw new Error(t("enterPositiveCycle"));
+      if (!Number.isInteger(triggerCount) || triggerCount <= 0) throw new Error(t("enterPositiveCount"));
+    }
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
   await api("/api/watch-rules", {
     method: "POST",
-    body: JSON.stringify({
-      chain_key: $("chainSelect").value,
-      wallet_address: $("walletAddressInput").value.trim(),
-      token_address: $("tokenAddressInput").value.trim() || null,
-      target_address: $("targetAddressInput").value.trim() || null,
-      target_label: $("targetLabelInput").value.trim(),
-      rule_type: $("ruleTypeSelect").value,
-      threshold: $("thresholdInput").value || "0",
-      notification_chat_type: targetType,
-      notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
-      notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
-      notification_language: $("ruleLanguageSelect").value,
-    }),
+    body: JSON.stringify(payload),
   });
   await refreshAccount();
   toast(t("ruleCreated"));
+}
+
+async function createCombinationRule(event) {
+  event.preventDefault();
+  if (!state.deboxUserId) {
+    toast(t("connectFirst"));
+    return;
+  }
+  if (state.combinationMembers.length < 2) {
+    toast(t("combinationNeedsTwoMembers"));
+    return;
+  }
+  const cycleMinutes = Number($("combinationCycleMinutesInput").value);
+  if (!Number.isInteger(cycleMinutes) || cycleMinutes <= 0) {
+    toast(t("enterPositiveCycle"));
+    return;
+  }
+  const targetType = $("combinationTargetTypeSelect").value;
+  const selectedGroup = $("combinationGroupTargetSelect").selectedOptions[0];
+  await api("/api/combination-rules", {
+    method: "POST",
+    body: JSON.stringify({
+      note: $("combinationNoteInput").value.trim(),
+      cycle_type: $("combinationCycleTypeSelect").value,
+      cycle_minutes: cycleMinutes,
+      notification_chat_type: targetType,
+      notification_chat_id: targetType === "group" ? $("combinationGroupTargetSelect").value : "",
+      notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
+      notification_language: $("combinationLanguageSelect").value,
+      members: state.combinationMembers.map(({ rule, required_trigger_count: count }) => ({
+        rule: {
+          ...rule,
+          notification_language: $("combinationLanguageSelect").value,
+        },
+        required_trigger_count: count,
+      })),
+    }),
+  });
+  state.combinationMembers = [];
+  $("combinationNoteInput").value = "";
+  renderCombinationDraft();
+  await refreshAccount();
+  toast(t("combinationCreated"));
 }
 
 async function deleteRule(ruleId) {
@@ -1114,6 +1754,44 @@ async function updateRuleLanguage(ruleId, select) {
   }
 }
 
+async function deleteCombinationRule(combinationId) {
+  await api(`/api/combination-rules/${combinationId}`, { method: "DELETE" });
+  await refreshAccount();
+  toast(t("combinationDeleted"));
+}
+
+async function restoreCombinationRule(combinationId) {
+  if (!state.deboxUserId) {
+    toast(t("connectFirst"));
+    return;
+  }
+  await api(`/api/combination-rules/${combinationId}/restore`, { method: "POST" });
+  await refreshAccount();
+  toast(t("combinationRestored"));
+}
+
+async function updateCombinationLanguage(combinationId, select) {
+  if (!state.deboxUserId) {
+    select.value = select.dataset.currentLanguage || "zh";
+    toast(t("connectFirst"));
+    return;
+  }
+  const previousLanguage = select.dataset.currentLanguage || "zh";
+  select.disabled = true;
+  try {
+    await api(`/api/combination-rules/${combinationId}/notification-language`, {
+      method: "PATCH",
+      body: JSON.stringify({ language: select.value }),
+    });
+    await refreshAccount();
+    toast(t("ruleLanguageUpdated"));
+  } catch (error) {
+    select.disabled = false;
+    select.value = previousLanguage;
+    toast(localizedApiError(error.message));
+  }
+}
+
 async function deletePausedRules() {
   if (!state.deboxUserId) {
     toast(t("connectFirst"));
@@ -1122,15 +1800,17 @@ async function deletePausedRules() {
   if (!confirm(t("deletePausedConfirm"))) {
     return;
   }
+  const pausedCombinationIds = state.combinationRules
+    .filter((rule) => !combinationIsActive(rule))
+    .map((rule) => rule.id);
   const result = await api("/api/watch-rules/paused", {
     method: "DELETE",
   });
-  state.entitlement = result.entitlement;
-  state.groups = state.entitlement.groups || [];
-  renderSubscription();
-  renderGroups();
-  renderRules();
-  toast(t("pausedDeleted", { count: result.deleted || 0 }));
+  await Promise.all(
+    pausedCombinationIds.map((id) => api(`/api/combination-rules/${id}`, { method: "DELETE" }))
+  );
+  await refreshAccount();
+  toast(t("pausedDeleted", { count: Number(result.deleted || 0) + pausedCombinationIds.length }));
 }
 
 async function saveSummary(event) {
@@ -1194,33 +1874,88 @@ async function deleteGroup(groupId) {
 
 function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
-  $("connectWalletBtn").addEventListener("click", toggleWalletConnection);
-  $("freeTrialBtn").addEventListener("click", enableFreePlan);
-  $("payBtn").addEventListener("click", payOrRenew);
-  $("deletePausedRulesBtn").addEventListener("click", deletePausedRules);
-  $("refreshRulesBtn").addEventListener("click", refreshAccount);
-  $("queryBalanceBtn").addEventListener("click", queryBalance);
-  $("ruleForm").addEventListener("submit", createRule);
-  $("groupForm").addEventListener("submit", addGroup);
-  $("summaryForm").addEventListener("submit", saveSummary);
+  $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
+  $("freeTrialBtn").addEventListener("click", guardAsync(enableFreePlan));
+  $("payBtn").addEventListener("click", guardAsync(payOrRenew));
+  $("deletePausedRulesBtn").addEventListener("click", guardAsync(deletePausedRules));
+  $("refreshRulesBtn").addEventListener("click", guardAsync(refreshAccount));
+  $("refreshAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents()));
+  $("loadMoreAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents({ append: true })));
+  $("aggregateScrollToggleBtn").addEventListener("click", () => {
+    setAggregateScrollPaused(!state.aggregateScrollPaused);
+  });
+  $("aggregateEventViewport").addEventListener("mouseenter", () => {
+    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    aggregateScrollHoverPaused = true;
+    updateAggregateScrollStatus();
+  });
+  $("aggregateEventViewport").addEventListener("mouseleave", () => {
+    aggregateScrollHoverPaused = false;
+    updateAggregateScrollStatus();
+  });
+  $("aggregateEventViewport").addEventListener("pointerdown", () => {
+    if (window.matchMedia("(hover: none), (pointer: coarse)").matches && !state.aggregateScrollPaused) {
+      setAggregateScrollPaused(true);
+    }
+  });
+  $("aggregateEventViewport").addEventListener("keydown", (event) => {
+    if (event.key !== " ") return;
+    event.preventDefault();
+    setAggregateScrollPaused(!state.aggregateScrollPaused);
+  });
+  $("queryBalanceBtn").addEventListener("click", guardAsync(queryBalance));
+  $("ruleForm").addEventListener("submit", guardAsync(createRule));
+  $("combinationRuleForm").addEventListener("submit", guardAsync(createCombinationRule));
+  $("singleRuleModeBtn").addEventListener("click", () => setRuleCreationMode("single"));
+  $("combinationRuleModeBtn").addEventListener("click", () => setRuleCreationMode("combination"));
+  $("addCombinationMemberBtn").addEventListener("click", addCombinationMember);
+  $("groupForm").addEventListener("submit", guardAsync(addGroup));
+  $("summaryForm").addEventListener("submit", guardAsync(saveSummary));
   $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
+  $("combinationTargetTypeSelect").addEventListener("change", updateCombinationTargetVisibility);
   $("summaryTargetSelect").addEventListener("change", updateSummaryTargetVisibility);
   $("ruleTypeSelect").addEventListener("change", updateRuleFields);
+  $("combinationRuleTypeSelect").addEventListener("change", updateCombinationMemberFields);
+  $("deliveryModeSelect").addEventListener("change", updateDeliveryModeFields);
   $("tokenAddressInput").addEventListener("blur", lookupToken);
   $("chainSelect").addEventListener("change", lookupToken);
-  $("chainSelect").addEventListener("change", renderChainPicker);
+  $("chainSelect").addEventListener("change", () => renderChainPicker());
+  $("combinationChainSelect").addEventListener("change", () => renderChainPicker("combination"));
   $("chainPickerButton").addEventListener("click", (event) => {
     event.stopPropagation();
     toggleChainPicker();
   });
   $("chainPickerButton").addEventListener("keydown", handleChainPickerKeydown);
+  $("combinationChainPickerButton").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleChainPicker("combination");
+  });
+  $("combinationChainPickerButton").addEventListener("keydown", (event) => {
+    handleChainPickerKeydown(event, "combination");
+  });
+  $("balanceHelpBtn").addEventListener("click", (event) => {
+    event.stopPropagation();
+    const control = event.currentTarget.closest(".help-control");
+    const open = !control.classList.contains("open");
+    control.classList.toggle("open", open);
+    event.currentTarget.setAttribute("aria-expanded", String(open));
+  });
   document.addEventListener("click", (event) => {
-    if (!$("chainPicker").contains(event.target)) {
-      closeChainPicker();
+    if (!$("chainPicker").contains(event.target)) closeChainPicker();
+    if (!$("combinationChainPicker").contains(event.target)) closeChainPicker("combination");
+    if (!event.target.closest(".help-control")) {
+      document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
+      $("balanceHelpBtn").setAttribute("aria-expanded", "false");
+      $("balanceHelpBtn").blur();
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeChainPicker();
+    if (event.key === "Escape") {
+      closeAllChainPickers();
+      document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
+      $("balanceHelpBtn").setAttribute("aria-expanded", "false");
+      $("balanceHelpBtn").blur();
+    }
   });
   $("tapShield").addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -1239,7 +1974,13 @@ async function boot() {
   applyStaticTranslations();
   bindEvents();
   updateTargetVisibility();
+  updateCombinationTargetVisibility();
   updateSummaryTargetVisibility();
+  updateDeliveryModeFields();
+  setRuleCreationMode("single");
+  renderRules();
+  renderCombinationDraft();
+  renderAggregateEvents({ resetScroll: true });
   updateConnectionButton();
   await loadBootData();
   if (!(await restoreSession())) {

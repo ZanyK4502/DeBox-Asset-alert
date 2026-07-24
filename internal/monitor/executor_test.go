@@ -12,13 +12,17 @@ import (
 )
 
 type fakeRepository struct {
-	rules       []store.WatchRule
-	dailyEvents int64
-	nextEventID int64
-	calls       []string
-	lastValue   string
-	lastStatus  string
-	lastError   string
+	rules             []store.WatchRule
+	dailyEvents       int64
+	nextEventID       int64
+	calls             []string
+	lastValue         string
+	lastStatus        string
+	lastError         string
+	stageParams       store.RecordStageTriggerParams
+	stageResult       store.StageTriggerResult
+	combinationParams store.RecordCombinationTriggerParams
+	combinationResult store.CombinationTriggerResult
 }
 
 func (f *fakeRepository) ListEnabledWatchRules(
@@ -27,6 +31,13 @@ func (f *fakeRepository) ListEnabledWatchRules(
 ) ([]store.WatchRule, error) {
 	f.calls = append(f.calls, "list")
 	return append([]store.WatchRule(nil), f.rules...), nil
+}
+
+func (f *fakeRepository) CleanupAggregationHistory(
+	context.Context,
+) (store.AggregationCleanupResult, error) {
+	f.calls = append(f.calls, "cleanup")
+	return store.AggregationCleanupResult{}, nil
 }
 
 func (f *fakeRepository) UpdateWatchRuleValue(
@@ -84,6 +95,42 @@ func (f *fakeRepository) UpdateAlertEventNotification(
 	}, nil
 }
 
+func (f *fakeRepository) RecordStageTrigger(
+	_ context.Context,
+	params store.RecordStageTriggerParams,
+) (store.StageTriggerResult, error) {
+	f.calls = append(f.calls, "record_stage")
+	f.stageParams = params
+	return f.stageResult, nil
+}
+
+func (f *fakeRepository) RecordCombinationTrigger(
+	_ context.Context,
+	params store.RecordCombinationTriggerParams,
+) (store.CombinationTriggerResult, error) {
+	f.calls = append(f.calls, "record_combination")
+	f.combinationParams = params
+	return f.combinationResult, nil
+}
+
+func (f *fakeRepository) UpdateAggregateNotification(
+	_ context.Context,
+	notificationID int64,
+	status string,
+	messageID *string,
+	notificationError string,
+) (store.AggregateNotification, error) {
+	f.calls = append(f.calls, "update_aggregate_"+status)
+	f.lastStatus = status
+	f.lastError = notificationError
+	return store.AggregateNotification{
+		ID:                    notificationID,
+		NotificationStatus:    status,
+		NotificationMessageID: messageID,
+		NotificationError:     notificationError,
+	}, nil
+}
+
 type fakeChain struct {
 	balance     chain.BalanceResult
 	allowance   chain.AllowanceResult
@@ -126,9 +173,11 @@ func (f *fakeChain) LatestInteraction(
 }
 
 type fakeNotifier struct {
-	calls   *[]string
-	message string
-	err     error
+	calls      *[]string
+	message    string
+	actionText string
+	actionURL  string
+	err        error
 }
 
 func (f *fakeNotifier) SendNotification(chatID, chatType, text string) (string, error) {
@@ -140,6 +189,14 @@ func (f *fakeNotifier) SendNotification(chatID, chatType, text string) (string, 
 		return "", f.err
 	}
 	return "message-9", nil
+}
+
+func (f *fakeNotifier) SendNotificationWithAction(
+	chatID, chatType, text, actionText, actionURL string,
+) (string, error) {
+	f.actionText = actionText
+	f.actionURL = actionURL
+	return f.SendNotification(chatID, chatType, text)
 }
 
 func TestShouldAlertAssetPreservesRuleSemantics(t *testing.T) {
@@ -161,6 +218,9 @@ func TestShouldAlertAssetPreservesRuleSemantics(t *testing.T) {
 		{"threshold crosses downward", plans.BalanceThreshold, "11", "10", "10", true},
 		{"threshold remains below", plans.BalanceThreshold, "9", "8", "10", false},
 		{"threshold recovers", plans.BalanceThreshold, "9", "11", "10", false},
+		{"high threshold crosses upward", plans.HighBalanceThreshold, "9", "10", "10", true},
+		{"high threshold remains above", plans.HighBalanceThreshold, "11", "12", "10", false},
+		{"high threshold recovers", plans.HighBalanceThreshold, "11", "9", "10", false},
 		{"scientific notation", plans.BalanceChange, "1e2", "1.01e2", "1", true},
 	}
 	for _, test := range tests {
@@ -210,6 +270,144 @@ func TestContinuingBelowThresholdDoesNotRepeat(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(repository.calls, ","), "create_event") {
 		t.Fatalf("unexpected event calls: %v", repository.calls)
+	}
+}
+
+func TestInitialBalanceAboveHighThresholdAlertsOnce(t *testing.T) {
+	repository := &fakeRepository{}
+	chainService := &fakeChain{balance: chain.BalanceResult{Value: "15", Symbol: "BNB"}}
+	notifier := &fakeNotifier{calls: &repository.calls}
+	executor := newTestExecutor(t, repository, chainService, notifier)
+	rule := testRule(plans.HighBalanceThreshold, nil, plans.Standard)
+
+	result := executor.checkRule(context.Background(), rule, plans.Standard)
+
+	if result.Status != "alerted" || result.Event == nil || result.Event.NotificationStatus != "sent" {
+		t.Fatalf("result = %#v", result)
+	}
+	if !strings.Contains(notifier.message, "余额达到或高于阈值 10") {
+		t.Fatalf("notification = %q", notifier.message)
+	}
+}
+
+func TestContinuingAboveHighThresholdDoesNotRepeat(t *testing.T) {
+	repository := &fakeRepository{}
+	chainService := &fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}}
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(t, repository, chainService, notifier)
+	lastValue := "11"
+	rule := testRule(plans.HighBalanceThreshold, &lastValue, plans.Standard)
+
+	result := executor.checkRule(context.Background(), rule, plans.Standard)
+
+	if result.Status != "no_change" {
+		t.Fatalf("status = %q, want no_change", result.Status)
+	}
+	if strings.Contains(strings.Join(repository.calls, ","), "create_event") {
+		t.Fatalf("unexpected event calls: %v", repository.calls)
+	}
+}
+
+func TestStageRuleCountsWithoutSendingBeforeThreshold(t *testing.T) {
+	lastValue := "10"
+	repository := &fakeRepository{stageResult: store.StageTriggerResult{
+		WindowID:              41,
+		TotalTriggerCount:     1,
+		TriggerCountThreshold: 3,
+	}}
+	chainService := &fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}}
+	notifier := &fakeNotifier{calls: &repository.calls}
+	executor := newTestExecutor(t, repository, chainService, notifier)
+	rule := testRule(plans.BalanceChange, &lastValue, plans.Standard)
+	rule.Threshold = "1"
+	rule.DeliveryMode = "stage"
+	rule.CycleType = "fixed"
+	rule.CycleMinutes = 15
+	rule.TriggerCountThreshold = 3
+
+	result := executor.checkRule(context.Background(), rule, plans.Standard)
+
+	if result.Status != "counted" || result.TriggerCount != 1 || result.TriggerThreshold != 3 {
+		t.Fatalf("result = %#v", result)
+	}
+	if repository.stageParams.WatchRuleID != rule.ID ||
+		repository.stageParams.DeBoxUserID != rule.DeBoxUserID ||
+		repository.stageParams.CurrentValue == nil ||
+		*repository.stageParams.CurrentValue != "12" {
+		t.Fatalf("stage params = %#v", repository.stageParams)
+	}
+	wantCalls := []string{"update_rule", "record_stage"}
+	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
+	}
+}
+
+func TestStageRuleSendsOnceWhenThresholdIsReached(t *testing.T) {
+	lastValue := "10"
+	repository := &fakeRepository{stageResult: store.StageTriggerResult{
+		WindowID:              41,
+		TotalTriggerCount:     3,
+		TriggerCountThreshold: 3,
+		NotificationDue:       true,
+		RecentNotes:           []string{"BNB 余额触发监控条件。", "上一条事件。"},
+		Notification: &store.AggregateNotification{
+			ID:                   51,
+			NotificationChatID:   "user-1",
+			NotificationChatType: "private",
+		},
+	}}
+	chainService := &fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}}
+	notifier := &fakeNotifier{calls: &repository.calls}
+	executor := newTestExecutor(t, repository, chainService, notifier)
+	rule := testRule(plans.BalanceChange, &lastValue, plans.Standard)
+	rule.Threshold = "1"
+	rule.DeliveryMode = "stage"
+	rule.CycleType = "follow"
+	rule.CycleMinutes = 30
+	rule.TriggerCountThreshold = 3
+
+	result := executor.checkRule(context.Background(), rule, plans.Standard)
+
+	if result.Status != "alerted" || result.Aggregate == nil ||
+		result.Aggregate.NotificationStatus != "sent" {
+		t.Fatalf("result = %#v", result)
+	}
+	if !strings.Contains(notifier.message, "阶段汇总") ||
+		!strings.Contains(notifier.message, "监控地址：") ||
+		!strings.Contains(notifier.message, "本周期累计触发：3 次") ||
+		!strings.Contains(notifier.message, "1. BNB 余额触发监控条件。") {
+		t.Fatalf("notification = %q", notifier.message)
+	}
+	if notifier.actionText != "查看全部事件" ||
+		notifier.actionURL != "https://example.test#aggregateEventsSection" {
+		t.Fatalf("stage action = %q / %q", notifier.actionText, notifier.actionURL)
+	}
+	wantCalls := []string{
+		"update_rule",
+		"record_stage",
+		"send",
+		"update_aggregate_sent",
+	}
+	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
+	}
+}
+
+func TestFreePlanDoesNotRunStageRules(t *testing.T) {
+	repository := &fakeRepository{}
+	chainService := &fakeChain{}
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(t, repository, chainService, notifier)
+	rule := testRule(plans.BalanceChange, nil, plans.Free)
+	rule.DeliveryMode = "stage"
+
+	result := executor.checkRule(context.Background(), rule, plans.Free)
+
+	if result.Status != "plan_limited" || result.Reason != "stage_notification" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(chainService.calls) != 0 || len(repository.calls) != 0 {
+		t.Fatalf("unexpected calls: chain=%v repository=%v", chainService.calls, repository.calls)
 	}
 }
 
@@ -316,6 +514,124 @@ func TestNotificationFailureIsRecorded(t *testing.T) {
 	}
 }
 
+func TestCombinationMemberCountsWithoutSendingUntilAllMembersReachThreshold(t *testing.T) {
+	t.Parallel()
+	previous := "10"
+	repository := &fakeRepository{combinationResult: store.CombinationTriggerResult{
+		CombinationRuleID: 44,
+		MemberProgress: []store.CombinationMemberProgress{
+			{WatchRuleID: 7, RuleType: plans.BalanceChange, TriggerCount: 1, RequiredTriggerCount: 2},
+			{WatchRuleID: 8, RuleType: plans.ApprovalChange, TriggerCount: 1, RequiredTriggerCount: 1},
+		},
+	}}
+	rule := testRule(plans.BalanceChange, &previous, plans.Professional)
+	rule.RuleScope = "combination"
+	rule.Threshold = "0"
+	executor := newTestExecutor(
+		t,
+		repository,
+		&fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}},
+		&fakeNotifier{},
+	)
+
+	value, err := executor.CheckRule(context.Background(), rule, plans.Professional)
+	if err != nil {
+		t.Fatalf("CheckRule() error = %v", err)
+	}
+	result := value.(RuleResult)
+	if result.Status != "counted" || result.CombinationID != 44 ||
+		len(result.MemberProgress) != 2 {
+		t.Fatalf("combination result = %#v", result)
+	}
+	if repository.combinationParams.WatchRuleID != rule.ID {
+		t.Fatalf("combination params = %#v", repository.combinationParams)
+	}
+	if strings.Contains(strings.Join(repository.calls, ","), "send") {
+		t.Fatalf("calls = %v", repository.calls)
+	}
+}
+
+func TestCombinationMemberSendsOneSummaryWhenCombinationIsDue(t *testing.T) {
+	t.Parallel()
+	previous := "10"
+	notification := store.AggregateNotification{
+		ID:                   55,
+		NotificationChatID:   "user-1",
+		NotificationChatType: "private",
+		NotificationLanguage: "en",
+		Note:                 "Treasury safety",
+	}
+	repository := &fakeRepository{combinationResult: store.CombinationTriggerResult{
+		CombinationRuleID: 44,
+		NotificationDue:   true,
+		Notification:      &notification,
+		MemberProgress: []store.CombinationMemberProgress{
+			{
+				WatchRuleID:          7,
+				RuleType:             plans.BalanceChange,
+				TriggerCount:         2,
+				RequiredTriggerCount: 2,
+				RecentNotes:          []string{"BNB balance changed.", "Another BNB change."},
+			},
+			{
+				WatchRuleID:          8,
+				RuleType:             plans.ApprovalChange,
+				TriggerCount:         1,
+				RequiredTriggerCount: 1,
+				RecentNotes:          []string{"Approval changed."},
+			},
+		},
+	}}
+	rule := testRule(plans.BalanceChange, &previous, plans.Professional)
+	rule.RuleScope = "combination"
+	rule.Threshold = "0"
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(
+		t,
+		repository,
+		&fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}},
+		notifier,
+	)
+
+	value, err := executor.CheckRule(context.Background(), rule, plans.Professional)
+	if err != nil {
+		t.Fatalf("CheckRule() error = %v", err)
+	}
+	result := value.(RuleResult)
+	if result.Status != "alerted" || result.Aggregate == nil ||
+		result.Aggregate.NotificationStatus != "sent" {
+		t.Fatalf("combination result = %#v", result)
+	}
+	if !strings.Contains(notifier.message, "Treasury safety") ||
+		!strings.Contains(notifier.message, "2/2") ||
+		!strings.Contains(notifier.message, "BNB balance changed.") ||
+		!strings.Contains(notifier.message, "Another BNB change.") ||
+		!strings.Contains(notifier.message, "Approval changed.") {
+		t.Fatalf("combination message = %q", notifier.message)
+	}
+	if notifier.actionText != "View all events" ||
+		notifier.actionURL != "https://example.test#aggregateEventsSection" {
+		t.Fatalf("combination action = %q / %q", notifier.actionText, notifier.actionURL)
+	}
+}
+
+func TestStandardPlanDoesNotRunCombinationMembers(t *testing.T) {
+	t.Parallel()
+	rule := testRule(plans.BalanceChange, nil, plans.Standard)
+	rule.RuleScope = "combination"
+	repository := &fakeRepository{}
+	executor := newTestExecutor(t, repository, &fakeChain{}, &fakeNotifier{})
+
+	value, err := executor.CheckRule(context.Background(), rule, plans.Standard)
+	if err != nil {
+		t.Fatalf("CheckRule() error = %v", err)
+	}
+	result := value.(RuleResult)
+	if result.Status != "plan_limited" || result.Reason != "combination_rule" {
+		t.Fatalf("combination plan result = %#v", result)
+	}
+}
+
 func TestCheckAllCollectsErrorsWithoutStoppingOtherRules(t *testing.T) {
 	lastValue := "10"
 	repository := &fakeRepository{rules: []store.WatchRule{
@@ -357,6 +673,7 @@ func newTestExecutor(
 		Notifications:   notifications,
 		Catalog:         catalog,
 		DefaultChainKey: "bsc",
+		PublicAppURL:    "https://example.test",
 	})
 }
 

@@ -28,6 +28,8 @@ type Repository interface {
 	SetFreeWatchRule(context.Context, string, int64) (store.UserPreference, error)
 	CreateWatchRuleWithinQuota(context.Context, store.CreateWatchRuleParams, store.QuotaPolicy) (store.WatchRule, error)
 	RestoreWatchRuleWithinQuota(context.Context, int64, string, store.QuotaPolicy) (store.WatchRule, error)
+	CreateCombinationRuleWithinQuota(context.Context, store.CreateCombinationRuleParams, store.QuotaPolicy) (store.CombinationRule, error)
+	RestoreCombinationRuleWithinQuota(context.Context, int64, string, store.QuotaPolicy) (store.CombinationRule, error)
 	CreateNotificationGroupWithinQuota(context.Context, string, string, string, store.QuotaPolicy) (store.NotificationGroup, error)
 	ActivateSubscription(context.Context, string, string, int) (store.Subscription, error)
 	GetComplimentaryGrant(context.Context, string) (*store.ComplimentaryGrant, error)
@@ -257,6 +259,58 @@ func (s *Service) RestorePausedWatchRule(
 		return s.Entitlement(ctx, deboxUserID)
 	}
 	return Entitlement{}, store.ErrSubscriptionChanged
+}
+
+func (s *Service) CreateCombinationRule(
+	ctx context.Context,
+	params store.CreateCombinationRuleParams,
+) (store.CombinationRule, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := s.ActivePlan(ctx, params.DeBoxUserID)
+		if err != nil {
+			return store.CombinationRule{}, err
+		}
+		combination, err := s.repository.CreateCombinationRuleWithinQuota(
+			ctx,
+			params,
+			quotaPolicy(plan),
+		)
+		if errors.Is(err, store.ErrSubscriptionChanged) {
+			continue
+		}
+		if err != nil {
+			return store.CombinationRule{}, quotaError(err, plan, false)
+		}
+		return combination, nil
+	}
+	return store.CombinationRule{}, store.ErrSubscriptionChanged
+}
+
+func (s *Service) RestoreCombinationRule(
+	ctx context.Context,
+	deboxUserID string,
+	combinationRuleID int64,
+) (store.CombinationRule, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := s.ActivePlan(ctx, deboxUserID)
+		if err != nil {
+			return store.CombinationRule{}, err
+		}
+		combination, err := s.repository.RestoreCombinationRuleWithinQuota(
+			ctx,
+			combinationRuleID,
+			deboxUserID,
+			quotaPolicy(plan),
+		)
+		if errors.Is(err, store.ErrSubscriptionChanged) {
+			continue
+		}
+		if err != nil {
+			return store.CombinationRule{}, quotaError(err, plan, true)
+		}
+		return combination, nil
+	}
+	return store.CombinationRule{}, store.ErrSubscriptionChanged
 }
 
 func (s *Service) CreateNotificationGroup(
@@ -499,6 +553,7 @@ func quotaPolicy(plan plans.Plan) store.QuotaPolicy {
 		GroupLimit:        plan.GroupLimit,
 		AllowedRuleTypes:  append([]string(nil), plan.AllowedRuleTypes...),
 		GroupNotification: plan.GroupNotification,
+		CombinationRules:  plan.AllowsCombinationRules(),
 	}
 }
 
@@ -508,6 +563,12 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 		return errors.New("当前套餐不支持该规则类型。")
 	case errors.Is(err, store.ErrGroupNotificationDenied):
 		return errors.New("当前套餐不支持群通知，请升级专业版。")
+	case errors.Is(err, store.ErrCombinationRulesDenied):
+		return errors.New("组合规则仅支持专业版。")
+	case errors.Is(err, store.ErrInvalidCombinationRule):
+		return errors.New("组合规则至少需要两条成员规则，且周期和触发次数必须大于 0。")
+	case errors.Is(err, store.ErrCombinationMemberManaged):
+		return errors.New("组合成员只能通过所属组合规则进行管理。")
 	case errors.Is(err, store.ErrRuleLimitReached):
 		noun := "规则"
 		if restoring {

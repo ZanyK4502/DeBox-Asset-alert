@@ -2,6 +2,24 @@ package plans
 
 import "testing"
 
+func TestBalanceThresholdCodesRemainBackwardCompatible(t *testing.T) {
+	t.Parallel()
+
+	if BalanceThreshold != "balance_threshold" {
+		t.Fatalf("legacy balance threshold code = %q", BalanceThreshold)
+	}
+	if LowBalanceThreshold != BalanceThreshold {
+		t.Fatalf(
+			"low balance threshold code = %q, want legacy code %q",
+			LowBalanceThreshold,
+			BalanceThreshold,
+		)
+	}
+	if HighBalanceThreshold != "balance_threshold_high" {
+		t.Fatalf("high balance threshold code = %q", HighBalanceThreshold)
+	}
+}
+
 func TestCatalogMatchesProductPlans(t *testing.T) {
 	t.Parallel()
 
@@ -20,7 +38,9 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if free.DailyAlertLimit == nil || *free.DailyAlertLimit != 5 {
 		t.Fatalf("free daily alert limit = %v, want 5", free.DailyAlertLimit)
 	}
-	if free.DailySummary || free.GroupNotification || !free.AllowsRuleType(BalanceThreshold) {
+	if free.DailySummary || free.GroupNotification ||
+		!free.AllowsRuleType(BalanceThreshold) ||
+		!free.AllowsRuleType(HighBalanceThreshold) {
 		t.Fatal("free plan capabilities do not match the product contract")
 	}
 
@@ -31,11 +51,16 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if standard.Price != "10" || standard.Days != 30 {
 		t.Fatalf("standard price/days = %s/%d", standard.Price, standard.Days)
 	}
-	if !standard.AllowsRuleType(ApprovalChange) || standard.AllowsRuleType(AddressInteraction) {
+	if !standard.AllowsRuleType(ApprovalChange) ||
+		!standard.AllowsRuleType(HighBalanceThreshold) ||
+		standard.AllowsRuleType(AddressInteraction) {
 		t.Fatal("standard rule capabilities do not match the product contract")
 	}
 	if !standard.AllowsSummaryTarget("private") || standard.AllowsSummaryTarget("group") {
 		t.Fatal("standard summary targets do not match the product contract")
+	}
+	if free.AllowsStageNotifications() || !standard.AllowsStageNotifications() {
+		t.Fatal("stage notification capabilities do not match the product contract")
 	}
 
 	professional, err := catalog.Get("professional")
@@ -47,6 +72,19 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	}
 	if !professional.GroupNotification || !professional.AllowsRuleType(AddressInteraction) {
 		t.Fatal("professional capabilities do not match the product contract")
+	}
+	if !professional.AllowsStageNotifications() {
+		t.Fatal("professional plan must allow stage notifications")
+	}
+}
+
+func TestIsBalanceThreshold(t *testing.T) {
+	t.Parallel()
+
+	if !IsBalanceThreshold(BalanceThreshold) ||
+		!IsBalanceThreshold(HighBalanceThreshold) ||
+		IsBalanceThreshold(BalanceChange) {
+		t.Fatal("balance threshold classification is incorrect")
 	}
 }
 

@@ -13,10 +13,13 @@ import (
 
 var (
 	ErrActiveSubscriptionConflict = errors.New("an active subscription prevents this plan change")
+	ErrCombinationMemberManaged   = errors.New("combination members are managed by their combination rule")
+	ErrCombinationRulesDenied     = errors.New("combination rules are not allowed")
 	ErrComplimentaryAlreadyUsed   = errors.New("complimentary access has already been used")
 	ErrGroupLimitReached          = errors.New("notification group limit reached")
 	ErrGroupNotificationDenied    = errors.New("group notification is not allowed")
 	ErrInvalidFreeWatchRule       = errors.New("watch rule is not eligible for the free plan")
+	ErrInvalidCombinationRule     = errors.New("invalid combination rule")
 	ErrInvalidNotificationStatus  = errors.New("invalid notification status")
 	ErrNotFound                   = errors.New("record not found")
 	ErrOrderConflict              = errors.New("payment order conflict")
@@ -25,6 +28,7 @@ var (
 	ErrPoolRequired               = errors.New("a PostgreSQL pool is required for this operation")
 	ErrRuleLimitReached           = errors.New("watch rule limit reached")
 	ErrRuleTypeDenied             = errors.New("watch rule type is not allowed")
+	ErrStageDeliveryRequired      = errors.New("watch rule is not configured for stage delivery")
 	ErrSubscriptionChanged        = errors.New("subscription changed during the operation")
 	ErrWalletLimitReached         = errors.New("monitored wallet limit reached")
 )

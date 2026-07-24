@@ -51,8 +51,35 @@ func TestRunnerUnlocksAfterCompletedCycle(t *testing.T) {
 	if !lock.unlocked {
 		t.Fatal("monitor lock was not released")
 	}
-	if len(repository.calls) != 1 || repository.calls[0] != "list" {
-		t.Fatalf("repository calls = %v, want [list]", repository.calls)
+	if len(repository.calls) != 2 ||
+		repository.calls[0] != "list" ||
+		repository.calls[1] != "cleanup" {
+		t.Fatalf("repository calls = %v, want [list cleanup]", repository.calls)
+	}
+}
+
+func TestRunnerCleansAggregationHistoryOnlyOncePerInterval(t *testing.T) {
+	repository := &fakeRepository{}
+	executor := newTestExecutor(t, repository, &fakeChain{}, &fakeNotifier{})
+	runner := NewRunner(
+		executor,
+		func(context.Context) (Lock, bool, error) {
+			return &fakeLock{}, true, nil
+		},
+		DefaultInterval,
+	)
+
+	runner.runCycle(context.Background(), discardLogger())
+	runner.runCycle(context.Background(), discardLogger())
+
+	want := []string{"list", "cleanup", "list"}
+	if len(repository.calls) != len(want) {
+		t.Fatalf("repository calls = %v, want %v", repository.calls, want)
+	}
+	for index := range want {
+		if repository.calls[index] != want[index] {
+			t.Fatalf("repository calls = %v, want %v", repository.calls, want)
+		}
 	}
 }
 

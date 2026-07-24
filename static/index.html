@@ -54,15 +54,20 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Rules</p>
-            <h2 data-i18n="rulesTitle">监控规则</h2>
+            <h2 data-i18n="createRulesTitle">创建规则</h2>
           </div>
-          <button id="refreshRulesBtn" class="secondary" type="button" data-i18n="refresh">刷新</button>
         </div>
 
-        <form id="ruleForm" class="form-grid">
+        <div class="segmented-control" role="tablist" aria-label="规则创建模式" data-i18n-aria-label="ruleCreationMode">
+          <button id="singleRuleModeBtn" class="segment active" type="button" role="tab" aria-selected="true" aria-controls="singleRulePanel" data-i18n="singleRule">单条规则</button>
+          <button id="combinationRuleModeBtn" class="segment" type="button" role="tab" aria-selected="false" aria-controls="combinationRulePanel" data-i18n="combinationRule">组合规则</button>
+        </div>
+
+        <div id="singleRulePanel" role="tabpanel" aria-labelledby="singleRuleModeBtn">
+        <form id="ruleForm" class="form-grid rule-form">
           <select id="chainSelect" aria-hidden="true" tabindex="-1"></select>
-          <label data-i18n-label="walletAddress">
-            钱包地址
+          <label data-i18n-label="monitoredAddress">
+            监控地址
             <input id="walletAddressInput" placeholder="0x..." autocomplete="off" />
           </label>
           <label data-i18n-label="chain">
@@ -81,18 +86,45 @@
             代币合约
             <input id="tokenAddressInput" placeholder="可选，留空监控原生资产" data-i18n-placeholder="tokenOptional" autocomplete="off" />
           </label>
-          <label id="targetAddressWrap" data-i18n-label="targetAddress">
+          <label id="targetAddressWrap" data-i18n-label="targetAddress" hidden>
             目标地址 / 合约
             <input id="targetAddressInput" placeholder="授权对象或交互目标地址" data-i18n-placeholder="targetAddressPlaceholder" autocomplete="off" />
           </label>
-          <label id="targetLabelWrap" data-i18n-label="targetNote">
+          <label id="targetLabelWrap" data-i18n-label="targetNote" hidden>
             目标备注
             <input id="targetLabelInput" placeholder="例如交易所、合约名" data-i18n-placeholder="targetNotePlaceholder" autocomplete="off" />
           </label>
-          <label data-i18n-label="threshold">
+          <label id="thresholdWrap" data-i18n-label="threshold">
             阈值
             <input id="thresholdInput" type="number" min="0" step="0.000001" value="0" />
+            <small id="thresholdHint" class="field-note"></small>
           </label>
+          <label data-i18n-label="deliveryMode">
+            通知模式
+            <select id="deliveryModeSelect">
+              <option value="realtime" data-i18n="realtimeMode">实时提醒</option>
+              <option value="stage" data-i18n="stageMode">阶段提醒</option>
+            </select>
+            <small id="deliveryModeHint" class="field-note" data-i18n="realtimeModeHint">后端约每 60 秒检查一次，触发后立即发送。</small>
+          </label>
+          <div id="stageSettingsWrap" class="form-grid-subset" hidden>
+            <label data-i18n-label="cycleType">
+              周期方式
+              <select id="cycleTypeSelect">
+                <option value="fixed" data-i18n="fixedCycle">固定周期</option>
+                <option value="follow" data-i18n="followCycle">跟随周期</option>
+              </select>
+            </label>
+            <label data-i18n-label="cycleMinutes">
+              统计时长（分钟）
+              <input id="cycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" />
+            </label>
+            <label data-i18n-label="triggerCount">
+              累计触发次数
+              <input id="triggerCountInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+            </label>
+            <p class="inline-explanation" data-i18n="stageModeExplanation">每个周期重新计数，达到次数后立即汇总发送一次，本周期不再重复发送。</p>
+          </div>
           <label data-i18n-label="notificationMethod">
             通知方式
             <select id="targetTypeSelect">
@@ -114,21 +146,175 @@
           <div id="tokenInfoBox" class="notice muted" data-i18n="tokenHint">填写代币合约后可识别 Token 信息。</div>
           <div id="balanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
           <div class="form-actions">
-            <button id="queryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
+            <div class="help-control">
+              <button id="queryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
+              <button id="balanceHelpBtn" class="icon-help" type="button" aria-expanded="false" aria-describedby="balanceHelpText" data-i18n-aria-label="balanceHelpLabel">?</button>
+              <span id="balanceHelpText" class="help-popover" role="tooltip" data-i18n="balanceHelp">查询当前“监控地址 + 链 + 代币”的实时余额，便于设置阈值。</span>
+            </div>
             <button class="primary" type="submit" data-i18n="createRule">创建规则</button>
           </div>
         </form>
+        </div>
 
-        <div id="rulesList" class="list"></div>
-        <div id="pausedRulesWrap" class="paused-rules" hidden>
-          <div class="subsection-head">
-            <div>
-              <p class="eyebrow">Paused</p>
-              <h3 data-i18n="pausedRules">已暂停规则</h3>
+        <div id="combinationRulePanel" role="tabpanel" aria-labelledby="combinationRuleModeBtn" hidden>
+          <p class="panel-intro" data-i18n="combinationIntro">专业版可创建组合规则。成员只负责计数，不单独发送通知；同一周期内全部成员达到各自次数后，立即发送一次汇总。</p>
+          <form id="combinationRuleForm" class="combination-form">
+            <div class="form-grid combination-parent-grid">
+              <label data-i18n-label="combinationNote">
+                组合备注
+                <input id="combinationNoteInput" maxlength="120" placeholder="例如：大额转出并与目标合约交互" data-i18n-placeholder="combinationNotePlaceholder" autocomplete="off" />
+              </label>
+              <label data-i18n-label="cycleType">
+                周期方式
+                <select id="combinationCycleTypeSelect">
+                  <option value="fixed" data-i18n="fixedCycle">固定周期</option>
+                  <option value="follow" data-i18n="followCycle">跟随周期</option>
+                </select>
+              </label>
+              <label data-i18n-label="cycleMinutes">
+                统计时长（分钟）
+                <input id="combinationCycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" />
+              </label>
+              <label data-i18n-label="notificationMethod">
+                通知方式
+                <select id="combinationTargetTypeSelect">
+                  <option value="private" data-i18n="privateNotification">私聊通知</option>
+                  <option value="group" data-i18n="groupNotification">群通知</option>
+                </select>
+              </label>
+              <label data-i18n-label="notificationLanguage">
+                通知语言
+                <select id="combinationLanguageSelect">
+                  <option value="zh" data-i18n="chinese">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <label id="combinationGroupTargetWrap" data-i18n-label="notificationGroup" hidden>
+                通知群
+                <select id="combinationGroupTargetSelect"></select>
+              </label>
             </div>
-            <button id="deletePausedRulesBtn" class="secondary" type="button" data-i18n="deleteAll">批量删除</button>
+
+            <div class="member-builder">
+              <div class="subsection-head">
+                <div>
+                  <p class="eyebrow">Members</p>
+                  <h3 data-i18n="combinationMembers">组合成员</h3>
+                </div>
+                <span id="combinationMemberCount" class="badge">0</span>
+              </div>
+              <p class="panel-intro" data-i18n="combinationMemberHint">先填写一条成员规则并加入组合，至少添加两条；成员不会单独通知。</p>
+              <div class="form-grid">
+                <select id="combinationChainSelect" aria-hidden="true" tabindex="-1"></select>
+                <label data-i18n-label="monitoredAddress">
+                  监控地址
+                  <input id="combinationAddressInput" placeholder="0x..." autocomplete="off" />
+                </label>
+                <label data-i18n-label="chain">
+                  链
+                  <div id="combinationChainPicker" class="chain-picker">
+                    <button id="combinationChainPickerButton" class="chain-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false"></button>
+                    <div id="combinationChainPickerMenu" class="chain-picker-menu" role="listbox" hidden></div>
+                  </div>
+                </label>
+                <label data-i18n-label="ruleType">
+                  规则类型
+                  <select id="combinationRuleTypeSelect"></select>
+                  <small id="combinationRuleDescription" class="field-note"></small>
+                </label>
+                <label data-i18n-label="tokenContract">
+                  代币合约
+                  <input id="combinationTokenAddressInput" placeholder="可选，留空监控原生资产" data-i18n-placeholder="tokenOptional" autocomplete="off" />
+                </label>
+                <label id="combinationTargetAddressWrap" data-i18n-label="targetAddress" hidden>
+                  目标地址 / 合约
+                  <input id="combinationTargetAddressInput" placeholder="授权对象或交互目标地址" data-i18n-placeholder="targetAddressPlaceholder" autocomplete="off" />
+                </label>
+                <label id="combinationTargetLabelWrap" data-i18n-label="targetNote" hidden>
+                  目标备注
+                  <input id="combinationTargetLabelInput" placeholder="例如交易所、合约名" data-i18n-placeholder="targetNotePlaceholder" autocomplete="off" />
+                </label>
+                <label id="combinationThresholdWrap" data-i18n-label="threshold">
+                  阈值
+                  <input id="combinationThresholdInput" type="number" min="0" step="0.000001" value="0" />
+                  <small id="combinationThresholdHint" class="field-note"></small>
+                </label>
+                <label data-i18n-label="memberTriggerCount">
+                  该成员触发次数
+                  <input id="combinationMemberTriggerInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+                </label>
+              </div>
+              <div class="form-actions">
+                <button id="addCombinationMemberBtn" class="secondary" type="button" data-i18n="addMember">加入组合</button>
+              </div>
+              <div id="combinationDraftList" class="member-draft-list"></div>
+            </div>
+
+            <div class="form-actions">
+              <button class="primary" type="submit" data-i18n="createCombination">创建组合规则</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section id="activeRulesSection" class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Active</p>
+            <h2 data-i18n="activeRules">正在运行的规则</h2>
           </div>
-          <div id="pausedRulesList" class="list"></div>
+          <button id="refreshRulesBtn" class="secondary" type="button" data-i18n="refresh">刷新</button>
+        </div>
+        <div id="rulesList" class="list list-flush"></div>
+      </section>
+
+      <section id="pausedRulesWrap" class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Paused</p>
+            <h2 data-i18n="pausedRules">已暂停规则</h2>
+          </div>
+          <button id="deletePausedRulesBtn" class="secondary" type="button" data-i18n="deleteAll">批量删除</button>
+        </div>
+        <div id="pausedRulesList" class="list list-flush"></div>
+      </section>
+
+      <section id="aggregateEventsSection" class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Activity</p>
+            <h2 data-i18n="aggregateEventsTitle">汇总通知事件查看入口</h2>
+          </div>
+          <div class="section-head-actions">
+            <span id="aggregateEventsRange" class="badge muted" data-i18n="notConnected">未连接</span>
+            <button id="refreshAggregateEventsBtn" class="secondary" type="button" data-i18n="refresh">刷新</button>
+          </div>
+        </div>
+
+        <div id="aggregateEventStats" class="aggregate-stats" aria-live="polite"></div>
+
+        <div class="aggregate-viewer">
+          <div class="aggregate-viewer-head">
+            <span id="aggregateLoadedCount" class="muted">-----</span>
+            <button id="aggregateScrollToggleBtn" class="aggregate-scroll-status" type="button" data-i18n="autoScrolling">
+              自动滚动
+            </button>
+          </div>
+          <div
+            id="aggregateEventViewport"
+            class="aggregate-event-viewport"
+            role="region"
+            tabindex="0"
+            data-i18n-aria-label="aggregateEventListLabel"
+          >
+            <div id="aggregateEventList" class="aggregate-event-list"></div>
+          </div>
+        </div>
+
+        <div class="aggregate-actions">
+          <button id="loadMoreAggregateEventsBtn" class="secondary" type="button" data-i18n="loadMoreEvents" hidden>
+            加载更多
+          </button>
         </div>
       </section>
 

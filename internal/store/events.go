@@ -115,7 +115,8 @@ func (s *Store) DailySummaryStatistics(
 				COUNT(DISTINCT LOWER(wallet_address)) AS wallet_count,
 				COUNT(*) FILTER (
 					WHERE rule_type IN (
-						'balance_change', 'incoming', 'outgoing', 'balance_threshold'
+						'balance_change', 'incoming', 'outgoing',
+						'balance_threshold', 'balance_threshold_high'
 					)
 				) AS asset_rule_count,
 				COUNT(*) FILTER (WHERE rule_type = 'approval_change') AS approval_rule_count,
@@ -127,7 +128,8 @@ func (s *Store) DailySummaryStatistics(
 				COUNT(*) AS event_count,
 				COUNT(*) FILTER (
 					WHERE ae.event_type IN (
-						'balance_change', 'incoming', 'outgoing', 'balance_threshold'
+						'balance_change', 'incoming', 'outgoing',
+						'balance_threshold', 'balance_threshold_high'
 					)
 				) AS asset_event_count,
 				COUNT(*) FILTER (WHERE ae.event_type = 'approval_change') AS approval_event_count,

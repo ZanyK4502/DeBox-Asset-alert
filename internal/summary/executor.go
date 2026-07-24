@@ -21,20 +21,22 @@ const (
 
 var (
 	ruleTypeLabels = map[string]string{
-		"balance_change":      "余额变化",
-		"incoming":            "转入",
-		"outgoing":            "转出",
-		"balance_threshold":   "余额阈值",
-		"approval_change":     "授权变化",
-		"address_interaction": "指定地址交互",
+		"balance_change":         "余额变化",
+		"incoming":               "转入",
+		"outgoing":               "转出",
+		"balance_threshold":      "低余额阈值",
+		"balance_threshold_high": "高余额阈值",
+		"approval_change":        "授权变化",
+		"address_interaction":    "指定地址交互",
 	}
 	ruleTypeLabelsEN = map[string]string{
-		"balance_change":      "Balance change",
-		"incoming":            "Incoming transfer",
-		"outgoing":            "Outgoing transfer",
-		"balance_threshold":   "Balance threshold",
-		"approval_change":     "Approval change",
-		"address_interaction": "Specified address interaction",
+		"balance_change":         "Balance change",
+		"incoming":               "Incoming transfer",
+		"outgoing":               "Outgoing transfer",
+		"balance_threshold":      "Low balance threshold",
+		"balance_threshold_high": "High balance threshold",
+		"approval_change":        "Approval change",
+		"address_interaction":    "Specified address interaction",
 	}
 )
 

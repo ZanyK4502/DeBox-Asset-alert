@@ -12,14 +12,42 @@ const watchRuleColumns = `
 	id, debox_user_id, chain_key, chain_id, wallet_address, token_address,
 	target_address, target_label, rule_type, threshold::text AS threshold,
 	notification_chat_id, notification_chat_type, notification_label,
-	notification_language, enabled, run_status, last_value, last_checked_at, created_at
+	notification_language, rule_scope, delivery_mode, cycle_type, cycle_minutes,
+	trigger_count_threshold, aggregation_anchor_at,
+	enabled, run_status, last_value, last_checked_at, created_at
 `
 
 const watchRuleColumnsQualified = `
 	wr.id, wr.debox_user_id, wr.chain_key, wr.chain_id, wr.wallet_address, wr.token_address,
 	wr.target_address, wr.target_label, wr.rule_type, wr.threshold::text AS threshold,
 	wr.notification_chat_id, wr.notification_chat_type, wr.notification_label,
-	wr.notification_language, wr.enabled, wr.run_status, wr.last_value, wr.last_checked_at, wr.created_at
+	wr.notification_language, wr.rule_scope, wr.delivery_mode, wr.cycle_type, wr.cycle_minutes,
+	wr.trigger_count_threshold, wr.aggregation_anchor_at,
+	wr.enabled, wr.run_status, wr.last_value, wr.last_checked_at, wr.created_at
+`
+
+const aggregationWindowColumns = `
+	id, debox_user_id, source_type, watch_rule_id, combination_rule_id,
+	starts_at, ends_at, total_trigger_count, notification_sent,
+	notification_sent_at, closed_at, created_at, updated_at
+`
+
+const aggregateNotificationColumns = `
+	id, debox_user_id, aggregation_window_id, notification_kind,
+	notification_chat_id, notification_chat_type, notification_label,
+	notification_language, note, trigger_count_snapshot,
+	notification_message_id, notification_status, notification_error,
+	notification_attempts, notification_attempted_at, notification_sent_at, created_at
+`
+
+const combinationRuleColumns = `
+	id, debox_user_id, note, cycle_type, cycle_minutes,
+	notification_chat_id, notification_chat_type, notification_label,
+	notification_language, enabled, run_status, aggregation_anchor_at, created_at
+`
+
+const combinationRuleMemberColumns = `
+	id, combination_rule_id, watch_rule_id, required_trigger_count, created_at
 `
 
 const orderColumns = `

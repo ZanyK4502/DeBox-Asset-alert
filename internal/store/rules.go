@@ -7,20 +7,25 @@ import (
 )
 
 type CreateWatchRuleParams struct {
-	DeBoxUserID          string
-	ChainKey             string
-	ChainID              int32
-	WalletAddress        string
-	TokenAddress         *string
-	TargetAddress        *string
-	TargetLabel          string
-	RuleType             string
-	Threshold            string
-	NotificationChatID   string
-	NotificationChatType string
-	NotificationLabel    string
-	NotificationLanguage string
-	LastValue            *string
+	DeBoxUserID           string
+	ChainKey              string
+	ChainID               int32
+	WalletAddress         string
+	TokenAddress          *string
+	TargetAddress         *string
+	TargetLabel           string
+	RuleType              string
+	Threshold             string
+	NotificationChatID    string
+	NotificationChatType  string
+	NotificationLabel     string
+	NotificationLanguage  string
+	RuleScope             string
+	DeliveryMode          string
+	CycleType             string
+	CycleMinutes          int32
+	TriggerCountThreshold int64
+	LastValue             *string
 }
 
 func (s *Store) CreateWatchRule(
@@ -35,17 +40,31 @@ func createWatchRule(
 	db DBTX,
 	params CreateWatchRuleParams,
 ) (WatchRule, error) {
+	ruleScope := normalizeRuleScope(params.RuleScope)
+	deliveryMode := normalizeDeliveryMode(params.DeliveryMode)
+	cycleType := normalizeCycleType(params.CycleType)
+	cycleMinutes := params.CycleMinutes
+	if cycleMinutes <= 0 {
+		cycleMinutes = 60
+	}
+	triggerCountThreshold := params.TriggerCountThreshold
+	if triggerCountThreshold <= 0 {
+		triggerCountThreshold = 1
+	}
 	rule, err := collectOne[WatchRule](ctx, db, `
 		INSERT INTO watch_rules (
 			debox_user_id, chain_key, chain_id, wallet_address,
 			token_address, target_address, target_label, rule_type,
 			threshold, notification_chat_id, notification_chat_type,
-			notification_label, notification_language, run_status,
-			last_value, last_checked_at
+			notification_label, notification_language, rule_scope,
+			delivery_mode, cycle_type, cycle_minutes, trigger_count_threshold,
+			aggregation_anchor_at, run_status, last_value, last_checked_at
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10, $11, $12, $13, 'active', $14, NOW()
+			$9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+			CASE WHEN $15 = 'stage' AND $16 = 'fixed' THEN NOW() ELSE NULL END,
+			'active', $19, NOW()
 		)
 		RETURNING `+watchRuleColumns,
 		params.DeBoxUserID,
@@ -61,6 +80,11 @@ func createWatchRule(
 		params.NotificationChatType,
 		params.NotificationLabel,
 		normalizeLanguage(params.NotificationLanguage),
+		ruleScope,
+		deliveryMode,
+		cycleType,
+		cycleMinutes,
+		triggerCountThreshold,
 		params.LastValue,
 	)
 	if err != nil {
@@ -69,9 +93,30 @@ func createWatchRule(
 	return rule, nil
 }
 
+func normalizeRuleScope(value string) string {
+	if strings.ToLower(strings.TrimSpace(value)) == "combination" {
+		return "combination"
+	}
+	return "standalone"
+}
+
+func normalizeDeliveryMode(value string) string {
+	if strings.ToLower(strings.TrimSpace(value)) == "stage" {
+		return "stage"
+	}
+	return "realtime"
+}
+
+func normalizeCycleType(value string) string {
+	if strings.ToLower(strings.TrimSpace(value)) == "follow" {
+		return "follow"
+	}
+	return "fixed"
+}
+
 func (s *Store) DeleteWatchRule(ctx context.Context, ruleID int64, deboxUserID string) (bool, error) {
 	tag, err := s.db.Exec(ctx,
-		"DELETE FROM watch_rules WHERE id = $1 AND debox_user_id = $2",
+		"DELETE FROM watch_rules WHERE id = $1 AND debox_user_id = $2 AND rule_scope = 'standalone'",
 		ruleID,
 		deboxUserID,
 	)
@@ -84,7 +129,7 @@ func (s *Store) DeleteWatchRule(ctx context.Context, ruleID int64, deboxUserID s
 func (s *Store) DeletePausedWatchRules(ctx context.Context, deboxUserID string) (int64, error) {
 	tag, err := s.db.Exec(ctx, `
 		DELETE FROM watch_rules
-		WHERE debox_user_id = $1 AND run_status = 'paused'
+		WHERE debox_user_id = $1 AND run_status = 'paused' AND rule_scope = 'standalone'
 	`, deboxUserID)
 	if err != nil {
 		return 0, fmt.Errorf("delete paused watch rules: %w", err)
@@ -117,7 +162,7 @@ func (s *Store) UpdateWatchRuleNotificationLanguage(
 	rule, err := collectOne[WatchRule](ctx, s.db, `
 		UPDATE watch_rules
 		SET notification_language = $1
-		WHERE id = $2 AND debox_user_id = $3
+		WHERE id = $2 AND debox_user_id = $3 AND rule_scope = 'standalone'
 		RETURNING `+watchRuleColumns,
 		normalizeLanguage(language),
 		ruleID,
@@ -137,21 +182,37 @@ func (s *Store) RestoreWatchRule(
 	ruleID int64,
 	deboxUserID string,
 ) (WatchRule, error) {
-	rule, err := collectOne[WatchRule](ctx, s.db, `
-		UPDATE watch_rules
-		SET run_status = 'active'
-		WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
-		RETURNING `+watchRuleColumns,
-		ruleID,
-		deboxUserID,
-	)
-	if isNoRows(err) {
-		return WatchRule{}, ErrNotFound
-	}
-	if err != nil {
-		return WatchRule{}, fmt.Errorf("restore watch rule: %w", err)
-	}
-	return rule, nil
+	return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+		rule, err := collectOne[WatchRule](ctx, tx, `
+			UPDATE watch_rules
+			SET run_status = 'active',
+			    aggregation_anchor_at = CASE
+			      WHEN delivery_mode = 'stage' AND cycle_type = 'fixed' THEN NOW()
+			      ELSE NULL
+			    END
+			WHERE id = $1
+			  AND debox_user_id = $2
+			  AND enabled = 1
+			  AND rule_scope = 'standalone'
+			RETURNING `+watchRuleColumns,
+			ruleID,
+			deboxUserID,
+		)
+		if isNoRows(err) {
+			return WatchRule{}, ErrNotFound
+		}
+		if err != nil {
+			return WatchRule{}, fmt.Errorf("restore watch rule: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE aggregation_windows
+			SET closed_at = NOW(), updated_at = NOW()
+			WHERE watch_rule_id = $1 AND closed_at IS NULL
+		`, ruleID); err != nil {
+			return WatchRule{}, fmt.Errorf("reset restored watch rule aggregation: %w", err)
+		}
+		return rule, nil
+	})
 }
 
 func (s *Store) CountUserWatchRules(ctx context.Context, deboxUserID string) (int64, error) {
@@ -196,7 +257,7 @@ func (s *Store) ListUserWatchRules(ctx context.Context, deboxUserID string) ([]W
 	rules, err := collectMany[WatchRule](ctx, s.db, `
 		SELECT `+watchRuleColumns+`
 		FROM watch_rules
-		WHERE debox_user_id = $1
+		WHERE debox_user_id = $1 AND rule_scope = 'standalone'
 		ORDER BY created_at DESC
 	`, deboxUserID)
 	if err != nil {
@@ -278,9 +339,12 @@ func setFreeWatchRule(
 				WHERE id = $1
 				  AND debox_user_id = $2
 				  AND enabled = 1
+				  AND rule_scope = 'standalone'
 				  AND notification_chat_type = 'private'
+				  AND delivery_mode = 'realtime'
 				  AND rule_type IN (
-					'balance_change', 'incoming', 'outgoing', 'balance_threshold'
+					'balance_change', 'incoming', 'outgoing',
+					'balance_threshold', 'balance_threshold_high'
 				  )
 			)
 	`, ruleID, deboxUserID).Scan(&eligible); err != nil {
@@ -295,6 +359,13 @@ func setFreeWatchRule(
 			WHERE debox_user_id = $2 AND enabled = 1
 	`, ruleID, deboxUserID); err != nil {
 		return UserPreference{}, fmt.Errorf("activate free watch rule: %w", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE combination_rules
+		SET run_status = 'paused'
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID); err != nil {
+		return UserPreference{}, fmt.Errorf("pause free plan combination rules: %w", err)
 	}
 	preferences, err := collectOne[UserPreference](ctx, db, `
 			INSERT INTO user_preferences (debox_user_id, free_watch_rule_id, updated_at)
@@ -329,6 +400,13 @@ func (s *Store) PauseUserWatchRules(
 	tag, err := s.db.Exec(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("pause user watch rules: %w", err)
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE combination_rules
+		SET run_status = 'paused'
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID); err != nil {
+		return 0, fmt.Errorf("pause user combination rules: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

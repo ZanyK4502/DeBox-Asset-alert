@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,48 @@ func TestMessengerSendsHTMLNotificationWithOfficialSDK(t *testing.T) {
 	}
 	if messageID != "message-group" || requests != 3 {
 		t.Fatalf("group messageID/requests = %q/%d", messageID, requests)
+	}
+}
+
+func TestMessengerSendsNotificationWithURLAction(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/openapi/bot/getMe":
+			_, _ = io.WriteString(writer, `{"ok":true,"result":{"user_id":"bot-1","name":"Monitor"}}`)
+		case "/openapi/bot/sendMessage":
+			if err := request.ParseForm(); err != nil {
+				t.Errorf("ParseForm() error = %v", err)
+			}
+			markup := request.Form.Get("reply_markup")
+			if request.Form.Get("text") != "<b>Stage alert</b>" ||
+				request.Form.Get("parse_mode") != "HTML" ||
+				!strings.Contains(markup, "View all events") ||
+				!strings.Contains(markup, "https://app.example/#aggregateEventsSection") {
+				encoded, _ := json.Marshal(request.Form)
+				t.Errorf("unexpected action message form: %s", encoded)
+			}
+			_, _ = io.WriteString(writer, `{"ok":true,"result":{"message_id":"message-action"}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	messenger, err := NewMessenger("debox-key", "debox-secret", server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("NewMessenger() error = %v", err)
+	}
+	messageID, err := messenger.SendNotificationWithAction(
+		"user-1",
+		"private",
+		"<b>Stage alert</b>",
+		"View all events",
+		"https://app.example/#aggregateEventsSection",
+	)
+	if err != nil {
+		t.Fatalf("SendNotificationWithAction() error = %v", err)
+	}
+	if messageID != "message-action" {
+		t.Fatalf("messageID = %q", messageID)
 	}
 }

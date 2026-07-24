@@ -31,6 +31,7 @@ const requiredAPIs = [
   "/api/debox/token",
   "/api/chain/balance",
   "/api/watch-rules",
+  "/api/aggregate-events",
   "/api/subscription/summary-settings",
   "/api/notification-groups",
 ];

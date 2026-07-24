@@ -12,6 +12,7 @@ type QuotaPolicy struct {
 	GroupLimit        int
 	AllowedRuleTypes  []string
 	GroupNotification bool
+	CombinationRules  bool
 }
 
 func (p QuotaPolicy) allowsRuleType(ruleType string) bool {
@@ -129,6 +130,13 @@ func (s *Store) ApplyPaidExpiryFallback(
 		if _, err := tx.Exec(ctx, query, args...); err != nil {
 			return false, fmt.Errorf("pause expired subscription rules: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE combination_rules
+			SET run_status = 'paused'
+			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+		`, deboxUserID); err != nil {
+			return false, fmt.Errorf("pause expired combination rules: %w", err)
+		}
 		return true, nil
 	})
 }
@@ -139,6 +147,9 @@ func (s *Store) CreateWatchRuleWithinQuota(
 	policy QuotaPolicy,
 ) (WatchRule, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+		if normalizeRuleScope(params.RuleScope) == "combination" {
+			return WatchRule{}, ErrCombinationMemberManaged
+		}
 		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
 			return WatchRule{}, err
 		}
@@ -152,13 +163,9 @@ func (s *Store) CreateWatchRuleWithinQuota(
 			return WatchRule{}, ErrGroupNotificationDenied
 		}
 
-		ruleCount, err := queryCount(ctx, tx, `
-			SELECT COUNT(*)
-			FROM watch_rules
-			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
-		`, params.DeBoxUserID)
+		ruleCount, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {
-			return WatchRule{}, fmt.Errorf("count active watch rules: %w", err)
+			return WatchRule{}, err
 		}
 		if ruleCount >= int64(policy.RuleLimit) {
 			return WatchRule{}, ErrRuleLimitReached
@@ -231,6 +238,9 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 		if rule.Enabled != 1 {
 			return WatchRule{}, ErrNotFound
 		}
+		if rule.RuleScope == "combination" {
+			return WatchRule{}, ErrCombinationMemberManaged
+		}
 		if !policy.allowsRuleType(rule.RuleType) {
 			return WatchRule{}, ErrRuleTypeDenied
 		}
@@ -241,13 +251,9 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 			return rule, nil
 		}
 
-		ruleCount, err := queryCount(ctx, tx, `
-			SELECT COUNT(*)
-			FROM watch_rules
-			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
-		`, deboxUserID)
+		ruleCount, err := countActiveRuleSlots(ctx, tx, deboxUserID)
 		if err != nil {
-			return WatchRule{}, fmt.Errorf("count active watch rules: %w", err)
+			return WatchRule{}, err
 		}
 		if ruleCount >= int64(policy.RuleLimit) {
 			return WatchRule{}, ErrRuleLimitReached
@@ -281,7 +287,11 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 
 		restored, err := collectOne[WatchRule](ctx, tx, `
 			UPDATE watch_rules
-			SET run_status = 'active'
+			SET run_status = 'active',
+			    aggregation_anchor_at = CASE
+			      WHEN delivery_mode = 'stage' AND cycle_type = 'fixed' THEN NOW()
+			      ELSE NULL
+			    END
 			WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
 			RETURNING `+watchRuleColumns,
 			ruleID,
@@ -290,8 +300,31 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 		if err != nil {
 			return WatchRule{}, fmt.Errorf("restore watch rule: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE aggregation_windows
+			SET closed_at = NOW(), updated_at = NOW()
+			WHERE watch_rule_id = $1 AND closed_at IS NULL
+		`, ruleID); err != nil {
+			return WatchRule{}, fmt.Errorf("reset restored watch rule aggregation: %w", err)
+		}
 		return restored, nil
 	})
+}
+
+func countActiveRuleSlots(ctx context.Context, db DBTX, deboxUserID string) (int64, error) {
+	count, err := queryCount(ctx, db, `
+		SELECT COUNT(*) + (
+			SELECT COUNT(*)
+			FROM combination_rules
+			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+		)
+		FROM watch_rules
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID)
+	if err != nil {
+		return 0, fmt.Errorf("count active rule slots: %w", err)
+	}
+	return count, nil
 }
 
 func (s *Store) CreateNotificationGroupWithinQuota(

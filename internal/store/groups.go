@@ -144,6 +144,30 @@ func (s *Store) DeleteNotificationGroup(
 			return GroupDeletion{}, fmt.Errorf("disable notification group: %w", err)
 		}
 
+		if _, err := tx.Exec(ctx, `
+			UPDATE watch_rules
+			SET notification_chat_id = $1,
+			    notification_chat_type = 'private',
+			    notification_label = '私聊通知'
+			WHERE debox_user_id = $1
+			  AND notification_chat_type = 'group'
+			  AND notification_chat_id = $2
+		`, deboxUserID, group.GID); err != nil {
+			return GroupDeletion{}, fmt.Errorf("fallback group watch rules to private: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE combination_rules
+			SET notification_chat_id = $1,
+			    notification_chat_type = 'private',
+			    notification_label = '私聊通知'
+			WHERE debox_user_id = $1
+			  AND notification_chat_type = 'group'
+			  AND notification_chat_id = $2
+		`, deboxUserID, group.GID); err != nil {
+			return GroupDeletion{}, fmt.Errorf("fallback group combination rules to private: %w", err)
+		}
+
 		fallbacks := []Subscription{}
 		if len(subscriptionIDs) > 0 {
 			fallbacks, err = collectMany[Subscription](ctx, tx, `

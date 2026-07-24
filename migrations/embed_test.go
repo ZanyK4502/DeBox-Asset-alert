@@ -27,6 +27,12 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"auth_challenges",
 		"auth_sessions",
 		"complimentary_grants",
+		"combination_rules",
+		"combination_rule_members",
+		"aggregation_windows",
+		"aggregation_window_members",
+		"rule_trigger_events",
+		"aggregate_notifications",
 	}
 	destructive := regexp.MustCompile(`(?im)^\s*(drop|truncate|delete|update|rename)\b`)
 	destructiveAlter := regexp.MustCompile(`(?im)^\s*alter\s+table\b.*\b(drop|rename)\b`)

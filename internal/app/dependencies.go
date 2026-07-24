@@ -85,6 +85,7 @@ func buildDependencies(
 		Catalog:          catalog,
 		TryExecutionLock: tryMonitorLock,
 		DefaultChainKey:  cfg.ChainKey,
+		PublicAppURL:     cfg.PublicAppURL,
 	})
 	managementService := management.New(management.Dependencies{
 		Repository:      repository,

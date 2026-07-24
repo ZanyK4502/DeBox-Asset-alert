@@ -17,15 +17,15 @@ import (
 func menuText(language string) string {
 	if normalizeLanguage(language) == "en" {
 		return "<b>DeBox Asset Alert</b><br/>" +
-			"Monitor wallet addresses and token balance changes with real-time alerts from DeBox Bot.<br/><br/>" +
-			"Features include multi-chain balance monitoring, token detection, private alerts, " +
-			"group alerts for Professional users, and daily summaries.<br/><br/>" +
+			"Monitor on-chain addresses, token balances, approvals, and contract interactions through DeBox Bot.<br/><br/>" +
+			"Features include multi-chain monitoring, low and high balance thresholds, real-time and stage alerts, " +
+			"Professional combination rules, group alerts, and daily summaries.<br/><br/>" +
 			"Open the monitoring dashboard and sign with your wallet to securely sign in. " +
 			"Signing sends no transaction and uses no gas."
 	}
 	return "<b>DeBox Asset Alert</b><br/>" +
-		"监控钱包地址或代币资产变化，通过 DeBox Bot 实时推送通知。<br/><br/>" +
-		"支持：多链余额监控、代币识别、私聊通知、专业版群通知、每日摘要等。<br/><br/>" +
+		"监控链上地址、代币余额、授权和合约交互，通过 DeBox Bot 接收通知。<br/><br/>" +
+		"支持：多链监控、低余额与高余额阈值、实时提醒、阶段提醒、专业版组合规则、群通知和每日摘要等。<br/><br/>" +
 		"打开个人监控面板后，通过钱包签名完成安全登录；签名不会发起交易或消耗 Gas。"
 }
 
@@ -35,14 +35,17 @@ func featuresText(language string) string {
 			"Supported networks: BNB Chain, Ethereum, Base, Polygon, Arbitrum, and Optimism.<br/><br/>" +
 			"Monitor native asset balances, or enter an ERC-20 contract to monitor a token balance.<br/><br/>" +
 			"- Rule types:<br/>" +
-			"• Balance change<br/>" +
-			"• Incoming transfer<br/>" +
-			"• Outgoing transfer<br/>" +
-			"• Balance threshold: alerts immediately if the balance is already at or below the threshold when created; it does not repeat while below, and alerts again after recovery above the threshold and another drop<br/>" +
+			"• Balance change: alerts when the change reaches the configured amount<br/>" +
+			"• Incoming and outgoing transfers: alerts when the transfer reaches the configured amount<br/>" +
+			"• Low balance threshold: alerts once when the balance reaches or falls below the threshold; it alerts again only after recovery above it and another drop<br/>" +
+			"• High balance threshold: alerts once when the balance reaches or rises above the threshold; it alerts again only after falling below it and another rise<br/>" +
 			"• Approval change<br/>" +
-			"• Specified address interaction<br/><br/>" +
-			"<b>Standard</b> includes private alerts and daily summaries.<br/><br/>" +
-			"<b>Professional</b> includes group alerts and more advanced rules.<br/><br/>" +
+			"• Specified address interaction (Professional)<br/><br/>" +
+			"- Delivery modes:<br/>" +
+			"• Real-time: sends after each trigger<br/>" +
+			"• Stage alert (Standard and Professional): counts events in a user-defined cycle, sends once when the configured count is reached, then resets for the next cycle<br/>" +
+			"• Combination rule (Professional): uses at least two dedicated member rules; it sends one combined alert after every member reaches its own count in the same cycle. Members do not send individual alerts.<br/><br/>" +
+			"Stage and combination events remain available in the dashboard for 30 days.<br/><br/>" +
 			"Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours and includes notification failures.<br/><br/>" +
 			"If a summary group is unbound, delivery switches to private chat. If private confirmation fails, the daily summary is turned off."
 	}
@@ -50,14 +53,17 @@ func featuresText(language string) string {
 		"支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>" +
 		"可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/><br/>" +
 		"- 规则包括：<br/>" +
-		"• 余额变化<br/>" +
-		"• 转入<br/>" +
-		"• 转出<br/>" +
-		"• 余额阈值：创建规则时余额已达到或低于阈值会立即提醒一次；持续低于不重复，回升至阈值以上后再次跌破会重新提醒<br/>" +
+		"• 余额变化：变化量达到设定金额时提醒<br/>" +
+		"• 转入与转出：金额达到设定值时提醒<br/>" +
+		"• 低余额阈值：余额达到或低于阈值时提醒一次；持续低于不重复，恢复至阈值以上后再次跌破才重新提醒<br/>" +
+		"• 高余额阈值：余额达到或高于阈值时提醒一次；持续高于不重复，回落至阈值以下后再次突破才重新提醒<br/>" +
 		"• 授权变化<br/>" +
-		"• 指定地址交互<br/><br/>" +
-		"<b>标准版</b>支持私聊通知和每日摘要；<br/><br/>" +
-		"<b>专业版</b>支持群通知和更多高级规则。<br/><br/>" +
+		"• 指定地址交互（专业版）<br/><br/>" +
+		"- 通知模式：<br/>" +
+		"• 实时提醒：每次触发后发送<br/>" +
+		"• 阶段提醒（标准版、专业版）：按用户设置的周期累计事件，达到设定次数后发送一次，进入下一周期后重新计数<br/>" +
+		"• 组合规则（专业版）：至少包含两条专用成员规则；同一周期内所有成员分别达到设定次数后发送一条总通知，成员不会单独通知<br/><br/>" +
+		"阶段提醒和组合规则事件会在个人监控面板保留 30 天。<br/><br/>" +
 		"每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。<br/><br/>" +
 		"解绑摘要群后会自动切回本人私聊；若私聊确认失败，每日摘要会关闭。"
 }
@@ -67,15 +73,15 @@ func (s *Service) plansText(language string) string {
 	professional, _ := s.deps.Catalog.Get(plans.Professional)
 	if normalizeLanguage(language) == "en" {
 		return "<b>Plans</b><br/><br/>" +
-			"Free: 1 wallet, 1 basic rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
+			"Free: 1 wallet, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
 			fmt.Sprintf(
-				"Standard: %s %s / %d days, 3 wallets, 10 rules, including asset and approval monitoring.<br/><br/>",
+				"Standard: %s %s / %d days, 3 wallets, 10 rules, asset and approval monitoring, real-time or stage alerts, private delivery, and private daily summaries.<br/><br/>",
 				standard.Price,
 				standard.Asset,
 				standard.Days,
 			) +
 			fmt.Sprintf(
-				"Professional: %s %s / %d days, 20 wallets, 100 rules, including group alerts and specified address interactions.<br/><br/>",
+				"Professional: %s %s / %d days, 20 wallets, 100 rules, all rule types, stage alerts, combination rules, group delivery, and private or group daily summaries. Combination members use the rule quota.<br/><br/>",
 				professional.Price,
 				professional.Asset,
 				professional.Days,
@@ -85,15 +91,15 @@ func (s *Service) plansText(language string) string {
 			"Subscriptions take effect immediately. Digital service purchases are non-refundable, so please review the plan before purchase."
 	}
 	return "<b>订阅方案</b><br/><br/>" +
-		"免费版：1 个钱包，1 条基础规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
+		"免费版：1 个钱包，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
 		fmt.Sprintf(
-			"标准版：%s %s / %d 天，3 个钱包，10 条规则，支持资产变化和授权监控。<br/><br/>",
+			"标准版：%s %s / %d 天，3 个钱包，10 条规则，支持资产变化、授权监控、实时或阶段提醒、私聊通知和本人私聊每日摘要。<br/><br/>",
 			standard.Price,
 			standard.Asset,
 			standard.Days,
 		) +
 		fmt.Sprintf(
-			"专业版：%s %s / %d 天，20 个钱包，100 条规则，支持群通知和指定地址交互。<br/><br/>",
+			"专业版：%s %s / %d 天，20 个钱包，100 条规则，支持全部规则类型、阶段提醒、组合规则、群通知，以及本人私聊或群每日摘要；组合成员会占用规则额度。<br/><br/>",
 			professional.Price,
 			professional.Asset,
 			professional.Days,
@@ -360,6 +366,10 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 			buttonURL(
 				choice(english, "Monitoring Dashboard", "个人监控面板"),
 				s.publicAppURL,
+			),
+			buttonURL(
+				choice(english, "Aggregate Events", "汇总通知事件"),
+				s.publicAppURL+"#aggregateEventsSection",
 			),
 		))
 	}

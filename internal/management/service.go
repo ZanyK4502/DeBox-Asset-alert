@@ -39,6 +39,10 @@ type Repository interface {
 	DeleteWatchRule(context.Context, int64, string) (bool, error)
 	DeletePausedWatchRules(context.Context, string) (int64, error)
 	UpdateWatchRuleNotificationLanguage(context.Context, int64, string, string) (store.WatchRule, error)
+	ListUserCombinationRules(context.Context, string) ([]store.CombinationRule, error)
+	DeleteCombinationRule(context.Context, int64, string) (bool, error)
+	UpdateCombinationRuleNotificationLanguage(context.Context, int64, string, string) (store.CombinationRule, error)
+	ListAggregationEventHistory(context.Context, string, int64, int) (store.AggregationHistoryPage, error)
 	GetNotificationGroup(context.Context, string, string) (*store.NotificationGroup, error)
 	ListNotificationGroups(context.Context, string) ([]store.NotificationGroup, error)
 	DeleteNotificationGroup(context.Context, int64, string) (store.GroupDeletion, error)
@@ -52,6 +56,8 @@ type EntitlementService interface {
 	ChooseFreeWatchRule(context.Context, string, int64) (subscription.Entitlement, error)
 	CreateWatchRule(context.Context, store.CreateWatchRuleParams) (store.WatchRule, error)
 	RestorePausedWatchRule(context.Context, string, int64) (subscription.Entitlement, error)
+	CreateCombinationRule(context.Context, store.CreateCombinationRuleParams) (store.CombinationRule, error)
+	RestoreCombinationRule(context.Context, string, int64) (store.CombinationRule, error)
 	CreateNotificationGroup(context.Context, string, string, string) (store.NotificationGroup, error)
 	RequireSummaryTarget(context.Context, string, string) (plans.Plan, error)
 }
@@ -98,26 +104,34 @@ func New(dependencies Dependencies) *Service {
 }
 
 type WatchRuleInput struct {
-	ChainKey             string `json:"chain_key"`
-	WalletAddress        string `json:"wallet_address"`
-	TokenAddress         string `json:"token_address"`
-	TargetAddress        string `json:"target_address"`
-	TargetLabel          string `json:"target_label"`
-	RuleType             string `json:"rule_type"`
-	Threshold            string `json:"threshold"`
-	NotificationChatID   string `json:"notification_chat_id"`
-	NotificationChatType string `json:"notification_chat_type"`
-	NotificationLabel    string `json:"notification_label"`
-	NotificationLanguage string `json:"notification_language"`
+	ChainKey              string `json:"chain_key"`
+	WalletAddress         string `json:"wallet_address"`
+	TokenAddress          string `json:"token_address"`
+	TargetAddress         string `json:"target_address"`
+	TargetLabel           string `json:"target_label"`
+	RuleType              string `json:"rule_type"`
+	Threshold             string `json:"threshold"`
+	NotificationChatID    string `json:"notification_chat_id"`
+	NotificationChatType  string `json:"notification_chat_type"`
+	NotificationLabel     string `json:"notification_label"`
+	NotificationLanguage  string `json:"notification_language"`
+	DeliveryMode          string `json:"delivery_mode"`
+	CycleType             string `json:"cycle_type"`
+	CycleMinutes          int32  `json:"cycle_minutes"`
+	TriggerCountThreshold int64  `json:"trigger_count_threshold"`
 }
 
 func DefaultWatchRuleInput() WatchRuleInput {
 	return WatchRuleInput{
-		ChainKey:             "bsc",
-		RuleType:             plans.BalanceChange,
-		Threshold:            "0",
-		NotificationChatType: "private",
-		NotificationLanguage: "zh",
+		ChainKey:              "bsc",
+		RuleType:              plans.BalanceChange,
+		Threshold:             "0",
+		NotificationChatType:  "private",
+		NotificationLanguage:  "zh",
+		DeliveryMode:          "realtime",
+		CycleType:             "fixed",
+		CycleMinutes:          60,
+		TriggerCountThreshold: 1,
 	}
 }
 
@@ -133,6 +147,29 @@ func (s *Service) ListWatchRules(
 	deboxUserID string,
 ) ([]store.WatchRule, error) {
 	return s.deps.Repository.ListUserWatchRules(ctx, deboxUserID)
+}
+
+func (s *Service) ListAggregationEventHistory(
+	ctx context.Context,
+	deboxUserID string,
+	beforeID int64,
+	limit int,
+) (store.AggregationHistoryPage, error) {
+	if beforeID < 0 {
+		return store.AggregationHistoryPage{}, errors.New("before_id 不能小于 0。")
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	if limit < 1 || limit > 100 {
+		return store.AggregationHistoryPage{}, errors.New("limit 必须在 1 到 100 之间。")
+	}
+	return s.deps.Repository.ListAggregationEventHistory(
+		ctx,
+		deboxUserID,
+		beforeID,
+		limit,
+	)
 }
 
 func (s *Service) CreateWatchRule(
@@ -155,6 +192,9 @@ func (s *Service) CreateWatchRule(
 	}
 	if !plan.AllowsRuleType(input.RuleType) {
 		return WatchRuleCreation{}, fmt.Errorf("当前套餐不支持该规则类型：%s", input.RuleType)
+	}
+	if input.DeliveryMode == "stage" && !plan.AllowsStageNotifications() {
+		return WatchRuleCreation{}, errors.New("阶段提醒仅支持标准版和专业版。")
 	}
 	if input.NotificationChatType == "group" && !plan.GroupNotification {
 		return WatchRuleCreation{}, errors.New("当前套餐不支持群通知，请升级专业版。")
@@ -216,27 +256,32 @@ func (s *Service) CreateWatchRule(
 		}
 		walletAddress = value.WalletAddress
 		tokenAddress = value.TokenAddress
-		if input.RuleType != plans.BalanceThreshold {
+		if !plans.IsBalanceThreshold(input.RuleType) {
 			lastValue = stringPointer(value.Value)
 		}
 		baseline = value
 	}
 
 	rule, err := s.deps.Entitlements.CreateWatchRule(ctx, store.CreateWatchRuleParams{
-		DeBoxUserID:          deboxUserID,
-		ChainKey:             profile.Key,
-		ChainID:              int32(profile.ChainID),
-		WalletAddress:        walletAddress,
-		TokenAddress:         tokenAddress,
-		TargetAddress:        targetAddress,
-		TargetLabel:          strings.TrimSpace(input.TargetLabel),
-		RuleType:             input.RuleType,
-		Threshold:            threshold,
-		NotificationChatID:   chatID,
-		NotificationChatType: input.NotificationChatType,
-		NotificationLabel:    notificationLabel,
-		NotificationLanguage: input.NotificationLanguage,
-		LastValue:            lastValue,
+		DeBoxUserID:           deboxUserID,
+		ChainKey:              profile.Key,
+		ChainID:               int32(profile.ChainID),
+		WalletAddress:         walletAddress,
+		TokenAddress:          tokenAddress,
+		TargetAddress:         targetAddress,
+		TargetLabel:           strings.TrimSpace(input.TargetLabel),
+		RuleType:              input.RuleType,
+		Threshold:             threshold,
+		NotificationChatID:    chatID,
+		NotificationChatType:  input.NotificationChatType,
+		NotificationLabel:     notificationLabel,
+		NotificationLanguage:  input.NotificationLanguage,
+		RuleScope:             "standalone",
+		DeliveryMode:          input.DeliveryMode,
+		CycleType:             input.CycleType,
+		CycleMinutes:          input.CycleMinutes,
+		TriggerCountThreshold: input.TriggerCountThreshold,
+		LastValue:             lastValue,
 	})
 	if err != nil {
 		return WatchRuleCreation{}, err
@@ -247,7 +292,7 @@ func (s *Service) CreateWatchRule(
 	}
 
 	var initialCheck any
-	if input.RuleType == plans.BalanceThreshold && s.deps.InitialChecker != nil {
+	if plans.IsBalanceThreshold(input.RuleType) && s.deps.InitialChecker != nil {
 		initialCheck, err = s.deps.InitialChecker.CheckRule(ctx, rule, entitlement.Plan.Code)
 		if err != nil {
 			return WatchRuleCreation{}, err
@@ -635,6 +680,14 @@ func normalizeWatchRuleInput(input WatchRuleInput, fallbackChain string) WatchRu
 	if input.NotificationLanguage == "" {
 		input.NotificationLanguage = "zh"
 	}
+	input.DeliveryMode = strings.ToLower(strings.TrimSpace(input.DeliveryMode))
+	if input.DeliveryMode == "" {
+		input.DeliveryMode = "realtime"
+	}
+	input.CycleType = strings.ToLower(strings.TrimSpace(input.CycleType))
+	if input.CycleType == "" {
+		input.CycleType = "fixed"
+	}
 	return input
 }
 
@@ -642,16 +695,41 @@ func validateWatchRuleInput(input WatchRuleInput) (string, error) {
 	if _, err := requireLanguage(input.NotificationLanguage); err != nil {
 		return "", err
 	}
+	if input.DeliveryMode != "realtime" && input.DeliveryMode != "stage" {
+		return "", errors.New("通知模式只能是 realtime 或 stage。")
+	}
+	if input.DeliveryMode == "stage" {
+		if input.CycleType != "fixed" && input.CycleType != "follow" {
+			return "", errors.New("阶段提醒周期只能是 fixed 或 follow。")
+		}
+		if input.CycleMinutes <= 0 {
+			return "", errors.New("阶段提醒周期分钟数必须大于 0。")
+		}
+		if input.TriggerCountThreshold <= 0 {
+			return "", errors.New("阶段提醒触发次数必须大于 0。")
+		}
+	}
 	supported := map[string]struct{}{
-		plans.BalanceChange:      {},
-		plans.Incoming:           {},
-		plans.Outgoing:           {},
-		plans.BalanceThreshold:   {},
-		plans.ApprovalChange:     {},
-		plans.AddressInteraction: {},
+		plans.BalanceChange:        {},
+		plans.Incoming:             {},
+		plans.Outgoing:             {},
+		plans.BalanceThreshold:     {},
+		plans.HighBalanceThreshold: {},
+		plans.ApprovalChange:       {},
+		plans.AddressInteraction:   {},
 	}
 	if _, ok := supported[input.RuleType]; !ok {
 		return "", errors.New("不支持的监控类型。")
+	}
+	if input.RuleType == plans.ApprovalChange &&
+		(input.TokenAddress == "" || input.TargetAddress == "") {
+		return "", errors.New("授权监控需要填写代币合约和授权对象地址。")
+	}
+	if input.RuleType == plans.AddressInteraction && input.TargetAddress == "" {
+		return "", errors.New("指定地址交互提醒需要填写目标地址或合约。")
+	}
+	if input.RuleType == plans.ApprovalChange || input.RuleType == plans.AddressInteraction {
+		return "0", nil
 	}
 	if !decimalPattern.MatchString(input.Threshold) {
 		return "", errors.New("金额阈值必须是有效数字。")
@@ -663,12 +741,8 @@ func validateWatchRuleInput(input WatchRuleInput) (string, error) {
 	if number.Sign() < 0 {
 		return "", errors.New("金额阈值不能小于 0。")
 	}
-	if input.RuleType == plans.ApprovalChange &&
-		(input.TokenAddress == "" || input.TargetAddress == "") {
-		return "", errors.New("授权监控需要填写代币合约和授权对象地址。")
-	}
-	if input.RuleType == plans.AddressInteraction && input.TargetAddress == "" {
-		return "", errors.New("指定地址交互提醒需要填写目标地址或合约。")
+	if input.RuleType == plans.HighBalanceThreshold && number.Sign() == 0 {
+		return "", errors.New("高余额阈值必须大于 0。")
 	}
 	return input.Threshold, nil
 }

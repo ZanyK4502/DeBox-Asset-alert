@@ -51,6 +51,23 @@ func (m *Messenger) SendNotification(chatID, chatType, text string) (string, err
 	return sent.MessageID, nil
 }
 
+func (m *Messenger) SendNotificationWithAction(
+	chatID, chatType, text, actionText, actionURL string,
+) (string, error) {
+	message := boxbotapi.NewMessage(chatID, chatType, text)
+	message.ParseMode = boxbotapi.ModeHTML
+	message.ReplyMarkup = boxbotapi.NewInlineKeyboardMarkup(
+		boxbotapi.NewInlineKeyboardRow(
+			boxbotapi.NewInlineKeyboardButtonURL(actionText, actionURL),
+		),
+	)
+	sent, err := m.bot.Send(message)
+	if err != nil {
+		return "", fmt.Errorf("send DeBox notification with action: %w", err)
+	}
+	return sent.MessageID, nil
+}
+
 func (m *Messenger) Send(config boxbotapi.Chattable) (boxbotapi.Message, error) {
 	return m.bot.Send(config)
 }
