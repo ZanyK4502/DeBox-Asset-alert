@@ -1291,11 +1291,6 @@ function renderPaymentStatus() {
     status.innerHTML = `
       <span class="payment-detail">
         <span class="payment-asset">
-          <img class="asset-logo" src="/static/tokens/usdt.svg" alt="" aria-hidden="true">
-          ${escapeHtml(`${config.total_amount} ${config.asset}`)}
-        </span>
-        <span>/</span>
-        <span class="payment-asset">
           <img class="asset-logo" src="/static/chains/bsc.png" alt="" aria-hidden="true">
           ${escapeHtml(config.chain_name)}
         </span>
