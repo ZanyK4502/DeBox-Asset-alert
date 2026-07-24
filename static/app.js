@@ -509,19 +509,24 @@ function renderPlans() {
     : "";
   $("plansGrid").innerHTML = state.plans
     .map((plan) => {
-      const active = plan.code === state.selectedPlan ? " active" : "";
-      const locked = Boolean(currentPaidPlan && plan.code !== currentPaidPlan);
+      const selectable = plan.code !== "free";
+      const tag = selectable ? "button" : "div";
+      const active = selectable && plan.code === state.selectedPlan ? " active" : "";
+      const locked = selectable && Boolean(currentPaidPlan && plan.code !== currentPaidPlan);
+      const attributes = selectable
+        ? ` type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}`
+        : "";
       const text = localizedPlan(plan);
       const price = plan.price === "0" ? t("freePrice") : `${plan.price} ${plan.asset || "USDT"}`;
       const priceIcon = plan.price === "0"
         ? ""
         : '<img class="asset-logo" src="/static/tokens/usdt.svg" alt="" aria-hidden="true">';
       return `
-        <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}>
+        <${tag} class="plan-card${selectable ? "" : " plan-card-static"}${active}"${attributes}>
           <span>${escapeHtml(text.name)}</span>
           <strong class="plan-price">${priceIcon}${escapeHtml(price)}</strong>
           <small>${escapeHtml(text.description)}</small>
-        </button>
+        </${tag}>
       `;
     })
     .join("");
@@ -534,16 +539,14 @@ function renderPlans() {
   });
   const complimentary = state.entitlement?.complimentary_access;
   const complimentaryAvailable = Boolean(
-    complimentary?.available && !currentPaidPlan && state.selectedPlan !== "free"
+    complimentary?.available && !currentPaidPlan
   );
   const complimentaryActive = Boolean(complimentary?.used && currentPaidPlan);
-  $("payBtn").textContent = state.selectedPlan === "free"
-    ? t("activate")
-    : complimentaryAvailable
-      ? t("complimentaryActivate")
-      : complimentaryActive
-        ? t("currentPlanButton")
-        : t("payRenew");
+  $("payBtn").textContent = complimentaryAvailable
+    ? t("complimentaryActivate")
+    : complimentaryActive
+      ? t("currentPlanButton")
+      : t("payRenew");
   $("payBtn").disabled = complimentaryActive;
 }
 
@@ -1273,7 +1276,7 @@ function renderPaymentStatus() {
   const config = state.paymentConfig;
   const complimentary = state.entitlement?.complimentary_access;
   const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
-  if (complimentary?.available && !currentPaidPlan && state.selectedPlan !== "free") {
+  if (complimentary?.available && !currentPaidPlan) {
     status.textContent = t("complimentaryAvailable");
   } else if (complimentary?.used && currentPaidPlan) {
     status.textContent = t("complimentaryActive", { date: complimentary.expires_at || "-" });
@@ -1281,8 +1284,6 @@ function renderPaymentStatus() {
     status.textContent = localizedApiError(state.paymentError);
   } else if (!config) {
     status.textContent = "";
-  } else if (state.selectedPlan === "free") {
-    status.textContent = t("freeNoPayment");
   } else if (config.mode !== "live") {
     status.textContent = t("previewMode");
   } else if (!config.ready) {
@@ -1466,25 +1467,9 @@ async function loadPaymentConfig() {
   renderPaymentStatus();
 }
 
-async function enableFreePlan() {
-  if (!state.deboxUserId) {
-    toast(t("connectFirst"));
-    return;
-  }
-  await api("/api/subscription/free-trial", {
-    method: "POST",
-  });
-  await refreshAccount();
-  toast(t("freeEnabled"));
-}
-
 async function payOrRenew() {
   if (!state.deboxUserId || !state.walletAddress) {
     toast(t("connectFirst"));
-    return;
-  }
-  if (state.selectedPlan === "free") {
-    await enableFreePlan();
     return;
   }
   const complimentary = state.entitlement?.complimentary_access;

@@ -23,7 +23,6 @@ const requiredAPIs = [
   "/api/auth/session",
   "/api/auth/logout",
   "/api/subscription/current",
-  "/api/subscription/free-trial",
   "/api/subscription/complimentary",
   "/api/payment/config",
   "/api/payment/prepare",
