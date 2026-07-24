@@ -514,10 +514,13 @@ function renderPlans() {
       const locked = Boolean(currentPaidPlan && plan.code !== currentPaidPlan);
       const text = localizedPlan(plan);
       const price = plan.price === "0" ? t("freePrice") : `${plan.price} ${plan.asset || "USDT"}`;
+      const priceIcon = plan.price === "0"
+        ? ""
+        : '<img class="asset-logo" src="/static/tokens/usdt.svg" alt="" aria-hidden="true">';
       return `
         <button class="plan-card${active}" type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}>
           <span>${escapeHtml(text.name)}</span>
-          <strong>${escapeHtml(price)}</strong>
+          <strong class="plan-price">${priceIcon}${escapeHtml(price)}</strong>
           <small>${escapeHtml(text.description)}</small>
         </button>
       `;
@@ -1286,7 +1289,19 @@ function renderPaymentStatus() {
   } else if (!config.ready) {
     status.textContent = t("paymentMissing", { items: config.missing.join(", ") });
   } else {
-    status.textContent = `${config.total_amount} ${config.asset} / ${config.chain_name}`;
+    status.innerHTML = `
+      <span class="payment-detail">
+        <span class="payment-asset">
+          <img class="asset-logo" src="/static/tokens/usdt.svg" alt="" aria-hidden="true">
+          ${escapeHtml(`${config.total_amount} ${config.asset}`)}
+        </span>
+        <span>/</span>
+        <span class="payment-asset">
+          <img class="asset-logo" src="/static/chains/bsc.png" alt="" aria-hidden="true">
+          ${escapeHtml(config.chain_name)}
+        </span>
+      </span>
+    `;
   }
 }
 

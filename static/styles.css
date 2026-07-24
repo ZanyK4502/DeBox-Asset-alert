@@ -310,6 +310,40 @@ button:disabled {
   font-size: 24px;
 }
 
+.plan-price,
+.payment-detail,
+.payment-asset {
+  display: inline-flex;
+  align-items: center;
+}
+
+.plan-price {
+  gap: 8px;
+}
+
+.payment-detail {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.payment-asset {
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.asset-logo {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  object-fit: contain;
+}
+
+.payment-detail .asset-logo {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+}
+
 .plan-card small {
   color: var(--muted);
   line-height: 1.5;
