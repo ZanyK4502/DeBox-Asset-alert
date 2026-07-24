@@ -14,6 +14,7 @@ window.H5_I18N = Object.freeze({
     planSwitchNotice: "付费套餐未到期时仅支持续费同一套餐，到期后可选择其他套餐。",
     paymentNotice: "使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。",
     payRenew: "支付 / 续费",
+    activate: "开通",
     complimentaryActivate: "白名单免费开通",
     currentPlanButton: "当前套餐",
     complimentaryAvailable: "白名单权益：可免费开通本套餐 30 天，仅限一次。",
@@ -238,6 +239,7 @@ window.H5_I18N = Object.freeze({
     planSwitchNotice: "While a paid plan is active, you can only renew the same plan. Choose another plan after it expires.",
     paymentNotice: "Pay with USDT on BNB Chain. The subscription activates after 3 block confirmations; failed verification does not activate it.",
     payRenew: "Pay / Renew",
+    activate: "Activate",
     complimentaryActivate: "Activate Free Access",
     currentPlanButton: "Current Plan",
     complimentaryAvailable: "Allowlist access: activate this plan free for 30 days, one time only.",
@@ -449,14 +451,14 @@ window.H5_I18N = Object.freeze({
   },
   plans: {
     zh: {
-      free: ["免费版", "1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。"],
-      standard: ["标准版", "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。"],
-      professional: ["专业版", "适合项目方和社群：20 个钱包、100 条规则，支持群通知、指定地址交互提醒和群每日摘要。"],
+      free: ["免费版", "1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。"],
+      standard: ["标准版", "适合个人监控：3 个地址、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。"],
+      professional: ["专业版", "适合项目方和社群：20 个地址、100 条规则，支持群通知、指定地址交互提醒和群每日摘要。"],
     },
     en: {
-      free: ["Free", "1 wallet, 1 basic rule, up to 5 alerts per day, private alerts only."],
-      standard: ["Standard", "For individual monitoring: 3 wallets, 10 rules, asset and approval alerts, private notifications, and daily summaries."],
-      professional: ["Professional", "For projects and communities: 20 wallets, 100 rules, group alerts, specified address interactions, and group summaries."],
+      free: ["Free", "1 basic rule, up to 5 alerts per day, private alerts only."],
+      standard: ["Standard", "For individual monitoring: 3 addresses, 10 rules, asset and approval alerts, private notifications, and daily summaries."],
+      professional: ["Professional", "For projects and communities: 20 addresses, 100 rules, group alerts, specified address interactions, and group summaries."],
     },
   },
   rules: {

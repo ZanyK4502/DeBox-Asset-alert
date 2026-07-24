@@ -535,11 +535,13 @@ function renderPlans() {
     complimentary?.available && !currentPaidPlan && state.selectedPlan !== "free"
   );
   const complimentaryActive = Boolean(complimentary?.used && currentPaidPlan);
-  $("payBtn").textContent = complimentaryAvailable
-    ? t("complimentaryActivate")
-    : complimentaryActive
-      ? t("currentPlanButton")
-      : t("payRenew");
+  $("payBtn").textContent = state.selectedPlan === "free"
+    ? t("activate")
+    : complimentaryAvailable
+      ? t("complimentaryActivate")
+      : complimentaryActive
+        ? t("currentPlanButton")
+        : t("payRenew");
   $("payBtn").disabled = complimentaryActive;
 }
 
