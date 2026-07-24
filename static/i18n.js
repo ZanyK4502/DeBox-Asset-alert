@@ -2,7 +2,7 @@ window.H5_I18N = Object.freeze({
   zh: {
     brandSubtitle: "链上资产监控",
     accountOverview: "账户概览",
-    heroTitle: "钱包和代币变化，通过 DeBox Bot 实时通知。",
+    heroTitle: "随时掌控地址与行情的变化",
     connectWallet: "连接钱包",
     disconnectWallet: "断开连接",
     noWallet: "尚未连接钱包",
@@ -226,7 +226,7 @@ window.H5_I18N = Object.freeze({
   en: {
     brandSubtitle: "On-chain Asset Monitoring",
     accountOverview: "Account overview",
-    heroTitle: "Real-time DeBox Bot alerts for wallet and token changes.",
+    heroTitle: "Stay on top of address and market changes.",
     connectWallet: "Connect",
     disconnectWallet: "Disconnect",
     noWallet: "Wallet not connected",
