@@ -507,7 +507,6 @@ function renderPlans() {
   const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code)
     ? currentPlan().code
     : "";
-  $("freeTrialBtn").disabled = Boolean(currentPaidPlan);
   $("plansGrid").innerHTML = state.plans
     .map((plan) => {
       const active = plan.code === state.selectedPlan ? " active" : "";
@@ -1892,7 +1891,6 @@ async function deleteGroup(groupId) {
 function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
-  $("freeTrialBtn").addEventListener("click", guardAsync(enableFreePlan));
   $("payBtn").addEventListener("click", guardAsync(payOrRenew));
   $("deletePausedRulesBtn").addEventListener("click", guardAsync(deletePausedRules));
   $("refreshRulesBtn").addEventListener("click", guardAsync(refreshAccount));
