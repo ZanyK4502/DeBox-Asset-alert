@@ -397,7 +397,7 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 	if s.publicAppURL != "" {
 		rows = append(rows, boxbotapi.NewInlineKeyboardRow(
 			buttonURL(
-				choice(english, "Monitoring Dashboard", "个人监控面板"),
+				choice(english, "Dashboard", "个人监控面板"),
 				s.publicAppURL,
 			),
 			buttonData(
@@ -422,13 +422,13 @@ func (s *Service) backMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 	english := normalizeLanguage(language) == "en"
 	buttons := []boxbotapi.InlineKeyboardButton{
 		buttonData(
-			choice(english, "Back to menu", "返回介绍"),
+			choice(english, "Home", "返回主页"),
 			localizedCallbackData("intro", language),
 		),
 	}
 	if s.publicAppURL != "" {
 		buttons = append(buttons, buttonURL(
-			choice(english, "Monitoring Dashboard", "个人监控面板"),
+			choice(english, "Dashboard", "个人监控面板"),
 			s.publicAppURL,
 		))
 	}
@@ -462,7 +462,7 @@ func (s *Service) swapMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 				swapPayload(s.deps.Settings.SubscriptionTokenAddress),
 			),
 			buttonData(
-				choice(english, "Back", "返回"),
+				choice(english, "Home", "返回主页"),
 				localizedCallbackData("intro", language),
 			),
 		),
@@ -478,7 +478,7 @@ func (s *Service) aggregateDetailsMarkup(language string) boxbotapi.InlineKeyboa
 				s.publicAppURL+"#aggregateEventsSection",
 			),
 			buttonData(
-				choice(english, "Back to menu", "返回介绍"),
+				choice(english, "Home", "返回主页"),
 				localizedCallbackData("intro", language),
 			),
 		),

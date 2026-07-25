@@ -157,8 +157,8 @@ func TestSummaryDetailsCallbackIsLocalizedAndLinksToAggregateEvents(t *testing.T
 		view     string
 		back     string
 	}{
-		{language: "zh", text: "单条规则的阶段提醒事件与组合规则中的更多事件详情。", view: "查看", back: "返回介绍"},
-		{language: "en", text: "stage alerts from individual rules and combination rules", view: "View", back: "Back to menu"},
+		{language: "zh", text: "单条规则的阶段提醒事件与组合规则中的更多事件详情。", view: "查看", back: "返回主页"},
+		{language: "en", text: "stage alerts from individual rules and combination rules", view: "View", back: "Home"},
 	}
 	for _, test := range tests {
 		t.Run(test.language, func(t *testing.T) {
