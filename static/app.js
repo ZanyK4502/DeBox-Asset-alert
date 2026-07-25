@@ -17,6 +17,7 @@ const state = {
   ruleTypes: [],
   chains: [],
   selectedPlan: "standard",
+  selectedBillingCycle: "monthly",
   entitlement: null,
   groups: [],
   paymentConfig: null,
@@ -517,14 +518,21 @@ function renderPlans() {
         ? ` type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}`
         : "";
       const text = localizedPlan(plan);
-      const price = plan.price === "0" ? t("freePrice") : `${plan.price} ${plan.asset || "USDT"}`;
+      const billingOption = selectedBillingOption(plan);
+      const price = plan.price === "0"
+        ? t("freePrice")
+        : `${billingOption.price} ${plan.asset || "USDT"}`;
       const priceIcon = plan.price === "0"
         ? ""
         : '<img class="asset-logo" src="/static/tokens/usdt.svg" alt="" aria-hidden="true">';
+      const term = plan.price === "0"
+        ? t("permanent")
+        : t("planDays", { days: billingOption.days });
       return `
         <${tag} class="plan-card${selectable ? "" : " plan-card-static"}${active}"${attributes}>
           <span>${escapeHtml(text.name)}</span>
           <strong class="plan-price">${priceIcon}${escapeHtml(price)}</strong>
+          <span class="plan-term">${escapeHtml(term)}</span>
           <small>${escapeHtml(text.description)}</small>
         </${tag}>
       `;
@@ -537,6 +545,11 @@ function renderPlans() {
       loadPaymentConfig();
     });
   });
+  document.querySelectorAll("[data-billing-cycle]").forEach((button) => {
+    const active = button.dataset.billingCycle === state.selectedBillingCycle;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   const complimentary = state.entitlement?.complimentary_access;
   const complimentaryAvailable = Boolean(
     complimentary?.available && !currentPaidPlan
@@ -548,6 +561,21 @@ function renderPlans() {
       ? t("currentPlanButton")
       : t("payRenew");
   $("payBtn").disabled = complimentaryActive;
+}
+
+function selectedBillingOption(plan) {
+  const options = Array.isArray(plan?.billing_options) ? plan.billing_options : [];
+  return options.find((option) => option.code === state.selectedBillingCycle)
+    || options.find((option) => option.code === "monthly")
+    || { code: "monthly", price: plan?.price || "0", days: plan?.days || 0 };
+}
+
+function paymentConfigURL() {
+  const query = new URLSearchParams({
+    plan_code: state.selectedPlan,
+    billing_cycle: state.selectedBillingCycle,
+  });
+  return `/api/payment/config?${query}`;
 }
 
 function renderProfile() {
@@ -1458,7 +1486,7 @@ async function refreshAccount() {
 
 async function loadPaymentConfig() {
   try {
-    state.paymentConfig = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+    state.paymentConfig = await api(paymentConfigURL());
     state.paymentError = "";
   } catch (error) {
     state.paymentConfig = null;
@@ -1495,19 +1523,25 @@ async function payOrRenew() {
     }
     return;
   }
-  if (!confirm(t("refundConfirm"))) {
-    return;
-  }
   const button = $("payBtn");
   button.disabled = true;
   try {
-    const config = await api(`/api/payment/config?plan_code=${encodeURIComponent(state.selectedPlan)}`);
+    const config = await api(paymentConfigURL());
     if (config.mode !== "live") {
       toast(t("previewNoPayment"));
       return;
     }
     if (!config.ready) {
       throw new Error(t("paymentMissing", { items: config.missing.join(", ") }));
+    }
+    const planName = localizedPlan(config.plan).name;
+    if (!confirm(t("purchaseConfirm", {
+      plan: planName,
+      amount: config.total_amount,
+      asset: config.asset,
+      days: config.subscription_days,
+    }))) {
+      return;
     }
     const provider = walletProvider();
     if (!provider?.request) {
@@ -1520,7 +1554,10 @@ async function payOrRenew() {
     await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: config.chain_id_hex }] });
     const prepared = await api("/api/payment/prepare", {
       method: "POST",
-      body: JSON.stringify({ plan_code: state.selectedPlan }),
+      body: JSON.stringify({
+        plan_code: state.selectedPlan,
+        billing_cycle: state.selectedBillingCycle,
+      }),
     });
     const txHash = await provider.request({
       method: "eth_sendTransaction",
@@ -1872,6 +1909,13 @@ function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
   $("payBtn").addEventListener("click", guardAsync(payOrRenew));
+  document.querySelectorAll("[data-billing-cycle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedBillingCycle = button.dataset.billingCycle;
+      renderPlans();
+      loadPaymentConfig();
+    });
+  });
   $("deletePausedRulesBtn").addEventListener("click", guardAsync(deletePausedRules));
   $("refreshRulesBtn").addEventListener("click", guardAsync(refreshAccount));
   $("refreshAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents()));

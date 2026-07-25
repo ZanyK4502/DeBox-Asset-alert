@@ -51,7 +51,7 @@ const combinationRuleMemberColumns = `
 `
 
 const orderColumns = `
-	id, debox_user_id, payer_address, plan_code, chain_key, chain_id,
+	id, debox_user_id, payer_address, plan_code, billing_cycle, subscription_days, chain_key, chain_id,
 	token_address, token_symbol, token_decimals, total_amount::text AS total_amount,
 	recipient_address, tx_hash, status, created_at, expires_at, completed_at,
 	tx_block_number, tx_confirmations, verified_at, verification_error

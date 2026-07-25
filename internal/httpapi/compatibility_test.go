@@ -81,6 +81,9 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 	expectedPlans := []plans.Plan{
 		{
 			Code: "free", Name: "免费版", Price: "0", Asset: "USDT", Days: 0,
+			BillingOptions: []plans.BillingOption{
+				{Code: "monthly", Price: "0", Days: 0},
+			},
 			WalletLimit: 1, RuleLimit: 1, GroupLimit: 0, DailyAlertLimit: &dailyLimit,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",
@@ -91,6 +94,11 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 		},
 		{
 			Code: "standard", Name: "标准版", Price: "10", Asset: "USDT", Days: 30,
+			BillingOptions: []plans.BillingOption{
+				{Code: "monthly", Price: "10", Days: 30},
+				{Code: "quarterly", Price: "14", Days: 90},
+				{Code: "annual", Price: "50", Days: 365},
+			},
 			WalletLimit: 3, RuleLimit: 10, GroupLimit: 0,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",
@@ -101,7 +109,12 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 			Description:    "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
 		},
 		{
-			Code: "professional", Name: "专业版", Price: "25", Asset: "USDT", Days: 30,
+			Code: "professional", Name: "专业版", Price: "15", Asset: "USDT", Days: 30,
+			BillingOptions: []plans.BillingOption{
+				{Code: "monthly", Price: "15", Days: 30},
+				{Code: "quarterly", Price: "42", Days: 90},
+				{Code: "annual", Price: "150", Days: 365},
+			},
 			WalletLimit: 20, RuleLimit: 100, GroupLimit: 3,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",

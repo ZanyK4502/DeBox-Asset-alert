@@ -618,6 +618,8 @@ func createIntegrationOrder(t *testing.T, store *Store, userID, token string) Or
 		DeBoxUserID:      userID,
 		PayerAddress:     "0x2222222222222222222222222222222222222222",
 		PlanCode:         "standard",
+		BillingCycle:     "monthly",
+		SubscriptionDays: 30,
 		ChainKey:         "bsc",
 		ChainID:          56,
 		TokenAddress:     &token,

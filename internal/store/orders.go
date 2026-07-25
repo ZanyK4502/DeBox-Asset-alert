@@ -11,6 +11,8 @@ type CreateOrderParams struct {
 	DeBoxUserID      string
 	PayerAddress     string
 	PlanCode         string
+	BillingCycle     string
+	SubscriptionDays int32
 	ChainKey         string
 	ChainID          int32
 	TokenAddress     *string
@@ -80,15 +82,18 @@ func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Orde
 
 		order, err := collectOne[Order](ctx, tx, `
 			INSERT INTO orders (
-				debox_user_id, payer_address, plan_code, chain_key, chain_id,
+				debox_user_id, payer_address, plan_code, billing_cycle, subscription_days,
+				chain_key, chain_id,
 				token_address, token_symbol, token_decimals, total_amount,
 				recipient_address, expires_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			RETURNING `+orderColumns,
 			params.DeBoxUserID,
 			params.PayerAddress,
 			params.PlanCode,
+			params.BillingCycle,
+			params.SubscriptionDays,
 			params.ChainKey,
 			params.ChainID,
 			params.TokenAddress,
@@ -233,7 +238,6 @@ func (s *Store) FinalizePaidOrder(
 	txHash string,
 	blockNumber int64,
 	confirmations int,
-	subscriptionDays int,
 ) (FinalizedOrder, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (FinalizedOrder, error) {
 		order, err := collectOne[Order](ctx, tx, `
@@ -271,7 +275,7 @@ func (s *Store) FinalizePaidOrder(
 			tx,
 			order.DeBoxUserID,
 			order.PlanCode,
-			subscriptionDays,
+			int(order.SubscriptionDays),
 			true,
 		)
 		if err != nil {

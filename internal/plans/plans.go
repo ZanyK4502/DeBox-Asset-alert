@@ -10,6 +10,10 @@ const (
 	Standard     = "standard"
 	Professional = "professional"
 
+	Monthly   = "monthly"
+	Quarterly = "quarterly"
+	Annual    = "annual"
+
 	BalanceChange      = "balance_change"
 	Incoming           = "incoming"
 	Outgoing           = "outgoing"
@@ -42,22 +46,42 @@ type RuleType struct {
 }
 
 type Plan struct {
-	Code                string     `json:"code"`
-	Name                string     `json:"name"`
-	Price               string     `json:"price"`
-	Asset               string     `json:"asset"`
-	Days                int        `json:"days"`
-	WalletLimit         int        `json:"wallet_limit"`
-	RuleLimit           int        `json:"rule_limit"`
-	GroupLimit          int        `json:"group_limit"`
-	DailyAlertLimit     *int       `json:"daily_alert_limit"`
-	AllowedRuleTypes    []string   `json:"allowed_rule_types"`
-	AllowedRules        []RuleType `json:"allowed_rules"`
-	PrivateNotification bool       `json:"private_notification"`
-	GroupNotification   bool       `json:"group_notification"`
-	DailySummary        bool       `json:"daily_summary"`
-	SummaryTargets      []string   `json:"summary_targets"`
-	Description         string     `json:"description"`
+	Code                string          `json:"code"`
+	Name                string          `json:"name"`
+	Price               string          `json:"price"`
+	Asset               string          `json:"asset"`
+	Days                int             `json:"days"`
+	BillingOptions      []BillingOption `json:"billing_options"`
+	WalletLimit         int             `json:"wallet_limit"`
+	RuleLimit           int             `json:"rule_limit"`
+	GroupLimit          int             `json:"group_limit"`
+	DailyAlertLimit     *int            `json:"daily_alert_limit"`
+	AllowedRuleTypes    []string        `json:"allowed_rule_types"`
+	AllowedRules        []RuleType      `json:"allowed_rules"`
+	PrivateNotification bool            `json:"private_notification"`
+	GroupNotification   bool            `json:"group_notification"`
+	DailySummary        bool            `json:"daily_summary"`
+	SummaryTargets      []string        `json:"summary_targets"`
+	Description         string          `json:"description"`
+}
+
+type BillingOption struct {
+	Code  string `json:"code"`
+	Price string `json:"price"`
+	Days  int    `json:"days"`
+}
+
+func (p Plan) BillingOption(code string) (BillingOption, error) {
+	code = strings.ToLower(strings.TrimSpace(code))
+	if code == "" {
+		code = Monthly
+	}
+	for _, option := range p.BillingOptions {
+		if option.Code == code {
+			return option, nil
+		}
+	}
+	return BillingOption{}, fmt.Errorf("unsupported billing cycle: %s", code)
 }
 
 func (p Plan) AllowsRuleType(ruleType string) bool {
@@ -144,7 +168,7 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 		Professional: makePlan(
 			Professional,
 			"专业版",
-			"25",
+			"15",
 			asset,
 			30,
 			20,
@@ -158,6 +182,21 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			"适合项目方和社群：20 个钱包、100 条规则，支持群通知、指定地址交互提醒和群每日摘要。",
 		),
 	}}
+	standard := catalog.plans[Standard]
+	standard.BillingOptions = []BillingOption{
+		{Code: Monthly, Price: standard.Price, Days: standard.Days},
+		{Code: Quarterly, Price: "14", Days: 90},
+		{Code: Annual, Price: "50", Days: 365},
+	}
+	catalog.plans[Standard] = standard
+
+	professional := catalog.plans[Professional]
+	professional.BillingOptions = []BillingOption{
+		{Code: Monthly, Price: professional.Price, Days: professional.Days},
+		{Code: Quarterly, Price: "42", Days: 90},
+		{Code: Annual, Price: "150", Days: 365},
+	}
+	catalog.plans[Professional] = professional
 	return catalog, nil
 }
 
@@ -217,6 +256,7 @@ func makePlan(
 		Price:               price,
 		Asset:               asset,
 		Days:                days,
+		BillingOptions:      []BillingOption{{Code: Monthly, Price: price, Days: days}},
 		WalletLimit:         walletLimit,
 		RuleLimit:           ruleLimit,
 		GroupLimit:          groupLimit,
@@ -234,6 +274,7 @@ func makePlan(
 func clonePlan(plan Plan) Plan {
 	plan.AllowedRuleTypes = append([]string(nil), plan.AllowedRuleTypes...)
 	plan.AllowedRules = append([]RuleType(nil), plan.AllowedRules...)
+	plan.BillingOptions = append([]BillingOption(nil), plan.BillingOptions...)
 	plan.SummaryTargets = append([]string(nil), plan.SummaryTargets...)
 	if plan.DailyAlertLimit != nil {
 		value := *plan.DailyAlertLimit

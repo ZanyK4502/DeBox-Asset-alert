@@ -17,18 +17,22 @@ import (
 )
 
 type fakePaymentService struct {
-	configurationPlan string
-	prepareInput      [3]string
-	verifyOrderID     int64
-	verifyInput       [3]string
-	verifyErr         error
+	configurationInput [2]string
+	prepareInput       [4]string
+	verifyOrderID      int64
+	verifyInput        [3]string
+	verifyErr          error
 }
 
-func (f *fakePaymentService) Configuration(planCode string) (payment.Configuration, error) {
-	f.configurationPlan = planCode
+func (f *fakePaymentService) Configuration(
+	planCode string,
+	billingCycle string,
+) (payment.Configuration, error) {
+	f.configurationInput = [2]string{planCode, billingCycle}
 	return payment.Configuration{
 		Mode:                  "live",
 		Plan:                  plans.Plan{Code: planCode},
+		BillingCycle:          billingCycle,
 		Chain:                 chain.Profile{Key: "bsc", ChainID: 56},
 		Ready:                 true,
 		RequiredConfirmations: 3,
@@ -40,8 +44,9 @@ func (f *fakePaymentService) Prepare(
 	deboxUserID string,
 	walletAddress string,
 	planCode string,
+	billingCycle string,
 ) (payment.PrepareResult, error) {
-	f.prepareInput = [3]string{deboxUserID, walletAddress, planCode}
+	f.prepareInput = [4]string{deboxUserID, walletAddress, planCode, billingCycle}
 	return payment.PrepareResult{
 		Order: store.Order{ID: 7, DeBoxUserID: deboxUserID, PayerAddress: walletAddress},
 	}, nil
@@ -82,12 +87,13 @@ func TestPaymentRoutesUseAuthenticatedSessionIdentity(t *testing.T) {
 
 	configRequest := httptest.NewRequest(
 		http.MethodGet,
-		"/api/payment/config?plan_code=professional",
+		"/api/payment/config?plan_code=professional&billing_cycle=annual",
 		nil,
 	)
 	configRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(configRecorder, configRequest)
-	if configRecorder.Code != http.StatusOK || payments.configurationPlan != "professional" {
+	if configRecorder.Code != http.StatusOK ||
+		payments.configurationInput != [2]string{"professional", "annual"} {
 		t.Fatalf("config response = %d/%s", configRecorder.Code, configRecorder.Body)
 	}
 
@@ -96,6 +102,7 @@ func TestPaymentRoutesUseAuthenticatedSessionIdentity(t *testing.T) {
 		"/api/payment/prepare",
 		strings.NewReader(`{
 			"plan_code":"professional",
+			"billing_cycle":"quarterly",
 			"debox_user_id":"forged-user",
 			"payer_address":"0x9999999999999999999999999999999999999999"
 		}`),
@@ -104,7 +111,9 @@ func TestPaymentRoutesUseAuthenticatedSessionIdentity(t *testing.T) {
 	prepareRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(prepareRecorder, prepareRequest)
 	if prepareRecorder.Code != http.StatusOK ||
-		payments.prepareInput != [3]string{"session-user", wallet, "professional"} {
+		payments.prepareInput != [4]string{
+			"session-user", wallet, "professional", "quarterly",
+		} {
 		t.Fatalf(
 			"prepare response = %d/%s, input = %#v",
 			prepareRecorder.Code,

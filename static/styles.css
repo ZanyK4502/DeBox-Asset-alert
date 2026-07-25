@@ -293,6 +293,30 @@ button:disabled {
   gap: 12px;
 }
 
+.billing-cycle-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.billing-cycle-label {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.billing-cycle-control {
+  width: min(100%, 360px);
+}
+
+.plan-term {
+  color: var(--accent) !important;
+  font-size: 12px !important;
+  font-weight: 700;
+}
+
 .plan-card {
   display: grid;
   gap: 8px;
@@ -365,6 +389,18 @@ button:disabled {
 .plan-card:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+@media (max-width: 560px) {
+  .billing-cycle-picker {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .billing-cycle-control {
+    width: 100%;
+  }
 }
 
 .refund-note {

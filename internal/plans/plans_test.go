@@ -51,6 +51,9 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if standard.Price != "10" || standard.Days != 30 {
 		t.Fatalf("standard price/days = %s/%d", standard.Price, standard.Days)
 	}
+	assertBillingOption(t, standard, Monthly, "10", 30)
+	assertBillingOption(t, standard, Quarterly, "14", 90)
+	assertBillingOption(t, standard, Annual, "50", 365)
 	if !standard.AllowsRuleType(ApprovalChange) ||
 		!standard.AllowsRuleType(HighBalanceThreshold) ||
 		standard.AllowsRuleType(AddressInteraction) {
@@ -76,6 +79,9 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if !professional.AllowsStageNotifications() {
 		t.Fatal("professional plan must allow stage notifications")
 	}
+	assertBillingOption(t, professional, Monthly, "15", 30)
+	assertBillingOption(t, professional, Quarterly, "42", 90)
+	assertBillingOption(t, professional, Annual, "150", 365)
 }
 
 func TestIsBalanceThreshold(t *testing.T) {
@@ -104,9 +110,37 @@ func TestCatalogDefaultsToStandardAndReturnsCopies(t *testing.T) {
 	}
 
 	first.AllowedRuleTypes[0] = "changed"
+	first.BillingOptions[0].Price = "changed"
 	second, _ := catalog.Get(Standard)
 	if second.AllowedRuleTypes[0] != BalanceChange {
 		t.Fatal("Get returned shared plan slices")
+	}
+	if second.BillingOptions[0].Price != "12.5" {
+		t.Fatal("Get returned shared billing option slices")
+	}
+}
+
+func assertBillingOption(
+	t *testing.T,
+	plan Plan,
+	code string,
+	wantPrice string,
+	wantDays int,
+) {
+	t.Helper()
+	option, err := plan.BillingOption(code)
+	if err != nil {
+		t.Fatalf("BillingOption(%s): %v", code, err)
+	}
+	if option.Price != wantPrice || option.Days != wantDays {
+		t.Fatalf(
+			"BillingOption(%s) = %s/%d, want %s/%d",
+			code,
+			option.Price,
+			option.Days,
+			wantPrice,
+			wantDays,
+		)
 	}
 }
 

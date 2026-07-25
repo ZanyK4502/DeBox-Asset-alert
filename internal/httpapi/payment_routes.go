@@ -14,7 +14,10 @@ func (h handler) getPaymentConfig(w http.ResponseWriter, r *http.Request) {
 		serviceUnavailable(w)
 		return
 	}
-	configuration, err := h.deps.Payments.Configuration(r.URL.Query().Get("plan_code"))
+	configuration, err := h.deps.Payments.Configuration(
+		r.URL.Query().Get("plan_code"),
+		r.URL.Query().Get("billing_cycle"),
+	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -23,7 +26,8 @@ func (h handler) getPaymentConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type preparePaymentInput struct {
-	PlanCode string `json:"plan_code"`
+	PlanCode     string `json:"plan_code"`
+	BillingCycle string `json:"billing_cycle"`
 }
 
 func (h handler) postPreparePayment(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +52,7 @@ func (h handler) postPreparePayment(w http.ResponseWriter, r *http.Request) {
 		session.DeBoxUserID,
 		session.WalletAddress,
 		input.PlanCode,
+		input.BillingCycle,
 	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

@@ -21,7 +21,7 @@ const (
 	defaultNoditAPI      = "https://web3.nodit.io/v1"
 	defaultTokenSymbol   = "USDT"
 	defaultTokenDecimals = 18
-	defaultPlanPrice     = "10"
+	defaultPlanPrice     = "5"
 	defaultPlanDays      = 30
 	defaultPaymentMode   = "preview"
 )

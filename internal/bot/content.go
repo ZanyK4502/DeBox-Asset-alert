@@ -81,40 +81,70 @@ func featuresText(language string) string {
 func (s *Service) plansText(language string) string {
 	standard, _ := s.deps.Catalog.Get(plans.Standard)
 	professional, _ := s.deps.Catalog.Get(plans.Professional)
+	standardMonthly, _ := standard.BillingOption(plans.Monthly)
+	standardQuarterly, _ := standard.BillingOption(plans.Quarterly)
+	standardAnnual, _ := standard.BillingOption(plans.Annual)
+	professionalMonthly, _ := professional.BillingOption(plans.Monthly)
+	professionalQuarterly, _ := professional.BillingOption(plans.Quarterly)
+	professionalAnnual, _ := professional.BillingOption(plans.Annual)
 	if normalizeLanguage(language) == "en" {
 		return "<b>Plans</b><br/><br/>" +
 			"Free: 1 wallet, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
 			fmt.Sprintf(
-				"Standard: %s %s / %d days, 3 wallets, 10 rules, asset and approval monitoring, real-time or stage alerts, private delivery, and private daily summaries.<br/><br/>",
-				standard.Price,
+				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 wallets, 10 rules, asset and approval monitoring, real-time or stage alerts, private delivery, and private daily summaries.<br/><br/>",
+				standardMonthly.Price,
 				standard.Asset,
-				standard.Days,
+				standardMonthly.Days,
+				standardQuarterly.Price,
+				standard.Asset,
+				standardQuarterly.Days,
+				standardAnnual.Price,
+				standard.Asset,
+				standardAnnual.Days,
 			) +
 			fmt.Sprintf(
-				"Professional: %s %s / %d days, 20 wallets, 100 rules, all rule types, stage alerts, combination rules, group delivery, and private or group daily summaries. Combination members use the rule quota.<br/><br/>",
-				professional.Price,
+				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 rules, all rule types, stage alerts, combination rules, group delivery, and private or group daily summaries. Combination members use the rule quota.<br/><br/>",
+				professionalMonthly.Price,
 				professional.Asset,
-				professional.Days,
+				professionalMonthly.Days,
+				professionalQuarterly.Price,
+				professional.Asset,
+				professionalQuarterly.Days,
+				professionalAnnual.Price,
+				professional.Asset,
+				professionalAnnual.Days,
 			) +
-			"While a paid plan is active, only the same plan can be renewed; choose another plan after it expires.<br/><br/>" +
+			"While a paid plan is active, only the same plan can be renewed, with any billing period; choose another plan after it expires.<br/><br/>" +
 			"Pay with USDT on BNB Chain. The subscription activates after 3 block confirmations; failed verification does not activate it.<br/><br/>" +
 			"Subscriptions take effect immediately. Digital service purchases are non-refundable, so please review the plan before purchase."
 	}
 	return "<b>订阅方案</b><br/><br/>" +
 		"免费版：1 个钱包，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
 		fmt.Sprintf(
-			"标准版：%s %s / %d 天，3 个钱包，10 条规则，支持资产变化、授权监控、实时或阶段提醒、私聊通知和本人私聊每日摘要。<br/><br/>",
-			standard.Price,
+			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个钱包，10 条规则，支持资产变化、授权监控、实时或阶段提醒、私聊通知和本人私聊每日摘要。<br/><br/>",
+			standardMonthly.Price,
 			standard.Asset,
-			standard.Days,
+			standardMonthly.Days,
+			standardQuarterly.Price,
+			standard.Asset,
+			standardQuarterly.Days,
+			standardAnnual.Price,
+			standard.Asset,
+			standardAnnual.Days,
 		) +
 		fmt.Sprintf(
-			"专业版：%s %s / %d 天，20 个钱包，100 条规则，支持全部规则类型、阶段提醒、组合规则、群通知，以及本人私聊或群每日摘要；组合成员会占用规则额度。<br/><br/>",
-			professional.Price,
+			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条规则，支持全部规则类型、阶段提醒、组合规则、群通知，以及本人私聊或群每日摘要；组合成员会占用规则额度。<br/><br/>",
+			professionalMonthly.Price,
 			professional.Asset,
-			professional.Days,
+			professionalMonthly.Days,
+			professionalQuarterly.Price,
+			professional.Asset,
+			professionalQuarterly.Days,
+			professionalAnnual.Price,
+			professional.Asset,
+			professionalAnnual.Days,
 		) +
-		"付费套餐有效期内只能续费同一套餐并顺延到期时间；套餐到期后才能选择其他套餐。<br/><br/>" +
+		"付费套餐有效期内只能续费同一套餐，可选择任意付费周期并顺延到期时间；套餐到期后才能选择其他套餐。<br/><br/>" +
 		"使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。<br/><br/>" +
 		"订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。"
 }

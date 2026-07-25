@@ -201,6 +201,8 @@ type Order struct {
 	DeBoxUserID       string     `db:"debox_user_id" json:"debox_user_id"`
 	PayerAddress      string     `db:"payer_address" json:"payer_address"`
 	PlanCode          string     `db:"plan_code" json:"plan_code"`
+	BillingCycle      string     `db:"billing_cycle" json:"billing_cycle"`
+	SubscriptionDays  int32      `db:"subscription_days" json:"subscription_days"`
 	ChainKey          string     `db:"chain_key" json:"chain_key"`
 	ChainID           int32      `db:"chain_id" json:"chain_id"`
 	TokenAddress      *string    `db:"token_address" json:"token_address"`

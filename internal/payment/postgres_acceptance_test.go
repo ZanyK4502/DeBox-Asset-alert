@@ -22,6 +22,7 @@ func TestAcceptanceVerifiedUSDTTransferActivatesSubscription(t *testing.T) {
 		"acceptance-payment-user",
 		testPayer,
 		plans.Standard,
+		plans.Monthly,
 	)
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)

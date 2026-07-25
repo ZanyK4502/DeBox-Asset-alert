@@ -77,6 +77,8 @@ func TestPlanCopyExplainsCapabilitiesPaymentAndSwitchingRules(t *testing.T) {
 		"组合规则",
 		"组合成员会占用规则额度",
 		"套餐到期后才能选择其他套餐",
+		"14 USDT / 90 天",
+		"150 USDT / 365 天",
 		"3 个区块确认",
 		"不支持退款",
 	} {
@@ -89,6 +91,8 @@ func TestPlanCopyExplainsCapabilitiesPaymentAndSwitchingRules(t *testing.T) {
 		"combination rules",
 		"Combination members use the rule quota",
 		"choose another plan after it expires",
+		"14 USDT / 90 days",
+		"150 USDT / 365 days",
 		"3 block confirmations",
 		"non-refundable",
 	} {

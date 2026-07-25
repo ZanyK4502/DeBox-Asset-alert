@@ -73,8 +73,8 @@ type ManagementService interface {
 }
 
 type PaymentService interface {
-	Configuration(string) (payment.Configuration, error)
-	Prepare(context.Context, string, string, string) (payment.PrepareResult, error)
+	Configuration(string, string) (payment.Configuration, error)
+	Prepare(context.Context, string, string, string, string) (payment.PrepareResult, error)
 	Verify(context.Context, int64, string, string, string) (payment.VerifyResult, error)
 }
 

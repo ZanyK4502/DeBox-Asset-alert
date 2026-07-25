@@ -37,11 +37,10 @@ type fakeRepository struct {
 	updated      store.UpdateOrderVerificationParams
 	finalized    store.FinalizedOrder
 	finalizeArgs struct {
-		orderID          int64
-		transactionHash  string
-		blockNumber      int64
-		confirmations    int
-		subscriptionDays int
+		orderID         int64
+		transactionHash string
+		blockNumber     int64
+		confirmations   int
 	}
 }
 
@@ -105,13 +104,11 @@ func (f *fakeRepository) FinalizePaidOrder(
 	transactionHash string,
 	blockNumber int64,
 	confirmations int,
-	subscriptionDays int,
 ) (store.FinalizedOrder, error) {
 	f.finalizeArgs.orderID = orderID
 	f.finalizeArgs.transactionHash = transactionHash
 	f.finalizeArgs.blockNumber = blockNumber
 	f.finalizeArgs.confirmations = confirmations
-	f.finalizeArgs.subscriptionDays = subscriptionDays
 	return f.finalized, nil
 }
 
@@ -158,7 +155,7 @@ func TestConfigurationReportsLivePaymentReadiness(t *testing.T) {
 		TokenSymbol:      "USDT",
 		TokenDecimals:    18,
 	})
-	configuration, err := service.Configuration(plans.Standard)
+	configuration, err := service.Configuration(plans.Standard, plans.Monthly)
 	if err != nil {
 		t.Fatalf("Configuration() error = %v", err)
 	}
@@ -174,7 +171,7 @@ func TestConfigurationReportsLivePaymentReadiness(t *testing.T) {
 		TokenAddress:  testOther,
 		TokenDecimals: 6,
 	})
-	configuration, err = invalid.Configuration(plans.Standard)
+	configuration, err = invalid.Configuration(plans.Standard, plans.Monthly)
 	if err != nil {
 		t.Fatalf("invalid Configuration() error = %v", err)
 	}
@@ -192,6 +189,7 @@ func TestPrepareBuildsExactUSDTTransferFromAuthenticatedIdentity(t *testing.T) {
 		"user-1",
 		testPayer,
 		plans.Standard,
+		plans.Monthly,
 	)
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
@@ -204,6 +202,8 @@ func TestPrepareBuildsExactUSDTTransferFromAuthenticatedIdentity(t *testing.T) {
 	if repository.createdParams.DeBoxUserID != "user-1" ||
 		repository.createdParams.PayerAddress != testPayer ||
 		repository.createdParams.PlanCode != plans.Standard ||
+		repository.createdParams.BillingCycle != plans.Monthly ||
+		repository.createdParams.SubscriptionDays != 30 ||
 		result.Transaction.From != testPayer ||
 		result.Transaction.To != BSCUSDTAddress ||
 		result.Transaction.Data != expectedData ||
@@ -213,23 +213,55 @@ func TestPrepareBuildsExactUSDTTransferFromAuthenticatedIdentity(t *testing.T) {
 	}
 }
 
+func TestPrepareSnapshotsQuarterlyPriceAndDuration(t *testing.T) {
+	repository := &fakeRepository{createdOrder: store.Order{ID: 8}}
+	service := testService(t, repository, &fakeBlockchain{}, liveSettings())
+
+	result, err := service.Prepare(
+		context.Background(),
+		"user-1",
+		testPayer,
+		plans.Standard,
+		plans.Quarterly,
+	)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	expectedUnits, err := chain.AmountToUnits("14", 18)
+	if err != nil {
+		t.Fatalf("AmountToUnits() error = %v", err)
+	}
+	if repository.createdParams.BillingCycle != plans.Quarterly ||
+		repository.createdParams.SubscriptionDays != 90 ||
+		repository.createdParams.TotalAmount != "14" ||
+		result.AmountUnits != expectedUnits.String() {
+		t.Fatalf("quarterly payment = %#v / %#v", repository.createdParams, result)
+	}
+}
+
 func TestPrepareRejectsPreviewFreeAndActivePlanConflict(t *testing.T) {
 	preview := testService(t, &fakeRepository{}, &fakeBlockchain{}, Settings{
 		Mode:        "preview",
 		TokenSymbol: "USDT",
 	})
-	if _, err := preview.Prepare(context.Background(), "user-1", testPayer, plans.Standard); err == nil {
+	if _, err := preview.Prepare(
+		context.Background(), "user-1", testPayer, plans.Standard, plans.Monthly,
+	); err == nil {
 		t.Fatal("preview Prepare() error = nil")
 	}
 
 	live := testService(t, &fakeRepository{}, &fakeBlockchain{}, liveSettings())
-	if _, err := live.Prepare(context.Background(), "user-1", testPayer, plans.Free); err == nil {
+	if _, err := live.Prepare(
+		context.Background(), "user-1", testPayer, plans.Free, plans.Monthly,
+	); err == nil {
 		t.Fatal("free Prepare() error = nil")
 	}
 
 	conflictRepository := &fakeRepository{createErr: store.ErrActiveSubscriptionConflict}
 	live = testService(t, conflictRepository, &fakeBlockchain{}, liveSettings())
-	if _, err := live.Prepare(context.Background(), "user-1", testPayer, plans.Standard); !errors.Is(
+	if _, err := live.Prepare(
+		context.Background(), "user-1", testPayer, plans.Standard, plans.Monthly,
+	); !errors.Is(
 		err,
 		store.ErrActiveSubscriptionConflict,
 	) {
@@ -275,8 +307,7 @@ func TestVerifyFinalizesOnlyAfterThreeConfirmations(t *testing.T) {
 	}
 	if result.PaymentStatus != "paid" ||
 		result.Subscription != subscription ||
-		repository.finalizeArgs.confirmations != RequiredConfirmations ||
-		repository.finalizeArgs.subscriptionDays != 30 {
+		repository.finalizeArgs.confirmations != RequiredConfirmations {
 		t.Fatalf("unexpected paid result: %#v / %#v", result, repository.finalizeArgs)
 	}
 }
@@ -431,6 +462,8 @@ func testOrder() store.Order {
 		DeBoxUserID:      "user-1",
 		PayerAddress:     testPayer,
 		PlanCode:         plans.Standard,
+		BillingCycle:     plans.Monthly,
+		SubscriptionDays: 30,
 		ChainKey:         PaymentChainKey,
 		ChainID:          int32(PaymentChainID),
 		TokenAddress:     &token,

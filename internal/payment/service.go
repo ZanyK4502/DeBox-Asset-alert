@@ -34,7 +34,7 @@ type Repository interface {
 		int64,
 		store.UpdateOrderVerificationParams,
 	) (store.Order, error)
-	FinalizePaidOrder(context.Context, int64, string, int64, int, int) (store.FinalizedOrder, error)
+	FinalizePaidOrder(context.Context, int64, string, int64, int) (store.FinalizedOrder, error)
 }
 
 type Blockchain interface {
@@ -88,14 +88,20 @@ type Configuration struct {
 	TokenAddress          string        `json:"token_address"`
 	TokenDecimals         int           `json:"token_decimals"`
 	TotalAmount           string        `json:"total_amount"`
+	BillingCycle          string        `json:"billing_cycle"`
+	SubscriptionDays      int           `json:"subscription_days"`
 	RecipientAddress      string        `json:"recipient_address"`
 	RequiredConfirmations int           `json:"required_confirmations"`
 	Ready                 bool          `json:"ready"`
 	Missing               []string      `json:"missing"`
 }
 
-func (s *Service) Configuration(planCode string) (Configuration, error) {
+func (s *Service) Configuration(planCode string, billingCycle string) (Configuration, error) {
 	plan, err := s.catalog.Get(planCode)
+	if err != nil {
+		return Configuration{}, err
+	}
+	option, err := plan.BillingOption(billingCycle)
 	if err != nil {
 		return Configuration{}, err
 	}
@@ -136,7 +142,9 @@ func (s *Service) Configuration(planCode string) (Configuration, error) {
 		Asset:                 s.settings.TokenSymbol,
 		TokenAddress:          token,
 		TokenDecimals:         s.settings.TokenDecimals,
-		TotalAmount:           plan.Price,
+		TotalAmount:           option.Price,
+		BillingCycle:          option.Code,
+		SubscriptionDays:      option.Days,
 		RecipientAddress:      recipient,
 		RequiredConfirmations: RequiredConfirmations,
 		Ready:                 len(missing) == 0,
@@ -173,12 +181,13 @@ func (s *Service) Prepare(
 	deboxUserID string,
 	payerAddress string,
 	planCode string,
+	billingCycle string,
 ) (PrepareResult, error) {
 	userID := strings.TrimSpace(deboxUserID)
 	if userID == "" {
 		return PrepareResult{}, errors.New("missing DeBox user identity")
 	}
-	configuration, err := s.Configuration(planCode)
+	configuration, err := s.Configuration(planCode, billingCycle)
 	if err != nil {
 		return PrepareResult{}, err
 	}
@@ -207,7 +216,7 @@ func (s *Service) Prepare(
 		return PrepareResult{}, err
 	}
 	amountUnits, err := chain.AmountToUnits(
-		configuration.Plan.Price,
+		configuration.TotalAmount,
 		configuration.TokenDecimals,
 	)
 	if err != nil {
@@ -222,12 +231,14 @@ func (s *Service) Prepare(
 		DeBoxUserID:      userID,
 		PayerAddress:     payer,
 		PlanCode:         configuration.Plan.Code,
+		BillingCycle:     configuration.BillingCycle,
+		SubscriptionDays: int32(configuration.SubscriptionDays),
 		ChainKey:         configuration.Chain.Key,
 		ChainID:          int32(configuration.Chain.ChainID),
 		TokenAddress:     &tokenAddress,
 		TokenSymbol:      configuration.Asset,
 		TokenDecimals:    int32(configuration.TokenDecimals),
-		TotalAmount:      configuration.Plan.Price,
+		TotalAmount:      configuration.TotalAmount,
 		RecipientAddress: recipient,
 	})
 	if err != nil {
@@ -246,7 +257,7 @@ func (s *Service) Prepare(
 		Transaction:           request,
 		Transactions:          []TransactionEnvelope{{Request: request}},
 		AmountUnits:           amountUnits.String(),
-		Amount:                configuration.Plan.Price,
+		Amount:                configuration.TotalAmount,
 		Symbol:                configuration.Asset,
 		Recipient:             recipient,
 		RequiredConfirmations: RequiredConfirmations,
@@ -450,17 +461,12 @@ func (s *Service) verifyClaimedOrder(
 		return s.confirming(ctx, order, &block, confirmations)
 	}
 
-	plan, err := s.catalog.Get(order.PlanCode)
-	if err != nil {
-		return VerifyResult{}, err
-	}
 	finalized, err := s.repository.FinalizePaidOrder(
 		ctx,
 		order.ID,
 		hash,
 		block,
 		confirmations,
-		plan.Days,
 	)
 	if err != nil {
 		return VerifyResult{}, err
