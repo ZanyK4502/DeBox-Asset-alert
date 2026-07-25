@@ -489,7 +489,7 @@ window.H5_I18N = Object.freeze({
   },
   ruleDescriptions: {
     zh: {
-      balance_change: "余额相比上次后端检查发生变化，并且变化量达到阈值时提醒；后端约每 60 秒检查一次。",
+      balance_change: "余额相比上次检查发生变化，并且变化量达到阈值时提醒",
       incoming: "转入金额达到阈值时提醒。",
       outgoing: "转出金额达到阈值时提醒。",
       balance_threshold: "创建规则时余额已达到或低于阈值会立即提醒一次；持续低于不重复，回升至阈值以上后再次跌破会重新提醒。",
@@ -498,7 +498,7 @@ window.H5_I18N = Object.freeze({
       address_interaction: "监控地址与指定地址或合约发生交互时提醒。",
     },
     en: {
-      balance_change: "Alerts when the balance changes from the previous backend check and the change reaches the threshold. The backend checks about every 60 seconds.",
+      balance_change: "Alerts when the balance changes since the previous check and the change amount reaches the threshold.",
       incoming: "Alerts when an incoming amount reaches the threshold.",
       outgoing: "Alerts when an outgoing amount reaches the threshold.",
       balance_threshold: "Alerts immediately if the balance is already at or below the threshold when created. It does not repeat while below, and alerts again after recovery above the threshold and another drop.",
