@@ -350,20 +350,38 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 	english := normalizeLanguage(language) == "en"
 	rows := [][]boxbotapi.InlineKeyboardButton{
 		boxbotapi.NewInlineKeyboardRow(
-			buttonData(choice(english, "Monitoring", "监控能力"), "alert:features"),
-			buttonData(choice(english, "Plans", "订阅方案"), "alert:plans"),
+			buttonData(
+				choice(english, "Monitoring", "监控能力"),
+				localizedCallbackData("features", language),
+			),
+			buttonData(
+				choice(english, "Plans", "订阅方案"),
+				localizedCallbackData("plans", language),
+			),
 		),
 		boxbotapi.NewInlineKeyboardRow(
-			buttonData(choice(english, "Subscription", "订阅有效期"), "alert:subscription"),
-			buttonData(choice(english, "Balance", "余额查询"), "alert:balance"),
+			buttonData(
+				choice(english, "Subscription", "订阅有效期"),
+				localizedCallbackData("subscription", language),
+			),
+			buttonData(
+				choice(english, "Balance", "余额查询"),
+				localizedCallbackData("balance", language),
+			),
 		),
 	}
-	renewButton := buttonData(choice(english, "Renew", "快捷续费"), "alert:renew")
+	renewButton := buttonData(
+		choice(english, "Renew", "快捷续费"),
+		localizedCallbackData("renew", language),
+	)
 	if s.publicAppURL != "" {
 		renewButton = buttonURL(choice(english, "Renew", "快捷续费"), s.publicAppURL+"#renew")
 	}
 	rows = append(rows, boxbotapi.NewInlineKeyboardRow(
-		buttonData(choice(english, "Swap", "闪兑"), "alert:swap"),
+		buttonData(
+			choice(english, "Swap", "闪兑"),
+			localizedCallbackData("swap", language),
+		),
 		renewButton,
 	))
 	if s.publicAppURL != "" {
@@ -374,7 +392,7 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 			),
 			buttonData(
 				choice(english, "Summary", "汇总类通知详情"),
-				"alert:aggregate-details",
+				localizedCallbackData("aggregate-details", language),
 			),
 		))
 	}
@@ -393,7 +411,10 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 func (s *Service) backMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 	english := normalizeLanguage(language) == "en"
 	buttons := []boxbotapi.InlineKeyboardButton{
-		buttonData(choice(english, "Back to menu", "返回介绍"), "alert:intro"),
+		buttonData(
+			choice(english, "Back to menu", "返回介绍"),
+			localizedCallbackData("intro", language),
+		),
 	}
 	if s.publicAppURL != "" {
 		buttons = append(buttons, buttonURL(
@@ -430,7 +451,10 @@ func (s *Service) swapMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 				choice(english, "Start swap", "开始兑换"),
 				swapPayload(s.deps.Settings.SubscriptionTokenAddress),
 			),
-			buttonData(choice(english, "Back", "返回"), "alert:intro"),
+			buttonData(
+				choice(english, "Back", "返回"),
+				localizedCallbackData("intro", language),
+			),
 		),
 	)
 }
@@ -443,7 +467,10 @@ func (s *Service) aggregateDetailsMarkup(language string) boxbotapi.InlineKeyboa
 				choice(english, "View", "查看"),
 				s.publicAppURL+"#aggregateEventsSection",
 			),
-			buttonData(choice(english, "Back to menu", "返回介绍"), "alert:intro"),
+			buttonData(
+				choice(english, "Back to menu", "返回介绍"),
+				localizedCallbackData("intro", language),
+			),
 		),
 	)
 }

@@ -142,13 +142,17 @@ func (s *Service) handleCallback(
 		return nil
 	}
 	userID := userIDFromQuery(query)
-	data := strings.TrimSpace(query.Data)
-	language, err := s.languageForUser(ctx, userID)
-	if err != nil {
-		return err
+	data, callbackLanguage, hasCallbackLanguage, changesLanguage :=
+		parseCallbackData(query.Data)
+	language := callbackLanguage
+	if !hasCallbackLanguage {
+		var err error
+		language, err = s.languageForUser(ctx, userID)
+		if err != nil {
+			return err
+		}
 	}
-	if strings.HasPrefix(data, "alert:language:") {
-		language = normalizeLanguage(data[strings.LastIndex(data, ":")+1:])
+	if changesLanguage {
 		if userID != "" {
 			if _, err := s.deps.Repository.SetBotLanguage(ctx, userID, language); err != nil {
 				return err
@@ -172,7 +176,7 @@ func (s *Service) handleCallback(
 		s.callbackMarkup(data, language),
 	)
 	message.ParseMode = boxbotapi.ModeHTML
-	_, err = s.deps.Client.Send(message)
+	_, err := s.deps.Client.Send(message)
 	return err
 }
 
@@ -242,17 +246,58 @@ func ResolvePublicAppURL(configured string) string {
 }
 
 func userIDFromMessage(message *boxbotapi.Message) string {
-	if message == nil || message.From == nil {
+	if message == nil {
+		return ""
+	}
+	if message.Chat != nil &&
+		strings.EqualFold(strings.TrimSpace(message.Chat.Type), "private") &&
+		strings.TrimSpace(message.Chat.ID) != "" {
+		return strings.TrimSpace(message.Chat.ID)
+	}
+	if message.From == nil {
 		return ""
 	}
 	return strings.TrimSpace(message.From.UserId)
 }
 
 func userIDFromQuery(query *boxbotapi.CallbackQuery) string {
-	if query == nil || query.From == nil {
+	if query == nil {
+		return ""
+	}
+	if query.Message != nil &&
+		query.Message.Chat != nil &&
+		strings.EqualFold(strings.TrimSpace(query.Message.Chat.Type), "private") &&
+		strings.TrimSpace(query.Message.Chat.ID) != "" {
+		return strings.TrimSpace(query.Message.Chat.ID)
+	}
+	if query.From == nil {
 		return ""
 	}
 	return strings.TrimSpace(query.From.UserId)
+}
+
+func localizedCallbackData(action, language string) string {
+	return "alert:" + action + ":" + normalizeLanguage(language)
+}
+
+func parseCallbackData(raw string) (
+	data string,
+	language string,
+	hasLanguage bool,
+	changesLanguage bool,
+) {
+	data = strings.TrimSpace(raw)
+	parts := strings.Split(data, ":")
+	if len(parts) != 3 ||
+		parts[0] != "alert" ||
+		(parts[2] != "zh" && parts[2] != "en") {
+		return data, "", false, false
+	}
+	language = normalizeLanguage(parts[2])
+	if parts[1] == "language" {
+		return "alert:intro", language, true, true
+	}
+	return "alert:" + parts[1], language, true, false
 }
 
 func normalizeLanguage(language string) string {

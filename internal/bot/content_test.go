@@ -136,7 +136,8 @@ func TestMenuIncludesLocalizedSummaryDetailsEntry(t *testing.T) {
 				for _, button := range row {
 					if button.Text == test.label &&
 						button.CallbackData != nil &&
-						*button.CallbackData == "alert:aggregate-details" {
+						*button.CallbackData ==
+							"alert:aggregate-details:"+test.language {
 						found = true
 					}
 				}
@@ -187,8 +188,31 @@ func TestSummaryDetailsCallbackIsLocalizedAndLinksToAggregateEvents(t *testing.T
 			back := markup.InlineKeyboard[0][1]
 			if back.Text != test.back ||
 				back.CallbackData == nil ||
-				*back.CallbackData != "alert:intro" {
+				*back.CallbackData != "alert:intro:"+test.language {
 				t.Fatalf("back button = %#v", back)
+			}
+		})
+	}
+}
+
+func TestMenuCallbacksCarryDisplayedLanguage(t *testing.T) {
+	service, _, _, _ := newTestService(t)
+	for _, language := range []string{"zh", "en"} {
+		t.Run(language, func(t *testing.T) {
+			markup := service.menuMarkup(language)
+			for _, row := range markup.InlineKeyboard {
+				for _, button := range row {
+					if button.CallbackData == nil {
+						continue
+					}
+					data := *button.CallbackData
+					if strings.HasPrefix(data, "alert:language:") {
+						continue
+					}
+					if !strings.HasSuffix(data, ":"+language) {
+						t.Fatalf("callback %q does not carry %s", data, language)
+					}
+				}
 			}
 		})
 	}

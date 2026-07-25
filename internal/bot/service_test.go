@@ -176,7 +176,7 @@ func TestPrivateStartCommandsSendSavedLanguageMenu(t *testing.T) {
 	for _, command := range []string{"start", "/start", " /START "} {
 		t.Run(strings.TrimSpace(command), func(t *testing.T) {
 			service, client, repository, _ := newTestService(t)
-			repository.languages["user-id"] = "en"
+			repository.languages["chat-id"] = "en"
 
 			_, err := service.HandleUpdate(context.Background(), boxbotapi.Update{
 				Id:      7,
@@ -255,7 +255,7 @@ func TestLanguageCallbackPersistsForClickingUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle callback: %v", err)
 	}
-	if repository.setUserID != "second-user" || repository.setValue != "en" {
+	if repository.setUserID != "chat-id" || repository.setValue != "en" {
 		t.Fatalf("saved language = %q/%q", repository.setUserID, repository.setValue)
 	}
 	edit := client.sentConfigs()[0].(boxbotapi.EditMessageTextConfig)
@@ -290,9 +290,89 @@ func TestBalanceCallbackIncludesTokenAndGas(t *testing.T) {
 	}
 }
 
+func TestLocalizedCallbackUsesMenuLanguage(t *testing.T) {
+	tests := []struct {
+		name             string
+		data             string
+		savedLanguage    string
+		expectedText     string
+		expectedBackData string
+	}{
+		{
+			name:             "English button overrides Chinese preference",
+			data:             "alert:features:en",
+			savedLanguage:    "zh",
+			expectedText:     "Supported networks",
+			expectedBackData: "alert:intro:en",
+		},
+		{
+			name:             "Chinese button overrides English preference",
+			data:             "alert:plans:zh",
+			savedLanguage:    "en",
+			expectedText:     "订阅方案",
+			expectedBackData: "alert:intro:zh",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, client, repository, _ := newTestService(t)
+			repository.languages["chat-id"] = test.savedLanguage
+			query := &boxbotapi.CallbackQuery{
+				Data: test.data,
+				Message: &boxbotapi.Message{
+					MessageID: "message-id",
+					Chat:      &boxbotapi.Chat{ID: "chat-id", Type: "private"},
+				},
+			}
+
+			if _, err := service.HandleUpdate(context.Background(), boxbotapi.Update{
+				CallbackQuery: query,
+			}); err != nil {
+				t.Fatalf("handle localized callback: %v", err)
+			}
+
+			edit := client.sentConfigs()[0].(boxbotapi.EditMessageTextConfig)
+			if !strings.Contains(edit.Text, test.expectedText) {
+				t.Fatalf("callback text %q does not contain %q", edit.Text, test.expectedText)
+			}
+			if edit.ReplyMarkup == nil {
+				t.Fatal("callback reply markup is nil")
+			}
+			back := edit.ReplyMarkup.InlineKeyboard[0][0]
+			if back.CallbackData == nil || *back.CallbackData != test.expectedBackData {
+				t.Fatalf("back callback = %#v, want %q", back.CallbackData, test.expectedBackData)
+			}
+		})
+	}
+}
+
+func TestLegacyCallbackUsesPrivateChatPreference(t *testing.T) {
+	service, client, repository, _ := newTestService(t)
+	repository.languages["chat-id"] = "en"
+	query := &boxbotapi.CallbackQuery{
+		From: &boxbotapi.User{UserId: "different-user-id"},
+		Data: "alert:features",
+		Message: &boxbotapi.Message{
+			MessageID: "message-id",
+			Chat:      &boxbotapi.Chat{ID: "chat-id", Type: "private"},
+		},
+	}
+
+	if _, err := service.HandleUpdate(context.Background(), boxbotapi.Update{
+		CallbackQuery: query,
+	}); err != nil {
+		t.Fatalf("handle legacy callback: %v", err)
+	}
+
+	edit := client.sentConfigs()[0].(boxbotapi.EditMessageTextConfig)
+	if !strings.Contains(edit.Text, "Supported networks") {
+		t.Fatalf("legacy callback did not use private chat preference: %q", edit.Text)
+	}
+}
+
 func TestCallbackFailureProducesLocalizedMessage(t *testing.T) {
 	service, client, repository, _ := newTestService(t)
-	repository.languages["user-id"] = "en"
+	repository.languages["chat-id"] = "en"
 	service.deps.Subscriptions = fakeSubscriptions{err: errors.New("database down")}
 	query := &boxbotapi.CallbackQuery{
 		From: &boxbotapi.User{UserId: "user-id"},
