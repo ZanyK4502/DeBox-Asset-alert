@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const html = fs.readFileSync(path.join(root, "static", "index.html"), "utf8");
 const app = fs.readFileSync(path.join(root, "static", "app.js"), "utf8");
 const i18nSource = fs.readFileSync(path.join(root, "static", "i18n.js"), "utf8");
+const timeSource = fs.readFileSync(path.join(root, "static", "time.js"), "utf8");
 
 const htmlIDs = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
 const referencedIDs = new Set([...app.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]));
@@ -56,8 +57,30 @@ for (const key of translationKeys) {
 }
 
 const i18nScript = html.indexOf('<script src="/static/i18n.js"></script>');
+const timeScript = html.indexOf('<script src="/static/time.js"></script>');
 const appScript = html.indexOf('<script src="/static/app.js"></script>');
-assert.ok(i18nScript >= 0 && appScript > i18nScript, "i18n.js must load before app.js");
+assert.ok(
+  i18nScript >= 0 && timeScript > i18nScript && appScript > timeScript,
+  "i18n.js and time.js must load before app.js",
+);
+
+const timeContext = { window: { Date, Intl } };
+vm.runInNewContext(timeSource, timeContext, { filename: "static/time.js" });
+const formatExpiryDate = timeContext.window.H5_TIME?.formatExpiryDate;
+assert.equal(typeof formatExpiryDate, "function", "H5 expiry formatter is required");
+assert.equal(
+  formatExpiryDate("2026-08-20T12:00:00Z", "zh", "Asia/Shanghai"),
+  "2026-08-20 20:00:00（GMT+8）",
+  "H5 expiry must use the requested local time zone",
+);
+
+const fallbackContext = { window: { Date } };
+vm.runInNewContext(timeSource, fallbackContext, { filename: "static/time.js" });
+assert.equal(
+  fallbackContext.window.H5_TIME.formatExpiryDate("2026-08-20T12:00:00Z", "en"),
+  "2026-08-20 12:00:00 (UTC)",
+  "H5 expiry must fall back to UTC when time-zone formatting is unavailable",
+);
 
 console.log(
   `H5 contract OK: ${referencedIDs.size} DOM references, ${requiredAPIs.length} APIs, ${translationKeys.size} translation keys`,

@@ -4,9 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	boxbotapi "github.com/debox-pro/debox-chat-go-sdk/boxbotapi"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
 
 func TestMessageTextFallsBackToRawSDKField(t *testing.T) {
@@ -99,6 +104,34 @@ func TestPlanCopyExplainsCapabilitiesPaymentAndSwitchingRules(t *testing.T) {
 		if !strings.Contains(english, text) {
 			t.Fatalf("English plan copy is missing %q", text)
 		}
+	}
+}
+
+func TestSubscriptionCopyFormatsExpiryAsReadableUTC(t *testing.T) {
+	service, _, _, _ := newTestService(t)
+	service.deps.Subscriptions = fakeSubscriptions{value: subscription.Entitlement{
+		Plan:          plans.Plan{Code: plans.Standard, Name: "标准版", RuleLimit: 10},
+		Subscription:  &store.Subscription{ExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.FixedZone("test", 8*60*60))},
+		DaysRemaining: 24,
+	}}
+
+	chinese, err := service.subscriptionText(context.Background(), "user-id", "zh")
+	if err != nil {
+		t.Fatalf("Chinese subscription text: %v", err)
+	}
+	english, err := service.subscriptionText(context.Background(), "user-id", "en")
+	if err != nil {
+		t.Fatalf("English subscription text: %v", err)
+	}
+
+	if !strings.Contains(chinese, "到期时间：2026-08-20 04:00:00（UTC）") {
+		t.Fatalf("Chinese subscription expiry is not readable UTC: %q", chinese)
+	}
+	if !strings.Contains(english, "Expires at: 2026-08-20 04:00:00 (UTC)") {
+		t.Fatalf("English subscription expiry is not readable UTC: %q", english)
+	}
+	if strings.Contains(chinese, "T04:00:00Z") || strings.Contains(english, "T04:00:00Z") {
+		t.Fatal("subscription copy still exposes RFC3339 separators")
 	}
 }
 

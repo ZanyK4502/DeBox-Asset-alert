@@ -41,6 +41,7 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const I18N = window.H5_I18N;
+const TIME = window.H5_TIME;
 let aggregateScrollFrame = 0;
 let aggregateScrollLastTime = 0;
 let aggregateScrollDirection = 1;
@@ -631,7 +632,7 @@ function renderSubscription(syncSummary = true) {
       <span>${escapeHtml(t("ruleMetric", { used: state.entitlement.rule_count, limit: plan.rule_limit }))}</span>
       <span>${escapeHtml(t("groupMetric", { used: state.entitlement.group_count, limit: plan.group_limit }))}</span>
     </div>
-    <small class="muted">${escapeHtml(isFree ? freeHint : t("expiresAt", { date: sub.expires_at || "-" }))}</small>
+    <small class="muted">${escapeHtml(isFree ? freeHint : t("expiresAt", { date: TIME.formatExpiryDate(sub.expires_at, state.uiLanguage) }))}</small>
   `;
   if (syncSummary) fillSummaryForm();
 }

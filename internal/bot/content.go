@@ -212,7 +212,7 @@ func (s *Service) subscriptionText(
 
 	expiresAt := "-"
 	if current.Subscription != nil {
-		expiresAt = current.Subscription.ExpiresAt.Format(time.RFC3339)
+		expiresAt = formatUTCDateTime(current.Subscription.ExpiresAt, english)
 	}
 	if english {
 		return fmt.Sprintf(
@@ -246,6 +246,14 @@ func (s *Service) subscriptionText(
 		current.GroupCount,
 		current.Plan.GroupLimit,
 	), nil
+}
+
+func formatUTCDateTime(value time.Time, english bool) string {
+	formatted := value.UTC().Format("2006-01-02 15:04:05")
+	if english {
+		return formatted + " (UTC)"
+	}
+	return formatted + "（UTC）"
 }
 
 func localizedPlanName(current subscription.Entitlement, language string) string {
