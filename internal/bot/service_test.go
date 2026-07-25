@@ -370,6 +370,26 @@ func TestLegacyCallbackUsesPrivateChatPreference(t *testing.T) {
 	}
 }
 
+func TestWalletActionCallbackDoesNotEditBotMessage(t *testing.T) {
+	service, client, _, _ := newTestService(t)
+	query := &boxbotapi.CallbackQuery{
+		Data: `{"jsonrpc":"2.0","id":106,"method":"swap","params":[]}`,
+		Message: &boxbotapi.Message{
+			MessageID: "message-id",
+			Chat:      &boxbotapi.Chat{ID: "chat-id", Type: "private"},
+		},
+	}
+
+	if _, err := service.HandleUpdate(context.Background(), boxbotapi.Update{
+		CallbackQuery: query,
+	}); err != nil {
+		t.Fatalf("handle wallet action callback: %v", err)
+	}
+	if sent := client.sentConfigs(); len(sent) != 0 {
+		t.Fatalf("wallet action edited Bot message: %#v", sent)
+	}
+}
+
 func TestCallbackFailureProducesLocalizedMessage(t *testing.T) {
 	service, client, repository, _ := newTestService(t)
 	repository.languages["chat-id"] = "en"

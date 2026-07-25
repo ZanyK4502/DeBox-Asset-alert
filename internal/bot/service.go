@@ -141,6 +141,9 @@ func (s *Service) handleCallback(
 	if query == nil || query.Message == nil || query.Message.Chat == nil {
 		return nil
 	}
+	if !strings.HasPrefix(strings.TrimSpace(query.Data), "alert:") {
+		return nil
+	}
 	userID := userIDFromQuery(query)
 	data, callbackLanguage, hasCallbackLanguage, changesLanguage :=
 		parseCallbackData(query.Data)
