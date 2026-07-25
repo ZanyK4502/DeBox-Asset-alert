@@ -126,7 +126,7 @@ func TestMenuIncludesLocalizedSummaryDetailsEntry(t *testing.T) {
 		label    string
 	}{
 		{language: "zh", label: "汇总类通知详情"},
-		{language: "en", label: "Summary Details"},
+		{language: "en", label: "Summary"},
 	}
 	for _, test := range tests {
 		t.Run(test.language, func(t *testing.T) {

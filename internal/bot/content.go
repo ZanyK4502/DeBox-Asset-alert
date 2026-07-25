@@ -373,7 +373,7 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 				s.publicAppURL,
 			),
 			buttonData(
-				choice(english, "Summary Details", "汇总类通知详情"),
+				choice(english, "Summary", "汇总类通知详情"),
 				"alert:aggregate-details",
 			),
 		))
