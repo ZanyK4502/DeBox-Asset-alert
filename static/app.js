@@ -1243,6 +1243,14 @@ function thresholdValue(ruleType, input) {
   return value || "0";
 }
 
+function validateThresholdOnBlur(ruleTypeSelectId, thresholdInputId) {
+  const input = $(thresholdInputId);
+  const value = input.value.trim();
+  if (!value || !requiresPositiveThreshold($(ruleTypeSelectId).value) || Number(value) > 0) return;
+  input.value = "";
+  toast(t("enterPositiveThreshold"));
+}
+
 function combinationMemberDraft() {
   const ruleType = $("combinationRuleTypeSelect").value;
   return {
@@ -1983,6 +1991,10 @@ function bindEvents() {
   $("ruleTypeSelect").addEventListener("change", updateRuleFields);
   $("combinationRuleTypeSelect").addEventListener("change", updateCombinationMemberFields);
   $("deliveryModeSelect").addEventListener("change", updateDeliveryModeFields);
+  $("thresholdInput").addEventListener("blur", () => validateThresholdOnBlur("ruleTypeSelect", "thresholdInput"));
+  $("combinationThresholdInput").addEventListener("blur", () => {
+    validateThresholdOnBlur("combinationRuleTypeSelect", "combinationThresholdInput");
+  });
   $("tokenAddressInput").addEventListener("blur", lookupToken);
   $("chainSelect").addEventListener("change", lookupToken);
   $("chainSelect").addEventListener("change", () => renderChainPicker());
