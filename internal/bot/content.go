@@ -320,6 +320,11 @@ func (s *Service) callbackText(
 		return s.subscriptionText(ctx, userID, language)
 	case data == "alert:balance":
 		return s.balanceText(ctx, userID, language)
+	case data == "alert:aggregate-details":
+		if normalizeLanguage(language) == "en" {
+			return "<b>Summary Details</b><br/><br/>View more event details for stage alerts from individual rules and combination rules.", nil
+		}
+		return "<b>汇总类通知详情</b><br/><br/>单条规则的阶段提醒事件与组合规则中的更多事件详情。", nil
 	case data == "alert:swap":
 		if normalizeLanguage(language) == "en" {
 			return "<b>Swap</b><br/>Swap assets for USDT on BSC", nil
@@ -367,9 +372,9 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 				choice(english, "Monitoring Dashboard", "个人监控面板"),
 				s.publicAppURL,
 			),
-			buttonURL(
-				choice(english, "Aggregate Events", "汇总通知事件"),
-				s.publicAppURL+"#aggregateEventsSection",
+			buttonData(
+				choice(english, "Summary Details", "汇总类通知详情"),
+				"alert:aggregate-details",
 			),
 		))
 	}
@@ -430,6 +435,19 @@ func (s *Service) swapMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 	)
 }
 
+func (s *Service) aggregateDetailsMarkup(language string) boxbotapi.InlineKeyboardMarkup {
+	english := normalizeLanguage(language) == "en"
+	return boxbotapi.NewInlineKeyboardMarkup(
+		boxbotapi.NewInlineKeyboardRow(
+			buttonURL(
+				choice(english, "View", "查看"),
+				s.publicAppURL+"#aggregateEventsSection",
+			),
+			buttonData(choice(english, "Back to menu", "返回介绍"), "alert:intro"),
+		),
+	)
+}
+
 func (s *Service) callbackMarkup(
 	data string,
 	language string,
@@ -439,6 +457,9 @@ func (s *Service) callbackMarkup(
 	}
 	if data == "alert:swap" {
 		return s.swapMarkup(language)
+	}
+	if data == "alert:aggregate-details" {
+		return s.aggregateDetailsMarkup(language)
 	}
 	return s.backMarkup(language)
 }

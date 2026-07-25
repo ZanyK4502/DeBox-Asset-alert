@@ -119,14 +119,14 @@ func TestBotCopyFitsMessageLimitAndHasBalancedBoldTags(t *testing.T) {
 	}
 }
 
-func TestMenuIncludesLocalizedAggregateEventsEntry(t *testing.T) {
+func TestMenuIncludesLocalizedSummaryDetailsEntry(t *testing.T) {
 	service, _, _, _ := newTestService(t)
 	tests := []struct {
 		language string
 		label    string
 	}{
-		{language: "zh", label: "汇总通知事件"},
-		{language: "en", label: "Aggregate Events"},
+		{language: "zh", label: "汇总类通知详情"},
+		{language: "en", label: "Summary Details"},
 	}
 	for _, test := range tests {
 		t.Run(test.language, func(t *testing.T) {
@@ -135,14 +135,60 @@ func TestMenuIncludesLocalizedAggregateEventsEntry(t *testing.T) {
 			for _, row := range markup.InlineKeyboard {
 				for _, button := range row {
 					if button.Text == test.label &&
-						button.URL != nil &&
-						*button.URL == "https://example.test#aggregateEventsSection" {
+						button.CallbackData != nil &&
+						*button.CallbackData == "alert:aggregate-details" {
 						found = true
 					}
 				}
 			}
 			if !found {
-				t.Fatalf("aggregate events entry missing from %s menu", test.language)
+				t.Fatalf("summary details entry missing from %s menu", test.language)
+			}
+		})
+	}
+}
+
+func TestSummaryDetailsCallbackIsLocalizedAndLinksToAggregateEvents(t *testing.T) {
+	service, _, _, _ := newTestService(t)
+	tests := []struct {
+		language string
+		text     string
+		view     string
+		back     string
+	}{
+		{language: "zh", text: "单条规则的阶段提醒事件与组合规则中的更多事件详情。", view: "查看", back: "返回介绍"},
+		{language: "en", text: "stage alerts from individual rules and combination rules", view: "View", back: "Back to menu"},
+	}
+	for _, test := range tests {
+		t.Run(test.language, func(t *testing.T) {
+			text, err := service.callbackText(
+				context.Background(),
+				"alert:aggregate-details",
+				"user-id",
+				test.language,
+			)
+			if err != nil {
+				t.Fatalf("summary details text: %v", err)
+			}
+			if !strings.Contains(text, test.text) {
+				t.Fatalf("summary details text %q does not contain %q", text, test.text)
+			}
+
+			markup := service.callbackMarkup("alert:aggregate-details", test.language)
+			if len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 2 {
+				t.Fatalf("summary details buttons = %#v, want one row with two buttons", markup.InlineKeyboard)
+			}
+			view := markup.InlineKeyboard[0][0]
+			if view.Text != test.view ||
+				view.URL == nil ||
+				*view.URL != "https://example.test#aggregateEventsSection" {
+				t.Fatalf("view button = %#v", view)
+			}
+			back := markup.InlineKeyboard[0][1]
+			if back.Text != test.back ||
+				back.CallbackData == nil ||
+				*back.CallbackData != "alert:intro" {
+				t.Fatalf("back button = %#v", back)
 			}
 		})
 	}
