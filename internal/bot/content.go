@@ -16,17 +16,27 @@ import (
 
 func menuText(language string) string {
 	if normalizeLanguage(language) == "en" {
-		return "<b>DeBox Asset Alert</b><br/>" +
-			"Monitor on-chain addresses, token balances, approvals, and contract interactions through DeBox Bot.<br/><br/>" +
-			"Features include multi-chain monitoring, low and high balance thresholds, real-time and stage alerts, " +
-			"Professional combination rules, group alerts, and daily summaries.<br/><br/>" +
-			"Open the monitoring dashboard and sign with your wallet to securely sign in. " +
-			"Signing sends no transaction and uses no gas."
+		return "🤖 <b>DeBox Asset Alert</b><br/>" +
+			"Monitor on-chain addresses, token balances, approvals, and contract interactions, and receive notifications through DeBox Asset Alert Bot.<br/><br/>" +
+			"✨ <b>Core Features:</b><br/><br/>" +
+			"🌐 <b>Multi-chain Monitoring:</b> Covers major blockchains and L2 networks<br/><br/>" +
+			"💰 <b>Balance Alerts:</b> Set custom low and high balance thresholds<br/><br/>" +
+			"⚡ <b>Real-time Alerts:</b> Key changes delivered in seconds, with stage alerts<br/><br/>" +
+			"📊 <b>Professional Mode:</b> Supports combination rule configuration<br/><br/>" +
+			"📢 <b>Multi-channel Notifications:</b> Supports group notifications and daily summaries<br/><br/>" +
+			"👉 <b>Quick Start:</b><br/>" +
+			"Open the personal monitoring dashboard and securely sign in with your wallet signature 🔐"
 	}
-	return "<b>DeBox Asset Alert</b><br/>" +
-		"监控链上地址、代币余额、授权和合约交互，通过 DeBox Bot 接收通知。<br/><br/>" +
-		"支持：多链监控、低余额与高余额阈值、实时提醒、阶段提醒、专业版组合规则、群通知和每日摘要等。<br/><br/>" +
-		"打开个人监控面板后，通过钱包签名完成安全登录；签名不会发起交易或消耗 Gas。"
+	return "🤖 <b>DeBox Asset Alert</b><br/>" +
+		"监控链上地址、代币余额、授权和合约交互，通过 DeBox Asset Alert Bot 接收通知。<br/><br/>" +
+		"✨ <b>核心功能支持：</b><br/><br/>" +
+		"🌐 <b>多链监控：</b>覆盖主流公链与 L2<br/><br/>" +
+		"💰 <b>余额预警：</b>自定义低余额与高余额阈值<br/><br/>" +
+		"⚡ <b>实时提醒：</b>关键变动秒级推送与阶段提醒<br/><br/>" +
+		"📊 <b>专业模式：</b>支持组合规则配置<br/><br/>" +
+		"📢 <b>多端通知：</b>支持群通知与每日摘要推送<br/><br/>" +
+		"👉 <b>快速开始：</b><br/>" +
+		"打开个人监控面板后，通过钱包签名完成安全登录 🔐"
 }
 
 func featuresText(language string) string {

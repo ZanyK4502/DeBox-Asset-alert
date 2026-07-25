@@ -25,11 +25,11 @@ func TestMessageTextFallsBackToRawSDKField(t *testing.T) {
 }
 
 func TestSecureSignInCopyIsAvailableInBothLanguages(t *testing.T) {
-	if !strings.Contains(menuText("zh"), "不会发起交易或消耗 Gas") {
-		t.Fatal("Chinese menu does not explain the security of wallet signing")
+	if !strings.Contains(menuText("zh"), "通过钱包签名完成安全登录") {
+		t.Fatal("Chinese menu does not explain secure wallet sign-in")
 	}
-	if !strings.Contains(menuText("en"), "sends no transaction and uses no gas") {
-		t.Fatal("English menu does not explain the security of wallet signing")
+	if !strings.Contains(menuText("en"), "securely sign in with your wallet signature") {
+		t.Fatal("English menu does not explain secure wallet sign-in")
 	}
 }
 
