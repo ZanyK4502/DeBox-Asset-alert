@@ -25,6 +25,7 @@ type Repository interface {
 	CountUserWatchRules(context.Context, string) (int64, error)
 	CountUserWallets(context.Context, string) (int64, error)
 	CountNotificationGroups(context.Context, string) (int64, error)
+	ListDailySummaryTargets(context.Context, int64) ([]store.DailySummaryTarget, error)
 	SetFreeWatchRule(context.Context, string, int64) (store.UserPreference, error)
 	CreateWatchRuleWithinQuota(context.Context, store.CreateWatchRuleParams, store.QuotaPolicy) (store.WatchRule, error)
 	RestoreWatchRuleWithinQuota(context.Context, int64, string, store.QuotaPolicy) (store.WatchRule, error)
@@ -60,13 +61,14 @@ type RuleView struct {
 }
 
 type SummarySettings struct {
-	Enabled  bool   `json:"enabled"`
-	Time     string `json:"time"`
-	Timezone string `json:"timezone"`
-	ChatType string `json:"chat_type"`
-	ChatID   string `json:"chat_id"`
-	Label    string `json:"label"`
-	Language string `json:"language"`
+	Enabled  bool                       `json:"enabled"`
+	Time     string                     `json:"time"`
+	Timezone string                     `json:"timezone"`
+	ChatType string                     `json:"chat_type"`
+	ChatID   string                     `json:"chat_id"`
+	Label    string                     `json:"label"`
+	Language string                     `json:"language"`
+	Targets  []store.DailySummaryTarget `json:"targets"`
 }
 
 type Entitlement struct {
@@ -145,6 +147,13 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 	if err != nil {
 		return Entitlement{}, err
 	}
+	summaryTargets := []store.DailySummaryTarget{}
+	if activeSubscription != nil {
+		summaryTargets, err = s.repository.ListDailySummaryTargets(ctx, activeSubscription.ID)
+		if err != nil {
+			return Entitlement{}, err
+		}
+	}
 
 	return Entitlement{
 		DeBoxUserID:     deboxUserID,
@@ -161,7 +170,7 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 		ActiveRules:     activeRules,
 		PausedRules:     pausedRules,
 		Groups:          groups,
-		SummarySettings: summarySettings(activeSubscription),
+		SummarySettings: summarySettings(activeSubscription, summaryTargets),
 	}, nil
 }
 
@@ -514,23 +523,34 @@ func pauseReason(
 	}
 }
 
-func summarySettings(subscription *store.Subscription) SummarySettings {
+func summarySettings(
+	subscription *store.Subscription,
+	targets []store.DailySummaryTarget,
+) SummarySettings {
 	if subscription == nil {
 		return SummarySettings{
 			Time:     "20:00",
 			Timezone: "Asia/Shanghai",
 			ChatType: "private",
 			Language: "zh",
+			Targets:  []store.DailySummaryTarget{},
 		}
+	}
+	chatType := defaultString(subscription.DailySummaryChatType, "private")
+	chatID := subscription.DailySummaryChatID
+	if len(targets) > 0 {
+		chatType = targets[0].ChatType
+		chatID = targets[0].ChatID
 	}
 	return SummarySettings{
 		Enabled:  subscription.DailySummaryEnabled == 1,
 		Time:     defaultString(subscription.DailySummaryTime, "20:00"),
 		Timezone: defaultString(subscription.DailySummaryTimezone, "Asia/Shanghai"),
-		ChatType: defaultString(subscription.DailySummaryChatType, "private"),
-		ChatID:   subscription.DailySummaryChatID,
+		ChatType: chatType,
+		ChatID:   chatID,
 		Label:    subscription.DailySummaryLabel,
 		Language: normalizeLanguage(subscription.DailySummaryLanguage),
+		Targets:  targets,
 	}
 }
 

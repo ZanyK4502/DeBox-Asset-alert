@@ -22,6 +22,14 @@ type Subscription struct {
 	CreatedAt                   time.Time  `db:"created_at" json:"created_at"`
 }
 
+type DailySummaryTarget struct {
+	ID             int64     `db:"id" json:"id"`
+	SubscriptionID int64     `db:"subscription_id" json:"subscription_id"`
+	ChatType       string    `db:"chat_type" json:"chat_type"`
+	ChatID         string    `db:"chat_id" json:"chat_id"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+}
+
 type WatchRule struct {
 	ID                    int64      `db:"id" json:"id"`
 	DeBoxUserID           string     `db:"debox_user_id" json:"debox_user_id"`

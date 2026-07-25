@@ -57,7 +57,7 @@ func featuresText(language string) string {
 			"• Combination rule (Professional): uses at least two dedicated member rules; it sends one combined alert after every member reaches its own count in the same cycle. Members do not send individual alerts.<br/><br/>" +
 			"Stage and combination events remain available in the dashboard for 30 days.<br/><br/>" +
 			"Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours and includes notification failures.<br/><br/>" +
-			"If a summary group is unbound, delivery switches to private chat. If private confirmation fails, the daily summary is turned off."
+			"If a summary group is unbound, only that group is removed from the delivery targets. The daily summary is turned off if no targets remain."
 	}
 	return "<b>监控能力</b><br/><br/>" +
 		"支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>" +
@@ -75,7 +75,7 @@ func featuresText(language string) string {
 		"• 组合规则（专业版）：至少包含两条专用成员规则；同一周期内所有成员分别达到设定次数后发送一条总通知，成员不会单独通知<br/><br/>" +
 		"阶段提醒和组合规则事件会在个人监控面板保留 30 天。<br/><br/>" +
 		"每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。<br/><br/>" +
-		"解绑摘要群后会自动切回本人私聊；若私聊确认失败，每日摘要会关闭。"
+		"解绑摘要群后，只会从推送对象中移除该群；如果没有剩余推送对象，每日摘要会自动关闭。"
 }
 
 func (s *Service) plansText(language string) string {
@@ -103,7 +103,7 @@ func (s *Service) plansText(language string) string {
 				standardAnnual.Days,
 			) +
 			fmt.Sprintf(
-				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 rules, all rule types, stage alerts, combination rules, group delivery, and private or group daily summaries. Combination members use the rule quota.<br/><br/>",
+				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 rules, all rule types, stage alerts, combination rules, alerts to 5 groups, and daily summaries to private chat and multiple groups. Combination members use the rule quota.<br/><br/>",
 				professionalMonthly.Price,
 				professional.Asset,
 				professionalMonthly.Days,
@@ -133,7 +133,7 @@ func (s *Service) plansText(language string) string {
 			standardAnnual.Days,
 		) +
 		fmt.Sprintf(
-			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条规则，支持全部规则类型、阶段提醒、组合规则、群通知，以及本人私聊或群每日摘要；组合成员会占用规则额度。<br/><br/>",
+			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条规则，支持全部规则类型、阶段提醒、组合规则、5 个群通知，以及本人私聊与多群每日摘要；组合成员会占用规则额度。<br/><br/>",
 			professionalMonthly.Price,
 			professional.Asset,
 			professionalMonthly.Days,

@@ -472,6 +472,8 @@ function resetConnectionState() {
   renderBalanceInfo("combination");
   $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
+  renderSummaryTargetOptions(new Set());
+  renderSummaryStatus();
   renderPlans();
   updateConnectionButton();
 }
@@ -635,27 +637,24 @@ function renderSubscription(syncSummary = true) {
 }
 
 function renderGroups() {
+  const selectedSummaryTargets = selectedSummaryTargetKeys();
   if (!state.deboxUserId) {
     $("groupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("combinationGroupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
-    $("summaryGroupSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("groupsList").innerHTML = "";
+    renderSummaryTargetOptions(new Set());
+    renderSummaryStatus();
     return;
   }
   const selectedRuleGroup = $("groupTargetSelect").value;
   const selectedCombinationGroup = $("combinationGroupTargetSelect").value;
-  const selectedSummaryGroup = $("summaryGroupSelect").value;
   const options = state.groups.length
     ? state.groups.map((group) => `<option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>`).join("")
     : `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
   $("groupTargetSelect").innerHTML = options;
   $("combinationGroupTargetSelect").innerHTML = options;
-  $("summaryGroupSelect").innerHTML = options;
   if (state.groups.some((group) => group.gid === selectedRuleGroup)) {
     $("groupTargetSelect").value = selectedRuleGroup;
-  }
-  if (state.groups.some((group) => group.gid === selectedSummaryGroup)) {
-    $("summaryGroupSelect").value = selectedSummaryGroup;
   }
   if (state.groups.some((group) => group.gid === selectedCombinationGroup)) {
     $("combinationGroupTargetSelect").value = selectedCombinationGroup;
@@ -683,7 +682,9 @@ function renderGroups() {
   });
   updateTargetVisibility();
   updateCombinationTargetVisibility();
+  renderSummaryTargetOptions(selectedSummaryTargets);
   updateSummaryTargetVisibility();
+  renderSummaryStatus();
 }
 
 function ruleLabel(code) {
@@ -1144,11 +1145,118 @@ function fillSummaryForm() {
   $("summaryEnabledInput").checked = Boolean(settings.enabled);
   $("summaryTimeInput").value = settings.time || "20:00";
   $("summaryTimezoneInput").value = normalizeSummaryTimezone(settings.timezone);
-  $("summaryTargetSelect").value = settings.chat_type || "private";
   $("summaryLanguageInput").value = settings.language === "en" ? "en" : "zh";
   $("summaryLabelInput").value = settings.label || "";
+  const selectedTargets = new Set(
+    summaryTargetsFromSettings(settings).map((target) =>
+      target.chat_type === "private" ? "private" : `group:${target.chat_id}`
+    )
+  );
+  renderSummaryTargetOptions(selectedTargets);
   renderSummaryCapability();
   updateSummaryTargetVisibility();
+}
+
+function summaryTargetsFromSettings(settings = {}) {
+  const targets = Array.isArray(settings.targets)
+    ? settings.targets.filter((target) => target?.chat_type && target?.chat_id)
+    : [];
+  if (targets.length) return targets;
+  if (settings.chat_type && settings.chat_id) {
+    return [{ chat_type: settings.chat_type, chat_id: settings.chat_id }];
+  }
+  return [];
+}
+
+function selectedSummaryTargetKeys() {
+  return new Set(
+    [...document.querySelectorAll("#summaryTargetOptions input:checked")].map((input) =>
+      input.dataset.chatType === "private" ? "private" : `group:${input.dataset.chatId}`
+    )
+  );
+}
+
+function selectedSummaryTargets() {
+  return [...document.querySelectorAll("#summaryTargetOptions input:checked")].map((input) => ({
+    chat_type: input.dataset.chatType,
+    chat_id: input.dataset.chatType === "private" ? state.deboxUserId : input.dataset.chatId,
+  }));
+}
+
+function renderSummaryTargetOptions(selectedKeys = selectedSummaryTargetKeys()) {
+  const plan = currentPlan();
+  const available = Boolean(state.deboxUserId && plan?.daily_summary);
+  const professional = plan?.code === "professional";
+  const selected = new Set(selectedKeys);
+  if (available && selected.size === 0) selected.add("private");
+
+  const options = [
+    `<label class="summary-target-option">
+      <input
+        type="checkbox"
+        data-chat-type="private"
+        data-chat-id="${escapeHtml(state.deboxUserId)}"
+        ${selected.has("private") ? "checked" : ""}
+        ${!available || !professional ? "disabled" : ""}
+      />
+      <span>${escapeHtml(t("privateSelf"))}</span>
+    </label>`,
+  ];
+
+  if (professional) {
+    if (state.groups.length) {
+      options.push(
+        ...state.groups.map((group) => {
+          const key = `group:${group.gid}`;
+          return `<label class="summary-target-option">
+            <input
+              type="checkbox"
+              data-chat-type="group"
+              data-chat-id="${escapeHtml(group.gid)}"
+              ${selected.has(key) ? "checked" : ""}
+              ${available ? "" : "disabled"}
+            />
+            <span>${escapeHtml(group.name || group.gid)}</span>
+          </label>`;
+        })
+      );
+    } else {
+      options.push(`<div class="notice muted">${escapeHtml(t("noBoundGroups"))}</div>`);
+    }
+  }
+
+  $("summaryTargetOptions").innerHTML = options.join("");
+}
+
+function renderSummaryStatus(settings = state.entitlement?.summary_settings || {}) {
+  const plan = currentPlan();
+  const available = Boolean(state.deboxUserId && plan?.daily_summary);
+  const targets = summaryTargetsFromSettings(settings);
+  const configured = targets.length > 0;
+  const enabled = available && Boolean(settings.enabled);
+  const groupNames = new Map(state.groups.map((group) => [group.gid, group.name || group.gid]));
+  const targetLabels = targets.map((target) =>
+    target.chat_type === "private"
+      ? t("privateSelf")
+      : groupNames.get(target.chat_id) || target.chat_id
+  );
+
+  $("summaryStatusState").textContent = available
+    ? (enabled ? t("summaryEnabledStatus") : t("summaryDisabledStatus"))
+    : "--";
+  $("summaryStatusTime").textContent = available && configured ? settings.time || "20:00" : "--";
+  $("summaryStatusTimezone").textContent = available && configured
+    ? normalizeSummaryTimezone(settings.timezone)
+    : "--";
+  $("summaryStatusLanguage").textContent = available && configured
+    ? (settings.language === "en" ? "English" : t("chinese"))
+    : "--";
+  $("summaryStatusLabel").textContent = available && configured && settings.label ? settings.label : "--";
+  $("summaryStatusTargets").textContent = available && targetLabels.length
+    ? targetLabels.join(state.uiLanguage === "en" ? ", " : "、")
+    : "--";
+  $("summaryEditBtn").disabled = !available;
+  $("summaryDisableBtn").disabled = !enabled;
 }
 
 function renderSummaryCapability() {
@@ -1158,6 +1266,7 @@ function renderSummaryCapability() {
     ? (available ? t("available") : t("planUnavailable"))
     : t("notConnected");
   $("summaryCapability").classList.toggle("muted", !available);
+  renderSummaryStatus();
 }
 
 function updateRuleFields() {
@@ -1398,7 +1507,12 @@ function updateTargetVisibility() {
 }
 
 function updateSummaryTargetVisibility() {
-  $("summaryGroupWrap").hidden = $("summaryTargetSelect").value !== "group";
+  const plan = currentPlan();
+  const available = Boolean(state.deboxUserId && plan?.daily_summary);
+  $("summaryForm").querySelectorAll("input, select, button").forEach((control) => {
+    if (control.closest("#summaryTargetOptions")) return;
+    control.disabled = !available;
+  });
 }
 
 async function loadBootData() {
@@ -1900,20 +2014,38 @@ async function saveSummary(event) {
     toast(t("connectFirst"));
     return;
   }
+  await persistSummarySettings($("summaryEnabledInput").checked);
+}
+
+async function persistSummarySettings(enabled) {
+  const targets = selectedSummaryTargets();
+  if (!targets.length) {
+    toast(t("summaryTargetRequired"));
+    return false;
+  }
   await api("/api/subscription/summary-settings", {
     method: "POST",
     body: JSON.stringify({
-      enabled: $("summaryEnabledInput").checked,
+      enabled,
       push_time: $("summaryTimeInput").value || "20:00",
       timezone: normalizeSummaryTimezone($("summaryTimezoneInput").value),
-      chat_type: $("summaryTargetSelect").value,
-      chat_id: $("summaryTargetSelect").value === "group" ? $("summaryGroupSelect").value : "",
+      targets,
       label: $("summaryLabelInput").value.trim(),
       language: $("summaryLanguageInput").value,
     }),
   });
   await refreshAccount();
   toast(t("summarySaved"));
+  return true;
+}
+
+function editSummary() {
+  $("summaryForm").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("summaryEnabledInput").focus({ preventScroll: true });
+}
+
+async function disableSummary() {
+  await persistSummarySettings(false);
 }
 
 async function addGroup(event) {
@@ -1999,9 +2131,10 @@ function bindEvents() {
   $("addCombinationMemberBtn").addEventListener("click", addCombinationMember);
   $("groupForm").addEventListener("submit", guardAsync(addGroup));
   $("summaryForm").addEventListener("submit", guardAsync(saveSummary));
+  $("summaryEditBtn").addEventListener("click", editSummary);
+  $("summaryDisableBtn").addEventListener("click", guardAsync(disableSummary));
   $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
   $("combinationTargetTypeSelect").addEventListener("change", updateCombinationTargetVisibility);
-  $("summaryTargetSelect").addEventListener("change", updateSummaryTargetVisibility);
   $("ruleTypeSelect").addEventListener("change", () => {
     resetSingleRuleDraft();
     updateRuleFields();

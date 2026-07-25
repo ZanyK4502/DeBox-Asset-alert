@@ -271,6 +271,13 @@ func (f *fakeRepository) ListNotificationGroups(
 	return append([]store.NotificationGroup(nil), f.groups...), nil
 }
 
+func (f *fakeRepository) ListDailySummaryTargets(
+	context.Context,
+	int64,
+) ([]store.DailySummaryTarget, error) {
+	return nil, nil
+}
+
 func (f *fakeRepository) CountUserWatchRules(context.Context, string) (int64, error) {
 	return f.ruleCount, nil
 }

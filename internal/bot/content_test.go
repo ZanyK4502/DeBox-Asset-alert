@@ -45,7 +45,7 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 		"个人监控面板保留 30 天",
 		"首次统计此前 24 小时",
 		"通知失败次数",
-		"私聊确认失败",
+		"没有剩余推送对象",
 	} {
 		if !strings.Contains(chinese, text) {
 			t.Fatalf("Chinese monitoring copy is missing %q", text)
@@ -59,7 +59,7 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 		"dashboard for 30 days",
 		"previous 24 hours",
 		"notification failures",
-		"private confirmation fails",
+		"no targets remain",
 	} {
 		if !strings.Contains(english, text) {
 			t.Fatalf("English monitoring copy is missing %q", text)

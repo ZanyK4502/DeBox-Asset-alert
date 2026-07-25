@@ -144,9 +144,9 @@ func TestSetFreeWatchRuleRejectsIneligibleRule(t *testing.T) {
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").
 		WithArgs("user-1").
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
-	mock.ExpectExec("UPDATE subscriptions").
+	mock.ExpectQuery("SELECT id").
 		WithArgs("user-1").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		WillReturnRows(pgxmock.NewRows([]string{"id"}))
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs("user-1").
 		WillReturnRows(pgxmock.NewRows([]string{"plan_code"}).AddRow("free"))

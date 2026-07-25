@@ -459,6 +459,141 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.summary-status {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.summary-status-head,
+.summary-status-actions {
+  display: flex;
+  align-items: center;
+}
+
+.summary-status-head {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.summary-status-head > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.summary-status-label,
+.summary-status-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.summary-status-head strong {
+  font-size: 18px;
+}
+
+.summary-status-actions {
+  gap: 8px;
+}
+
+button.compact {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+button.danger {
+  color: #ff8f8f;
+}
+
+.summary-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.summary-status-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.summary-status-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.summary-status-targets {
+  grid-column: 1 / -1;
+}
+
+.summary-target-fieldset {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.summary-target-fieldset legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 740;
+}
+
+.summary-target-fieldset .field-note {
+  margin: 0 0 10px;
+}
+
+.summary-target-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.summary-target-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.summary-target-option input {
+  width: 18px;
+  min-height: 18px;
+  margin: 0;
+  flex: 0 0 18px;
+}
+
+.summary-target-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.summary-target-option:has(input:checked) {
+  border-color: var(--accent);
+  background: rgba(31, 199, 122, 0.08);
+}
+
+.summary-target-option:has(input:disabled) {
+  cursor: default;
+  opacity: 0.72;
+}
+
 label {
   display: grid;
   gap: 7px;
@@ -1149,6 +1284,11 @@ select:focus {
   .aggregate-stats,
   .summary-grid,
   .group-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-status-grid,
+  .summary-target-options {
     grid-template-columns: 1fr;
   }
 

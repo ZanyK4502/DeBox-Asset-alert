@@ -16,24 +16,32 @@ var testNow = time.Date(2026, 7, 22, 12, 5, 0, 0, time.UTC)
 type fakeRepository struct {
 	subscriptions []store.Subscription
 	scheduled     map[int64]*store.Subscription
-	groups        map[string]store.NotificationGroup
+	targets       map[int64][]store.DailySummaryTarget
 	statistics    store.SummaryStatistics
 	events        []store.SummaryEvent
 	listAfterIDs  []int64
 	marks         []summaryMark
+	targetMarks   []targetMark
 	calls         []string
 	listErr       error
 	getErr        error
-	groupErr      error
+	targetErr     error
 	statisticsErr error
 	eventsErr     error
 	markErr       error
+	targetMarkErr error
 }
 
 type summaryMark struct {
 	subscriptionID int64
 	sentDate       string
 	periodEnd      time.Time
+}
+
+type targetMark struct {
+	subscriptionID int64
+	periodEnd      time.Time
+	target         store.DailySummaryTarget
 }
 
 func (f *fakeRepository) ListDueScheduledSubscriptions(
@@ -78,20 +86,66 @@ func (f *fakeRepository) GetScheduledSubscription(
 	return nil, nil
 }
 
-func (f *fakeRepository) GetNotificationGroup(
+func (f *fakeRepository) ListDailySummaryTargets(
 	_ context.Context,
-	deboxUserID string,
-	gid string,
-) (*store.NotificationGroup, error) {
-	f.calls = append(f.calls, "group")
-	if f.groupErr != nil {
-		return nil, f.groupErr
+	subscriptionID int64,
+) ([]store.DailySummaryTarget, error) {
+	f.calls = append(f.calls, "targets")
+	if f.targetErr != nil {
+		return nil, f.targetErr
 	}
-	group, ok := f.groups[deboxUserID+":"+gid]
-	if !ok {
-		return nil, nil
+	return f.summaryTargets(subscriptionID), nil
+}
+
+func (f *fakeRepository) ListPendingDailySummaryTargets(
+	_ context.Context,
+	subscriptionID int64,
+	_ time.Time,
+) ([]store.DailySummaryTarget, error) {
+	f.calls = append(f.calls, "pending-targets")
+	if f.targetErr != nil {
+		return nil, f.targetErr
 	}
-	return &group, nil
+	return f.summaryTargets(subscriptionID), nil
+}
+
+func (f *fakeRepository) MarkDailySummaryTargetSent(
+	_ context.Context,
+	subscriptionID int64,
+	periodEnd time.Time,
+	target store.DailySummaryTarget,
+) error {
+	f.calls = append(f.calls, "mark-target")
+	if f.targetMarkErr != nil {
+		return f.targetMarkErr
+	}
+	f.targetMarks = append(f.targetMarks, targetMark{
+		subscriptionID: subscriptionID,
+		periodEnd:      periodEnd,
+		target:         target,
+	})
+	return nil
+}
+
+func (f *fakeRepository) summaryTargets(subscriptionID int64) []store.DailySummaryTarget {
+	if f.targets != nil {
+		return append([]store.DailySummaryTarget(nil), f.targets[subscriptionID]...)
+	}
+	for _, subscription := range f.subscriptions {
+		if subscription.ID != subscriptionID {
+			continue
+		}
+		chatID := subscription.DailySummaryChatID
+		if subscription.DailySummaryChatType == "private" {
+			chatID = subscription.DeBoxUserID
+		}
+		return []store.DailySummaryTarget{{
+			SubscriptionID: subscriptionID,
+			ChatType:       subscription.DailySummaryChatType,
+			ChatID:         chatID,
+		}}
+	}
+	return nil
 }
 
 func (f *fakeRepository) DailySummaryStatistics(
@@ -441,8 +495,11 @@ func TestSendDuePagesAllSubscriptionsAndMarksAfterSend(t *testing.T) {
 		t.Fatalf("after IDs = %v, want %v", repository.listAfterIDs, wantAfterIDs)
 	}
 	for index, call := range repository.calls {
-		if call == "mark" && (index == 0 || repository.calls[index-1] != "send") {
-			t.Fatalf("mark must immediately follow a successful send: %v", repository.calls)
+		if call == "mark-target" && (index == 0 || repository.calls[index-1] != "send") {
+			t.Fatalf("target mark must immediately follow a successful send: %v", repository.calls)
+		}
+		if call == "mark" && (index == 0 || repository.calls[index-1] != "mark-target") {
+			t.Fatalf("summary mark must follow the target mark: %v", repository.calls)
 		}
 	}
 }
@@ -467,11 +524,12 @@ func TestPrivateSummaryUsesAuthenticatedUserID(t *testing.T) {
 	}
 }
 
-func TestGroupSummaryRequiresCurrentBinding(t *testing.T) {
+func TestSummaryWithoutTargetsDoesNotSend(t *testing.T) {
 	subscription := testSubscription(1)
-	subscription.DailySummaryChatType = "group"
-	subscription.DailySummaryChatID = "group-1"
-	repository := &fakeRepository{subscriptions: []store.Subscription{subscription}}
+	repository := &fakeRepository{
+		subscriptions: []store.Subscription{subscription},
+		targets:       map[int64][]store.DailySummaryTarget{},
+	}
 	notifier := &fakeNotifier{}
 	executor := newTestExecutor(repository, notifier, acquiredLock(nil))
 
@@ -480,26 +538,22 @@ func TestGroupSummaryRequiresCurrentBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendDue() error = %v", err)
 	}
-	if len(result.Errors) != 1 ||
-		!strings.Contains(result.Errors[0].Error, "已解绑或不可用") {
+	if len(result.Errors) != 1 {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(notifier.messages) != 0 || len(repository.marks) != 0 {
-		t.Fatal("invalid group target must not send or advance the cursor")
+		t.Fatal("summary without targets must not send or advance the cursor")
 	}
 }
 
-func TestGroupSummaryUsesBoundGroup(t *testing.T) {
+func TestSummarySendsToAllSelectedTargets(t *testing.T) {
 	subscription := testSubscription(1)
-	subscription.DailySummaryChatType = "group"
-	subscription.DailySummaryChatID = "group-1"
 	repository := &fakeRepository{
 		subscriptions: []store.Subscription{subscription},
-		groups: map[string]store.NotificationGroup{
-			"user-1:group-1": {
-				DeBoxUserID: "user-1",
-				GID:         "group-1",
-				Enabled:     1,
+		targets: map[int64][]store.DailySummaryTarget{
+			1: {
+				{SubscriptionID: 1, ChatType: "private", ChatID: "user-1"},
+				{SubscriptionID: 1, ChatType: "group", ChatID: "group-1"},
 			},
 		},
 	}
@@ -511,9 +565,12 @@ func TestGroupSummaryUsesBoundGroup(t *testing.T) {
 	if err != nil || len(result.Errors) != 0 || result.Sent != 1 {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
-	if notifier.messages[0].chatID != "group-1" ||
-		notifier.messages[0].chatType != "group" {
-		t.Fatalf("target = %#v", notifier.messages[0])
+	if len(notifier.messages) != 2 || len(repository.targetMarks) != 2 ||
+		notifier.messages[0].chatID != "user-1" ||
+		notifier.messages[0].chatType != "private" ||
+		notifier.messages[1].chatID != "group-1" ||
+		notifier.messages[1].chatType != "group" {
+		t.Fatalf("messages/marks = %#v / %#v", notifier.messages, repository.targetMarks)
 	}
 }
 

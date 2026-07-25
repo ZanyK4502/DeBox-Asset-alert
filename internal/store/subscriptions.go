@@ -9,15 +9,9 @@ import (
 )
 
 func (s *Store) ExpireActiveSubscriptions(ctx context.Context) (int64, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE subscriptions
-		SET status = 'expired'
-		WHERE status = 'active' AND expires_at < NOW()
-	`)
-	if err != nil {
-		return 0, fmt.Errorf("expire active subscriptions: %w", err)
-	}
-	return tag.RowsAffected(), nil
+	return withTxValue(ctx, s.db, func(tx DBTX) (int64, error) {
+		return expireSubscriptions(ctx, tx, "")
+	})
 }
 
 func (s *Store) GetActiveSubscription(ctx context.Context, deboxUserID string) (*Subscription, error) {
@@ -91,12 +85,8 @@ func activateSubscription(
 	if _, err := db.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", deboxUserID); err != nil {
 		return Subscription{}, fmt.Errorf("lock subscription: %w", err)
 	}
-	if _, err := db.Exec(ctx, `
-		UPDATE subscriptions
-		SET status = 'expired'
-		WHERE debox_user_id = $1 AND status = 'active' AND expires_at < NOW()
-	`, deboxUserID); err != nil {
-		return Subscription{}, fmt.Errorf("expire user subscriptions: %w", err)
+	if _, err := expireSubscriptions(ctx, db, deboxUserID); err != nil {
+		return Subscription{}, err
 	}
 
 	active, err := collectOptional[Subscription](ctx, db, `
@@ -155,6 +145,59 @@ func activateSubscription(
 		return Subscription{}, fmt.Errorf("insert subscription: %w", err)
 	}
 	return subscription, nil
+}
+
+func expireSubscriptions(ctx context.Context, db DBTX, deboxUserID string) (int64, error) {
+	rows, err := db.Query(ctx, `
+		SELECT id
+		FROM subscriptions
+		WHERE status = 'active'
+		  AND expires_at < NOW()
+		  AND ($1 = '' OR debox_user_id = $1)
+		ORDER BY id
+		FOR UPDATE
+	`, deboxUserID)
+	if err != nil {
+		return 0, fmt.Errorf("list expired subscriptions: %w", err)
+	}
+	subscriptionIDs, err := collectInt64Rows(rows)
+	if err != nil {
+		return 0, fmt.Errorf("read expired subscriptions: %w", err)
+	}
+	if len(subscriptionIDs) == 0 {
+		return 0, nil
+	}
+	if _, err := db.Exec(ctx, `
+		DELETE FROM daily_summary_deliveries
+		WHERE subscription_id = ANY($1::bigint[])
+	`, subscriptionIDs); err != nil {
+		return 0, fmt.Errorf("delete expired daily summary deliveries: %w", err)
+	}
+	if _, err := db.Exec(ctx, `
+		DELETE FROM daily_summary_targets
+		WHERE subscription_id = ANY($1::bigint[])
+	`, subscriptionIDs); err != nil {
+		return 0, fmt.Errorf("delete expired daily summary targets: %w", err)
+	}
+	tag, err := db.Exec(ctx, `
+		UPDATE subscriptions
+		SET status = 'expired',
+		    daily_summary_enabled = 0,
+		    daily_summary_time = '20:00',
+		    daily_summary_timezone = 'Asia/Shanghai',
+		    daily_summary_chat_type = 'private',
+		    daily_summary_chat_id = debox_user_id,
+		    daily_summary_label = '私聊摘要',
+		    daily_summary_language = 'zh',
+		    daily_summary_last_sent_date = '',
+		    scheduled_push_last_sent_at = NULL,
+		    daily_summary_last_period_end_at = NULL
+		WHERE id = ANY($1::bigint[])
+	`, subscriptionIDs)
+	if err != nil {
+		return 0, fmt.Errorf("expire subscriptions: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Store) GetComplimentaryGrant(

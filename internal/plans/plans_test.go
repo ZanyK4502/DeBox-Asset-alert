@@ -70,7 +70,7 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(professional): %v", err)
 	}
-	if professional.WalletLimit != 20 || professional.RuleLimit != 100 || professional.GroupLimit != 3 {
+	if professional.WalletLimit != 20 || professional.RuleLimit != 100 || professional.GroupLimit != 5 {
 		t.Fatalf("professional limits = %d/%d/%d", professional.WalletLimit, professional.RuleLimit, professional.GroupLimit)
 	}
 	if !professional.GroupNotification || !professional.AllowsRuleType(AddressInteraction) {

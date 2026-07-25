@@ -3,10 +3,9 @@ package management
 import (
 	"context"
 	"errors"
-	"reflect"
+	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
@@ -816,9 +815,11 @@ func TestSaveSummarySettingsUsesBoundGroup(t *testing.T) {
 	}
 	if repository.summaryUserID != "user-1" ||
 		repository.summarySettings.ChatID != "group-1" ||
-		repository.summarySettings.Label != "group-1" ||
+		repository.summarySettings.Label != "每日摘要" ||
 		repository.summarySettings.TimezoneName != "America/New_York" ||
-		entitlements.summaryChatType != "group" ||
+		len(repository.summarySettings.Targets) != 1 ||
+		repository.summarySettings.Targets[0].ChatType != "group" ||
+		repository.summarySettings.Targets[0].ChatID != "group-1" ||
 		result.Subscription.ID != 5 {
 		t.Fatalf("summary settings/result = %#v / %#v", repository.summarySettings, result)
 	}
@@ -826,6 +827,60 @@ func TestSaveSummarySettingsUsesBoundGroup(t *testing.T) {
 	if _, err := service.SaveSummarySettings(context.Background(), "user-1", input); err == nil ||
 		!strings.Contains(err.Error(), "时区") {
 		t.Fatalf("invalid timezone error = %v", err)
+	}
+}
+
+func TestSaveSummarySettingsEnforcesPlanTargets(t *testing.T) {
+	groups := make(map[string]store.NotificationGroup, 6)
+	targets := []SummaryTargetInput{{ChatType: "private"}}
+	for index := 1; index <= 6; index++ {
+		gid := fmt.Sprintf("group-%d", index)
+		groups["user-1/"+gid] = store.NotificationGroup{
+			ID:          int64(index),
+			DeBoxUserID: "user-1",
+			GID:         gid,
+		}
+		targets = append(targets, SummaryTargetInput{ChatType: "group", ChatID: gid})
+	}
+	repository := &fakeRepository{groups: groups}
+	input := DefaultSummarySettingsInput()
+	input.Targets = targets[:2]
+
+	standard := New(Dependencies{
+		Repository:   repository,
+		Entitlements: &fakeEntitlements{plan: planForTest(t, plans.Standard)},
+	})
+	if _, err := standard.SaveSummarySettings(
+		context.Background(),
+		"user-1",
+		input,
+	); err == nil || !strings.Contains(err.Error(), "不支持群每日摘要") {
+		t.Fatalf("standard group summary error = %v", err)
+	}
+
+	professional := New(Dependencies{
+		Repository:   repository,
+		Entitlements: &fakeEntitlements{plan: planForTest(t, plans.Professional)},
+	})
+	input.Targets = targets[:6]
+	if _, err := professional.SaveSummarySettings(
+		context.Background(),
+		"user-1",
+		input,
+	); err != nil {
+		t.Fatalf("professional private plus five groups: %v", err)
+	}
+	if len(repository.summarySettings.Targets) != 6 {
+		t.Fatalf("saved targets = %#v", repository.summarySettings.Targets)
+	}
+
+	input.Targets = targets
+	if _, err := professional.SaveSummarySettings(
+		context.Background(),
+		"user-1",
+		input,
+	); err == nil || !strings.Contains(err.Error(), "最多选择 5 个群") {
+		t.Fatalf("six group summary error = %v", err)
 	}
 }
 
@@ -865,19 +920,10 @@ func TestCreateNotificationGroupParsesLinkAndChecksMembership(t *testing.T) {
 	}
 }
 
-func TestDeleteNotificationGroupFallsBackOrDisablesSummary(t *testing.T) {
-	fallback := store.Subscription{
-		ID:                       11,
-		DeBoxUserID:              "user-1",
-		DailySummaryEnabled:      1,
-		DailySummaryLanguage:     "en",
-		DailySummaryChatType:     "private",
-		DailySummaryChatID:       "user-1",
-		DailySummaryLastSentDate: time.Now().Format("2006-01-02"),
-	}
-	t.Run("confirmation succeeds", func(t *testing.T) {
+func TestDeleteNotificationGroupUpdatesSummaryTargets(t *testing.T) {
+	t.Run("other targets remain", func(t *testing.T) {
 		repository := &fakeRepository{groupDeletion: store.GroupDeletion{
-			SummaryFallbacks: []store.Subscription{fallback},
+			SummaryTargetChanged: true,
 		}}
 		notifier := &fakeNotificationService{}
 		service := New(Dependencies{
@@ -889,29 +935,26 @@ func TestDeleteNotificationGroupFallsBackOrDisablesSummary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DeleteNotificationGroup() error = %v", err)
 		}
-		if !result.SummaryTargetChanged || !result.SummaryConfirmationSent ||
-			result.SummaryDisabled || notifier.chatID != "user-1" ||
-			notifier.chatType != "private" || !strings.Contains(notifier.text, "Daily summary") {
+		if !result.SummaryTargetChanged || result.SummaryDisabled ||
+			notifier.chatID != "" {
 			t.Fatalf("deletion/notifier = %#v / %#v", result, notifier)
 		}
 	})
-	t.Run("confirmation fails", func(t *testing.T) {
+	t.Run("last target removed", func(t *testing.T) {
 		repository := &fakeRepository{groupDeletion: store.GroupDeletion{
-			SummaryFallbacks: []store.Subscription{fallback},
+			SummaryTargetChanged: true,
+			SummaryDisabled:      true,
 		}}
 		service := New(Dependencies{
-			Repository:   repository,
-			Entitlements: &fakeEntitlements{},
-			Notifications: &fakeNotificationService{
-				err: errors.New("send failed"),
-			},
+			Repository:    repository,
+			Entitlements:  &fakeEntitlements{},
+			Notifications: &fakeNotificationService{},
 		})
 		result, err := service.DeleteNotificationGroup(context.Background(), "user-1", 3)
 		if err != nil {
 			t.Fatalf("DeleteNotificationGroup() error = %v", err)
 		}
-		if !result.SummaryDisabled || result.SummaryConfirmationSent ||
-			!reflect.DeepEqual(repository.disabledIDs, []int64{11}) {
+		if !result.SummaryDisabled || !result.SummaryTargetChanged {
 			t.Fatalf("deletion/disabled = %#v / %#v", result, repository.disabledIDs)
 		}
 	})

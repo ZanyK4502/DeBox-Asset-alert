@@ -85,8 +85,9 @@ func (s *Store) CountNotificationGroups(ctx context.Context, deboxUserID string)
 }
 
 type GroupDeletion struct {
-	Group            NotificationGroup `json:"group"`
-	SummaryFallbacks []Subscription    `json:"summary_fallbacks"`
+	Group                NotificationGroup `json:"group"`
+	SummaryTargetChanged bool              `json:"summary_target_changed"`
+	SummaryDisabled      bool              `json:"summary_disabled"`
 }
 
 func (s *Store) DeleteNotificationGroup(
@@ -109,14 +110,15 @@ func (s *Store) DeleteNotificationGroup(
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT id
-			FROM subscriptions
-			WHERE debox_user_id = $1
-			  AND status = 'active'
-			  AND expires_at > NOW()
-			  AND daily_summary_chat_type = 'group'
-			  AND daily_summary_chat_id = $2
-			ORDER BY id ASC
+			SELECT DISTINCT s.id
+			FROM subscriptions s
+			JOIN daily_summary_targets t ON t.subscription_id = s.id
+			WHERE s.debox_user_id = $1
+			  AND s.status = 'active'
+			  AND s.expires_at > NOW()
+			  AND t.chat_type = 'group'
+			  AND t.chat_id = $2
+			ORDER BY s.id ASC
 		`, deboxUserID, group.GID)
 		if err != nil {
 			return GroupDeletion{}, fmt.Errorf("list group summary subscriptions: %w", err)
@@ -168,22 +170,59 @@ func (s *Store) DeleteNotificationGroup(
 			return GroupDeletion{}, fmt.Errorf("fallback group combination rules to private: %w", err)
 		}
 
-		fallbacks := []Subscription{}
-		if len(subscriptionIDs) > 0 {
-			fallbacks, err = collectMany[Subscription](ctx, tx, `
-				UPDATE subscriptions
-				SET daily_summary_chat_type = 'private',
-				    daily_summary_chat_id = $1
-				WHERE id = ANY($2::bigint[])
-				RETURNING `+subscriptionColumns,
-				deboxUserID,
-				subscriptionIDs,
-			)
-			if err != nil {
-				return GroupDeletion{}, fmt.Errorf("fallback group summaries to private: %w", err)
-			}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM daily_summary_targets t
+			USING subscriptions s
+			WHERE t.subscription_id = s.id
+			  AND s.debox_user_id = $1
+			  AND t.chat_type = 'group'
+			  AND t.chat_id = $2
+		`, deboxUserID, group.GID); err != nil {
+			return GroupDeletion{}, fmt.Errorf("remove group from daily summary targets: %w", err)
 		}
-		return GroupDeletion{Group: group, SummaryFallbacks: fallbacks}, nil
+		var disabledCount int64
+		if len(subscriptionIDs) > 0 {
+			if _, err := tx.Exec(ctx, `
+				UPDATE subscriptions s
+				SET daily_summary_chat_type = COALESCE((
+					    SELECT t.chat_type
+					    FROM daily_summary_targets t
+					    WHERE t.subscription_id = s.id
+					    ORDER BY CASE WHEN t.chat_type = 'private' THEN 0 ELSE 1 END, t.id ASC
+					    LIMIT 1
+				    ), 'private'),
+				    daily_summary_chat_id = COALESCE((
+					    SELECT t.chat_id
+					    FROM daily_summary_targets t
+					    WHERE t.subscription_id = s.id
+					    ORDER BY CASE WHEN t.chat_type = 'private' THEN 0 ELSE 1 END, t.id ASC
+					    LIMIT 1
+				    ), s.debox_user_id)
+				WHERE s.id = ANY($1::bigint[])
+			`, subscriptionIDs); err != nil {
+				return GroupDeletion{}, fmt.Errorf("refresh daily summary compatibility target: %w", err)
+			}
+			tag, err := tx.Exec(ctx, `
+				UPDATE subscriptions s
+				SET daily_summary_enabled = 0
+				WHERE s.id = ANY($1::bigint[])
+				  AND s.daily_summary_enabled = 1
+				  AND NOT EXISTS (
+					  SELECT 1
+					  FROM daily_summary_targets t
+					  WHERE t.subscription_id = s.id
+				  )
+			`, subscriptionIDs)
+			if err != nil {
+				return GroupDeletion{}, fmt.Errorf("disable daily summaries without targets: %w", err)
+			}
+			disabledCount = tag.RowsAffected()
+		}
+		return GroupDeletion{
+			Group:                group,
+			SummaryTargetChanged: len(subscriptionIDs) > 0,
+			SummaryDisabled:      disabledCount > 0,
+		}, nil
 	})
 }
 

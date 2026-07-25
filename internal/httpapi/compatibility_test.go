@@ -115,7 +115,7 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				{Code: "quarterly", Price: "42", Days: 90},
 				{Code: "annual", Price: "150", Days: 365},
 			},
-			WalletLimit: 20, RuleLimit: 100, GroupLimit: 3,
+			WalletLimit: 20, RuleLimit: 100, GroupLimit: 5,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",
 				"balance_threshold", "balance_threshold_high",
@@ -123,7 +123,7 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 			},
 			AllowedRules: ruleTypes, PrivateNotification: true, GroupNotification: true,
 			DailySummary: true, SummaryTargets: []string{"private", "group"},
-			Description: "适合项目方和社群：20 个钱包、100 条规则，支持群通知、指定地址交互提醒和群每日摘要。",
+			Description: "适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
 		},
 	}
 	if !reflect.DeepEqual(planPayload.RuleTypes, ruleTypes) {

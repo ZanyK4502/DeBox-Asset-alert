@@ -286,9 +286,9 @@ func expectUserPlan(mock pgxmock.PgxPoolIface, deboxUserID string, planCode stri
 	mock.ExpectExec("SELECT pg_advisory_xact_lock").
 		WithArgs(deboxUserID).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
-	mock.ExpectExec("UPDATE subscriptions").
+	mock.ExpectQuery("SELECT id").
 		WithArgs(deboxUserID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+		WillReturnRows(pgxmock.NewRows([]string{"id"}))
 	mock.ExpectQuery("SELECT COALESCE").
 		WithArgs(deboxUserID).
 		WillReturnRows(pgxmock.NewRows([]string{"plan_code"}).AddRow(planCode))

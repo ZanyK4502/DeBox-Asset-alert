@@ -63,7 +63,7 @@ func TestAcceptanceCreateRuleUsesRealQuotaState(t *testing.T) {
 	}
 }
 
-func TestAcceptanceGroupUnbindFallsBackToPrivateSummary(t *testing.T) {
+func TestAcceptanceGroupUnbindRemovesOnlyThatSummaryTarget(t *testing.T) {
 	database := testdb.Open(t)
 	catalog := acceptanceCatalog(t)
 	entitlements := subscription.New(database, catalog, "")
@@ -105,10 +105,12 @@ func TestAcceptanceGroupUnbindFallsBackToPrivateSummary(t *testing.T) {
 			Enabled:  true,
 			PushTime: "20:00",
 			Timezone: "Asia/Shanghai",
-			ChatType: "group",
-			ChatID:   creation.Group.GID,
 			Label:    "Acceptance Summary",
 			Language: "en",
+			Targets: []SummaryTargetInput{
+				{ChatType: "private", ChatID: userID},
+				{ChatType: "group", ChatID: creation.Group.GID},
+			},
 		},
 	); err != nil {
 		t.Fatalf("SaveSummarySettings() error = %v", err)
@@ -122,23 +124,31 @@ func TestAcceptanceGroupUnbindFallsBackToPrivateSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteNotificationGroup() error = %v", err)
 	}
-	if !deletion.SummaryTargetChanged ||
-		!deletion.SummaryConfirmationSent ||
-		deletion.SummaryDisabled {
+	if !deletion.SummaryTargetChanged || deletion.SummaryDisabled {
 		t.Fatalf("unexpected group deletion: %#v", deletion)
 	}
-	if notifier.chatID != userID || notifier.chatType != "private" {
-		t.Fatalf("fallback notification target = %q/%q", notifier.chatID, notifier.chatType)
+	if notifier.chatID != "" || notifier.chatType != "" {
+		t.Fatalf("group unbind must not send a fallback message: %q/%q", notifier.chatID, notifier.chatType)
 	}
 
 	active, err := database.GetActiveSubscription(context.Background(), userID)
 	if err != nil || active == nil {
 		t.Fatalf("GetActiveSubscription() = %#v, %v", active, err)
 	}
-	if active.DailySummaryEnabled != 1 ||
-		active.DailySummaryChatType != "private" ||
-		active.DailySummaryChatID != userID {
-		t.Fatalf("summary did not fall back to private: %#v", active)
+	if active.DailySummaryEnabled != 1 {
+		t.Fatalf("summary was unexpectedly disabled: %#v", active)
+	}
+	if active.DailySummaryChatType != "private" || active.DailySummaryChatID != userID {
+		t.Fatalf(
+			"summary compatibility target = %q/%q",
+			active.DailySummaryChatType,
+			active.DailySummaryChatID,
+		)
+	}
+	targets, err := database.ListDailySummaryTargets(context.Background(), active.ID)
+	if err != nil || len(targets) != 1 ||
+		targets[0].ChatType != "private" || targets[0].ChatID != userID {
+		t.Fatalf("remaining summary targets = %#v, %v", targets, err)
 	}
 	group, err := database.GetNotificationGroup(
 		context.Background(),

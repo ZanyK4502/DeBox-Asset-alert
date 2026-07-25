@@ -32,12 +32,8 @@ func lockUser(ctx context.Context, db DBTX, deboxUserID string) error {
 }
 
 func effectivePlanCode(ctx context.Context, db DBTX, deboxUserID string) (string, error) {
-	if _, err := db.Exec(ctx, `
-		UPDATE subscriptions
-		SET status = 'expired'
-		WHERE debox_user_id = $1 AND status = 'active' AND expires_at < NOW()
-	`, deboxUserID); err != nil {
-		return "", fmt.Errorf("expire user subscriptions: %w", err)
+	if _, err := expireSubscriptions(ctx, db, deboxUserID); err != nil {
+		return "", err
 	}
 	var planCode string
 	if err := db.QueryRow(ctx, `
@@ -79,6 +75,9 @@ func (s *Store) ApplyPaidExpiryFallback(
 ) (bool, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (bool, error) {
 		if err := lockUser(ctx, tx, deboxUserID); err != nil {
+			return false, err
+		}
+		if _, err := expireSubscriptions(ctx, tx, deboxUserID); err != nil {
 			return false, err
 		}
 		planCode, err := effectivePlanCode(ctx, tx, deboxUserID)

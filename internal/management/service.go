@@ -390,13 +390,19 @@ func (s *Service) UpdateWatchRuleLanguage(
 }
 
 type SummarySettingsInput struct {
-	Enabled  bool   `json:"enabled"`
-	PushTime string `json:"push_time"`
-	Timezone string `json:"timezone"`
+	Enabled  bool                 `json:"enabled"`
+	PushTime string               `json:"push_time"`
+	Timezone string               `json:"timezone"`
+	ChatType string               `json:"chat_type"`
+	ChatID   string               `json:"chat_id"`
+	Label    string               `json:"label"`
+	Language string               `json:"language"`
+	Targets  []SummaryTargetInput `json:"targets"`
+}
+
+type SummaryTargetInput struct {
 	ChatType string `json:"chat_type"`
 	ChatID   string `json:"chat_id"`
-	Label    string `json:"label"`
-	Language string `json:"language"`
 }
 
 func DefaultSummarySettingsInput() SummarySettingsInput {
@@ -406,6 +412,7 @@ func DefaultSummarySettingsInput() SummarySettingsInput {
 		Timezone: "Asia/Shanghai",
 		ChatType: "private",
 		Language: "zh",
+		Targets:  []SummaryTargetInput{},
 	}
 }
 
@@ -419,12 +426,65 @@ func (s *Service) SaveSummarySettings(
 	deboxUserID string,
 	input SummarySettingsInput,
 ) (SummarySettingsResult, error) {
-	chatType := strings.ToLower(strings.TrimSpace(input.ChatType))
-	if chatType != "private" && chatType != "group" {
-		return SummarySettingsResult{}, errors.New("每日摘要推送对象只能是私聊或群聊。")
+	targets := input.Targets
+	if len(targets) == 0 && strings.TrimSpace(input.ChatType) != "" {
+		targets = []SummaryTargetInput{{
+			ChatType: input.ChatType,
+			ChatID:   input.ChatID,
+		}}
 	}
-	if _, err := s.deps.Entitlements.RequireSummaryTarget(ctx, deboxUserID, chatType); err != nil {
+	if len(targets) == 0 {
+		return SummarySettingsResult{}, errors.New("请至少选择一个每日摘要推送对象。")
+	}
+	plan, err := s.deps.Entitlements.ActivePlan(ctx, deboxUserID)
+	if err != nil {
 		return SummarySettingsResult{}, err
+	}
+	if !plan.DailySummary {
+		return SummarySettingsResult{}, errors.New("当前套餐不支持每日摘要。")
+	}
+	groups, err := s.deps.Repository.ListNotificationGroups(ctx, deboxUserID)
+	if err != nil {
+		return SummarySettingsResult{}, err
+	}
+	boundGroups := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		boundGroups[group.GID] = struct{}{}
+	}
+	normalizedTargets := make([]store.DailySummaryTarget, 0, len(targets))
+	seenTargets := make(map[string]struct{}, len(targets))
+	groupCount := 0
+	for _, target := range targets {
+		chatType := strings.ToLower(strings.TrimSpace(target.ChatType))
+		chatID := strings.TrimSpace(target.ChatID)
+		switch chatType {
+		case "private":
+			chatID = deboxUserID
+		case "group":
+			if !plan.GroupNotification {
+				return SummarySettingsResult{}, errors.New("当前套餐不支持群每日摘要。")
+			}
+			if _, ok := boundGroups[chatID]; !ok {
+				return SummarySettingsResult{}, errors.New("请先绑定所选群，再设置群每日摘要。")
+			}
+		default:
+			return SummarySettingsResult{}, errors.New("每日摘要推送对象只能是私聊或群聊。")
+		}
+		key := chatType + "\x00" + chatID
+		if _, exists := seenTargets[key]; exists {
+			continue
+		}
+		seenTargets[key] = struct{}{}
+		if chatType == "group" {
+			groupCount++
+		}
+		normalizedTargets = append(normalizedTargets, store.DailySummaryTarget{
+			ChatType: chatType,
+			ChatID:   chatID,
+		})
+	}
+	if groupCount > plan.GroupLimit {
+		return SummarySettingsResult{}, fmt.Errorf("当前套餐最多选择 %d 个群作为摘要推送对象。", plan.GroupLimit)
 	}
 	language, err := requireLanguage(input.Language)
 	if err != nil {
@@ -438,25 +498,11 @@ func (s *Service) SaveSummarySettings(
 	if err != nil {
 		return SummarySettingsResult{}, err
 	}
-	chatID := deboxUserID
-	if chatType == "group" {
-		chatID = strings.TrimSpace(input.ChatID)
-		group, err := s.deps.Repository.GetNotificationGroup(ctx, deboxUserID, chatID)
-		if err != nil {
-			return SummarySettingsResult{}, err
-		}
-		if group == nil {
-			return SummarySettingsResult{}, errors.New("请先绑定这个群，再设置群每日摘要。")
-		}
-	}
 	label := strings.TrimSpace(input.Label)
 	if label == "" {
-		if chatType == "private" {
-			label = "私聊摘要"
-		} else {
-			label = chatID
-		}
+		label = "每日摘要"
 	}
+	legacyTarget := normalizedTargets[0]
 	updated, err := s.deps.Repository.UpdateDailySummarySettings(
 		ctx,
 		deboxUserID,
@@ -464,10 +510,11 @@ func (s *Service) SaveSummarySettings(
 			Enabled:      input.Enabled,
 			PushTime:     pushTime,
 			TimezoneName: timezoneName,
-			ChatType:     chatType,
-			ChatID:       chatID,
+			ChatType:     legacyTarget.ChatType,
+			ChatID:       legacyTarget.ChatID,
 			Label:        label,
 			Language:     language,
+			Targets:      normalizedTargets,
 		},
 	)
 	if err != nil {
@@ -562,11 +609,10 @@ func (s *Service) CreateNotificationGroup(
 }
 
 type NotificationGroupDeletion struct {
-	OK                      bool                     `json:"ok"`
-	SummaryTargetChanged    bool                     `json:"summary_target_changed"`
-	SummaryConfirmationSent bool                     `json:"summary_confirmation_sent"`
-	SummaryDisabled         bool                     `json:"summary_disabled"`
-	Entitlement             subscription.Entitlement `json:"entitlement"`
+	OK                   bool                     `json:"ok"`
+	SummaryTargetChanged bool                     `json:"summary_target_changed"`
+	SummaryDisabled      bool                     `json:"summary_disabled"`
+	Entitlement          subscription.Entitlement `json:"entitlement"`
 }
 
 func (s *Service) DeleteNotificationGroup(
@@ -578,49 +624,15 @@ func (s *Service) DeleteNotificationGroup(
 	if err != nil {
 		return NotificationGroupDeletion{}, err
 	}
-	enabledFallbacks := make([]store.Subscription, 0, len(deletion.SummaryFallbacks))
-	for _, fallback := range deletion.SummaryFallbacks {
-		if fallback.DailySummaryEnabled == 1 {
-			enabledFallbacks = append(enabledFallbacks, fallback)
-		}
-	}
-
-	confirmationSent := false
-	summaryDisabled := false
-	if len(enabledFallbacks) > 0 {
-		language := normalizeLanguage(enabledFallbacks[0].DailySummaryLanguage)
-		text := "<b>每日摘要</b><br/>原群已解绑，每日摘要已自动切换为本人私聊。"
-		if language == "en" {
-			text = "<b>Daily summary</b><br/>The group was unbound. Your daily summary now goes to this private chat."
-		}
-		if s.deps.Notifications != nil {
-			_, err = s.deps.Notifications.SendNotification(deboxUserID, "private", text)
-		} else {
-			err = errors.New("notification service is unavailable")
-		}
-		if err == nil {
-			confirmationSent = true
-		} else {
-			ids := make([]int64, 0, len(enabledFallbacks))
-			for _, fallback := range enabledFallbacks {
-				ids = append(ids, fallback.ID)
-			}
-			if _, disableErr := s.deps.Repository.DisableDailySummaries(ctx, ids, deboxUserID); disableErr != nil {
-				return NotificationGroupDeletion{}, disableErr
-			}
-			summaryDisabled = true
-		}
-	}
 	entitlement, err := s.deps.Entitlements.Entitlement(ctx, deboxUserID)
 	if err != nil {
 		return NotificationGroupDeletion{}, err
 	}
 	return NotificationGroupDeletion{
-		OK:                      true,
-		SummaryTargetChanged:    len(deletion.SummaryFallbacks) > 0,
-		SummaryConfirmationSent: confirmationSent,
-		SummaryDisabled:         summaryDisabled,
-		Entitlement:             entitlement,
+		OK:                   true,
+		SummaryTargetChanged: deletion.SummaryTargetChanged,
+		SummaryDisabled:      deletion.SummaryDisabled,
+		Entitlement:          entitlement,
 	}, nil
 }
 

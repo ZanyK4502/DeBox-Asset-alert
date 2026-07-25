@@ -43,7 +43,9 @@ var (
 type Repository interface {
 	ListDueScheduledSubscriptions(context.Context, int64, int) ([]store.Subscription, error)
 	GetScheduledSubscription(context.Context, int64) (*store.Subscription, error)
-	GetNotificationGroup(context.Context, string, string) (*store.NotificationGroup, error)
+	ListDailySummaryTargets(context.Context, int64) ([]store.DailySummaryTarget, error)
+	ListPendingDailySummaryTargets(context.Context, int64, time.Time) ([]store.DailySummaryTarget, error)
+	MarkDailySummaryTargetSent(context.Context, int64, time.Time, store.DailySummaryTarget) error
 	DailySummaryStatistics(context.Context, string, time.Time, time.Time) (store.SummaryStatistics, error)
 	ListSummaryRecentEvents(context.Context, string, time.Time, time.Time, int) ([]store.SummaryEvent, error)
 	MarkScheduledPushSent(context.Context, int64, string, time.Time) error
@@ -167,17 +169,42 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 	if !due {
 		return "skipped", nil
 	}
-	chatID, chatType, err := e.summaryTarget(ctx, *subscription)
-	if err != nil {
-		return "error", err
-	}
 	periodStart, periodEnd := summaryPeriod(*subscription, periodEnd)
 	text, err := e.summaryText(ctx, *subscription, periodStart, periodEnd)
 	if err != nil {
 		return "error", err
 	}
-	if _, err := e.deps.Notifications.SendNotification(chatID, chatType, text); err != nil {
+	targets, err := e.deps.Repository.ListDailySummaryTargets(ctx, subscription.ID)
+	if err != nil {
 		return "error", err
+	}
+	if len(targets) == 0 {
+		return "error", errors.New("每日摘要没有可用的推送对象。")
+	}
+	pendingTargets, err := e.deps.Repository.ListPendingDailySummaryTargets(
+		ctx,
+		subscription.ID,
+		periodEnd,
+	)
+	if err != nil {
+		return "error", err
+	}
+	for _, target := range pendingTargets {
+		if _, err := e.deps.Notifications.SendNotification(
+			target.ChatID,
+			target.ChatType,
+			text,
+		); err != nil {
+			return "error", err
+		}
+		if err := e.deps.Repository.MarkDailySummaryTargetSent(
+			ctx,
+			subscription.ID,
+			periodEnd,
+			target,
+		); err != nil {
+			return "error", err
+		}
 	}
 	if err := e.deps.Repository.MarkScheduledPushSent(
 		ctx,
@@ -217,35 +244,6 @@ func summaryPeriod(subscription store.Subscription, periodEnd time.Time) (time.T
 		return periodEnd.Add(-24 * time.Hour), periodEnd
 	}
 	return periodStart.UTC(), periodEnd
-}
-
-func (e *Executor) summaryTarget(
-	ctx context.Context,
-	subscription store.Subscription,
-) (string, string, error) {
-	userID := strings.TrimSpace(subscription.DeBoxUserID)
-	if userID == "" {
-		return "", "", errors.New("摘要订阅缺少 DeBox 用户 ID。")
-	}
-	chatType := strings.ToLower(strings.TrimSpace(subscription.DailySummaryChatType))
-	if chatType == "" || chatType == "private" {
-		return userID, "private", nil
-	}
-	if chatType != "group" {
-		return "", "", errors.New("摘要通知目标类型无效。")
-	}
-	chatID := strings.TrimSpace(subscription.DailySummaryChatID)
-	if chatID == "" {
-		return "", "", errors.New("摘要目标群已解绑或不可用。")
-	}
-	group, err := e.deps.Repository.GetNotificationGroup(ctx, userID, chatID)
-	if err != nil {
-		return "", "", err
-	}
-	if group == nil {
-		return "", "", errors.New("摘要目标群已解绑或不可用。")
-	}
-	return chatID, "group", nil
 }
 
 func (e *Executor) summaryText(
