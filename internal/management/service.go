@@ -741,8 +741,11 @@ func validateWatchRuleInput(input WatchRuleInput) (string, error) {
 	if number.Sign() < 0 {
 		return "", errors.New("金额阈值不能小于 0。")
 	}
-	if input.RuleType == plans.HighBalanceThreshold && number.Sign() == 0 {
-		return "", errors.New("高余额阈值必须大于 0。")
+	switch input.RuleType {
+	case plans.Incoming, plans.Outgoing, plans.BalanceThreshold, plans.HighBalanceThreshold:
+		if number.Sign() == 0 {
+			return "", errors.New("该规则的阈值必须大于 0。")
+		}
 	}
 	return input.Threshold, nil
 }

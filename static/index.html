@@ -251,7 +251,13 @@
                   <input id="combinationMemberTriggerInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
                 </label>
               </div>
+              <div id="combinationBalanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
               <div class="form-actions">
+                <div class="help-control">
+                  <button id="combinationQueryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
+                  <button id="combinationBalanceHelpBtn" class="icon-help" type="button" aria-expanded="false" aria-describedby="combinationBalanceHelpText" data-i18n-aria-label="balanceHelpLabel">?</button>
+                  <span id="combinationBalanceHelpText" class="help-popover" role="tooltip" data-i18n="balanceHelp">查询当前“监控地址 + 链 + 代币”的实时余额，便于设置阈值。</span>
+                </div>
                 <button id="addCombinationMemberBtn" class="secondary" type="button" data-i18n="addMember">加入组合</button>
               </div>
               <div id="combinationDraftList" class="member-draft-list"></div>

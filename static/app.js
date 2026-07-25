@@ -25,6 +25,7 @@ const state = {
   tokenInfo: null,
   tokenError: "",
   balanceInfo: null,
+  combinationBalanceInfo: null,
   combinationRules: [],
   combinationMembers: [],
   aggregateEvents: [],
@@ -162,6 +163,7 @@ function renderLocalizedState() {
   renderPaymentStatus();
   renderTokenInfo();
   renderBalanceInfo();
+  renderBalanceInfo("combination");
 }
 
 function toggleUiLanguage() {
@@ -446,6 +448,7 @@ function resetConnectionState() {
   state.tokenInfo = null;
   state.tokenError = "";
   state.balanceInfo = null;
+  state.combinationBalanceInfo = null;
   state.combinationRules = [];
   state.combinationMembers = [];
   state.aggregateEvents = [];
@@ -466,6 +469,7 @@ function resetConnectionState() {
   $("groupsList").innerHTML = "";
   renderTokenInfo();
   renderBalanceInfo();
+  renderBalanceInfo("combination");
   $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
   renderPlans();
@@ -1228,6 +1232,17 @@ function validateRuleDraft(rule, requiredCount = null) {
   }
 }
 
+function thresholdValue(ruleType, input) {
+  if (isThresholdlessRule(ruleType)) return "0";
+  const value = input.value.trim();
+  if (requiresPositiveThreshold(ruleType) && !(Number(value) > 0)) {
+    input.value = "";
+    input.focus();
+    throw new Error(t("enterPositiveThreshold"));
+  }
+  return value || "0";
+}
+
 function combinationMemberDraft() {
   const ruleType = $("combinationRuleTypeSelect").value;
   return {
@@ -1240,7 +1255,7 @@ function combinationMemberDraft() {
       target_address: $("combinationTargetAddressInput").value.trim() || null,
       target_label: $("combinationTargetLabelInput").value.trim(),
       rule_type: ruleType,
-      threshold: isThresholdlessRule(ruleType) ? "0" : $("combinationThresholdInput").value || "0",
+      threshold: thresholdValue(ruleType, $("combinationThresholdInput")),
       notification_language: $("combinationLanguageSelect").value,
       delivery_mode: "realtime",
       cycle_type: "fixed",
@@ -1256,6 +1271,8 @@ function resetCombinationMemberEditor() {
   $("combinationTargetLabelInput").value = "";
   $("combinationThresholdInput").value = "0";
   $("combinationMemberTriggerInput").value = "1";
+  state.combinationBalanceInfo = null;
+  renderBalanceInfo("combination");
   updateCombinationMemberFields();
 }
 
@@ -1339,16 +1356,18 @@ function renderTokenInfo() {
   }
 }
 
-function renderBalanceInfo() {
-  const box = $("balanceBox");
-  if (!state.balanceInfo) {
+function renderBalanceInfo(mode = "single") {
+  const combination = mode === "combination";
+  const box = $(combination ? "combinationBalanceBox" : "balanceBox");
+  const balanceInfo = combination ? state.combinationBalanceInfo : state.balanceInfo;
+  if (!balanceInfo) {
     box.textContent = t("noBalance");
     return;
   }
   box.innerHTML = t("currentBalance", {
-    value: escapeHtml(state.balanceInfo.value),
-    symbol: escapeHtml(state.balanceInfo.symbol),
-    chain: escapeHtml(state.balanceInfo.chain_name),
+    value: escapeHtml(balanceInfo.value),
+    symbol: escapeHtml(balanceInfo.symbol),
+    chain: escapeHtml(balanceInfo.chain_name),
   });
 }
 
@@ -1635,20 +1654,26 @@ async function lookupToken() {
   renderTokenInfo();
 }
 
-async function queryBalance() {
-  const address = $("walletAddressInput").value.trim();
+async function queryBalance(mode = "single") {
+  const combination = mode === "combination";
+  const address = $(combination ? "combinationAddressInput" : "walletAddressInput").value.trim();
   if (!address) {
     toast(t("enterMonitoredAddress"));
     return;
   }
   const query = new URLSearchParams({
     address,
-    chain_key: $("chainSelect").value,
+    chain_key: $(combination ? "combinationChainSelect" : "chainSelect").value,
   });
-  const token = $("tokenAddressInput").value.trim();
+  const token = $(combination ? "combinationTokenAddressInput" : "tokenAddressInput").value.trim();
   if (token) query.set("token_address", token);
-  state.balanceInfo = await api(`/api/chain/balance?${query.toString()}`);
-  renderBalanceInfo();
+  const balanceInfo = await api(`/api/chain/balance?${query.toString()}`);
+  if (combination) {
+    state.combinationBalanceInfo = balanceInfo;
+  } else {
+    state.balanceInfo = balanceInfo;
+  }
+  renderBalanceInfo(mode);
 }
 
 async function createRule(event) {
@@ -1663,24 +1688,25 @@ async function createRule(event) {
   const deliveryMode = $("deliveryModeSelect").value;
   const cycleMinutes = Number($("cycleMinutesInput").value);
   const triggerCount = Number($("triggerCountInput").value);
-  const payload = {
-    chain_key: $("chainSelect").value,
-    wallet_address: $("walletAddressInput").value.trim(),
-    token_address: $("tokenAddressInput").value.trim() || null,
-    target_address: $("targetAddressInput").value.trim() || null,
-    target_label: $("targetLabelInput").value.trim(),
-    rule_type: ruleType,
-    threshold: isThresholdlessRule(ruleType) ? "0" : $("thresholdInput").value || "0",
-    notification_chat_type: targetType,
-    notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
-    notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
-    notification_language: $("ruleLanguageSelect").value,
-    delivery_mode: deliveryMode,
-    cycle_type: $("cycleTypeSelect").value,
-    cycle_minutes: deliveryMode === "stage" ? cycleMinutes : 60,
-    trigger_count_threshold: deliveryMode === "stage" ? triggerCount : 1,
-  };
+  let payload;
   try {
+    payload = {
+      chain_key: $("chainSelect").value,
+      wallet_address: $("walletAddressInput").value.trim(),
+      token_address: $("tokenAddressInput").value.trim() || null,
+      target_address: $("targetAddressInput").value.trim() || null,
+      target_label: $("targetLabelInput").value.trim(),
+      rule_type: ruleType,
+      threshold: thresholdValue(ruleType, $("thresholdInput")),
+      notification_chat_type: targetType,
+      notification_chat_id: targetType === "group" ? $("groupTargetSelect").value : "",
+      notification_label: targetType === "group" && selectedGroup ? selectedGroup.textContent : "",
+      notification_language: $("ruleLanguageSelect").value,
+      delivery_mode: deliveryMode,
+      cycle_type: $("cycleTypeSelect").value,
+      cycle_minutes: deliveryMode === "stage" ? cycleMinutes : 60,
+      trigger_count_threshold: deliveryMode === "stage" ? triggerCount : 1,
+    };
     validateRuleDraft(payload);
     if (deliveryMode === "stage") {
       if (!Number.isInteger(cycleMinutes) || cycleMinutes <= 0) throw new Error(t("enterPositiveCycle"));
@@ -1942,7 +1968,8 @@ function bindEvents() {
     event.preventDefault();
     setAggregateScrollPaused(!state.aggregateScrollPaused);
   });
-  $("queryBalanceBtn").addEventListener("click", guardAsync(queryBalance));
+  $("queryBalanceBtn").addEventListener("click", guardAsync(() => queryBalance()));
+  $("combinationQueryBalanceBtn").addEventListener("click", guardAsync(() => queryBalance("combination")));
   $("ruleForm").addEventListener("submit", guardAsync(createRule));
   $("combinationRuleForm").addEventListener("submit", guardAsync(createCombinationRule));
   $("singleRuleModeBtn").addEventListener("click", () => setRuleCreationMode("single"));
@@ -1972,28 +1999,34 @@ function bindEvents() {
   $("combinationChainPickerButton").addEventListener("keydown", (event) => {
     handleChainPickerKeydown(event, "combination");
   });
-  $("balanceHelpBtn").addEventListener("click", (event) => {
-    event.stopPropagation();
-    const control = event.currentTarget.closest(".help-control");
-    const open = !control.classList.contains("open");
-    control.classList.toggle("open", open);
-    event.currentTarget.setAttribute("aria-expanded", String(open));
+  ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+    $(id).addEventListener("click", (event) => {
+      event.stopPropagation();
+      const control = event.currentTarget.closest(".help-control");
+      const open = !control.classList.contains("open");
+      control.classList.toggle("open", open);
+      event.currentTarget.setAttribute("aria-expanded", String(open));
+    });
   });
   document.addEventListener("click", (event) => {
     if (!$("chainPicker").contains(event.target)) closeChainPicker();
     if (!$("combinationChainPicker").contains(event.target)) closeChainPicker("combination");
     if (!event.target.closest(".help-control")) {
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
-      $("balanceHelpBtn").setAttribute("aria-expanded", "false");
-      $("balanceHelpBtn").blur();
+      ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+        $(id).setAttribute("aria-expanded", "false");
+        $(id).blur();
+      });
     }
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       closeAllChainPickers();
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
-      $("balanceHelpBtn").setAttribute("aria-expanded", "false");
-      $("balanceHelpBtn").blur();
+      ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+        $(id).setAttribute("aria-expanded", "false");
+        $(id).blur();
+      });
     }
   });
   $("tapShield").addEventListener("pointerdown", (event) => {

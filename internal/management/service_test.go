@@ -531,7 +531,19 @@ func TestWatchRuleValidationRejectsInvalidInputs(t *testing.T) {
 		{name: "rule type", edit: func(v *WatchRuleInput) { v.RuleType = "unknown" }, match: "不支持"},
 		{name: "number", edit: func(v *WatchRuleInput) { v.Threshold = "NaN" }, match: "有效数字"},
 		{name: "negative", edit: func(v *WatchRuleInput) { v.Threshold = "-1" }, match: "不能小于"},
-		{name: "zero high threshold", edit: func(v *WatchRuleInput) {
+		{name: "zero incoming threshold", edit: func(v *WatchRuleInput) {
+			v.RuleType = plans.Incoming
+			v.Threshold = "0"
+		}, match: "必须大于 0"},
+		{name: "zero outgoing threshold", edit: func(v *WatchRuleInput) {
+			v.RuleType = plans.Outgoing
+			v.Threshold = "0"
+		}, match: "必须大于 0"},
+		{name: "zero low balance threshold", edit: func(v *WatchRuleInput) {
+			v.RuleType = plans.BalanceThreshold
+			v.Threshold = "0"
+		}, match: "必须大于 0"},
+		{name: "zero high balance threshold", edit: func(v *WatchRuleInput) {
 			v.RuleType = plans.HighBalanceThreshold
 			v.Threshold = "0"
 		}, match: "必须大于 0"},
@@ -560,9 +572,9 @@ func TestWatchRuleValidationThresholdSemantics(t *testing.T) {
 		want      string
 	}{
 		{name: "balance change allows zero", ruleType: plans.BalanceChange, threshold: "0", want: "0"},
-		{name: "incoming allows zero", ruleType: plans.Incoming, threshold: "0", want: "0"},
-		{name: "outgoing allows zero", ruleType: plans.Outgoing, threshold: "0", want: "0"},
-		{name: "low balance allows zero", ruleType: plans.BalanceThreshold, threshold: "0", want: "0"},
+		{name: "incoming is positive", ruleType: plans.Incoming, threshold: "1", want: "1"},
+		{name: "outgoing is positive", ruleType: plans.Outgoing, threshold: "1", want: "1"},
+		{name: "low balance is positive", ruleType: plans.BalanceThreshold, threshold: "1", want: "1"},
 		{name: "high balance is positive", ruleType: plans.HighBalanceThreshold, threshold: "1", want: "1"},
 		{
 			name:      "approval ignores threshold",
@@ -719,6 +731,7 @@ func TestCreateCombinationRulePreparesMembersAndUsesProfessionalPlan(t *testing.
 		rule := DefaultWatchRuleInput()
 		rule.WalletAddress = "0x1111111111111111111111111111111111111111"
 		rule.RuleType = ruleType
+		rule.Threshold = "1"
 		return CombinationMemberInput{Rule: rule, RequiredTriggerCount: count}
 	}
 	result, err := service.CreateCombinationRule(
