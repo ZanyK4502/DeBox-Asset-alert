@@ -1184,6 +1184,19 @@ function updateDeliveryModeFields() {
   $("deliveryModeHint").textContent = t(stage ? "stageModeHint" : "realtimeModeHint");
 }
 
+function resetSingleRuleDraft() {
+  $("walletAddressInput").value = "";
+  $("tokenAddressInput").value = "";
+  $("targetAddressInput").value = "";
+  $("targetLabelInput").value = "";
+  $("thresholdInput").value = "";
+  state.tokenInfo = null;
+  state.tokenError = "";
+  state.balanceInfo = null;
+  renderTokenInfo();
+  renderBalanceInfo();
+}
+
 function updateCombinationMemberFields() {
   const type = $("combinationRuleTypeSelect").value;
   const needsTarget = type === "approval_change" || type === "address_interaction";
@@ -1274,10 +1287,11 @@ function combinationMemberDraft() {
 }
 
 function resetCombinationMemberEditor() {
+  $("combinationAddressInput").value = "";
   $("combinationTokenAddressInput").value = "";
   $("combinationTargetAddressInput").value = "";
   $("combinationTargetLabelInput").value = "";
-  $("combinationThresholdInput").value = "0";
+  $("combinationThresholdInput").value = "";
   $("combinationMemberTriggerInput").value = "1";
   state.combinationBalanceInfo = null;
   renderBalanceInfo("combination");
@@ -1408,7 +1422,6 @@ async function connectWallet() {
   if (!state.walletAddress) {
     throw new Error(t("walletAccountMissing"));
   }
-  $("walletAddressInput").value = state.walletAddress;
 
   const challenge = await api("/api/auth/challenge", {
     method: "POST",
@@ -1427,7 +1440,6 @@ async function connectWallet() {
   state.walletAddress = authenticated.wallet_address;
   state.profile = authenticated.profile || { user_id: authenticated.debox_user_id };
   state.deboxUserId = authenticated.debox_user_id;
-  $("walletAddressInput").value = state.walletAddress;
   renderProfile();
   updateConnectionButton();
   await refreshAccount();
@@ -1440,7 +1452,6 @@ async function restoreSession() {
     state.walletAddress = authenticated.wallet_address;
     state.deboxUserId = authenticated.debox_user_id;
     state.profile = authenticated.profile || { user_id: authenticated.debox_user_id };
-    $("walletAddressInput").value = state.walletAddress;
     renderProfile();
     updateConnectionButton();
     await refreshAccount();
@@ -1640,6 +1651,7 @@ async function waitForPaymentConfirmation(orderId, txHash) {
 
 async function lookupToken() {
   const token = $("tokenAddressInput").value.trim();
+  const chainKey = $("chainSelect").value;
   if (!token) {
     state.tokenInfo = null;
     state.tokenError = "";
@@ -1647,7 +1659,8 @@ async function lookupToken() {
     return;
   }
   try {
-    const data = await api(`/api/debox/token?contract_address=${encodeURIComponent(token)}&chain_key=${encodeURIComponent($("chainSelect").value)}`);
+    const data = await api(`/api/debox/token?contract_address=${encodeURIComponent(token)}&chain_key=${encodeURIComponent(chainKey)}`);
+    if ($("tokenAddressInput").value.trim() !== token || $("chainSelect").value !== chainKey) return;
     const source = profileData(data);
     state.tokenInfo = {
       name: source.name || "-",
@@ -1656,6 +1669,7 @@ async function lookupToken() {
     };
     state.tokenError = "";
   } catch (error) {
+    if ($("tokenAddressInput").value.trim() !== token || $("chainSelect").value !== chainKey) return;
     state.tokenInfo = null;
     state.tokenError = error.message;
   }
@@ -1988,8 +2002,11 @@ function bindEvents() {
   $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
   $("combinationTargetTypeSelect").addEventListener("change", updateCombinationTargetVisibility);
   $("summaryTargetSelect").addEventListener("change", updateSummaryTargetVisibility);
-  $("ruleTypeSelect").addEventListener("change", updateRuleFields);
-  $("combinationRuleTypeSelect").addEventListener("change", updateCombinationMemberFields);
+  $("ruleTypeSelect").addEventListener("change", () => {
+    resetSingleRuleDraft();
+    updateRuleFields();
+  });
+  $("combinationRuleTypeSelect").addEventListener("change", resetCombinationMemberEditor);
   $("deliveryModeSelect").addEventListener("change", updateDeliveryModeFields);
   $("thresholdInput").addEventListener("blur", () => validateThresholdOnBlur("ruleTypeSelect", "thresholdInput"));
   $("combinationThresholdInput").addEventListener("blur", () => {
