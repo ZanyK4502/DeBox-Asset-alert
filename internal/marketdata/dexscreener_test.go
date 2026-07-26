@@ -155,6 +155,83 @@ func TestDexScreenerCoalescesConcurrentRequests(t *testing.T) {
 	}
 }
 
+func TestDexScreenerRetriesRateLimitsAndRedactsProviderBody(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.Header().Set("Retry-After", "0")
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(writer, "cloudflare diagnostic details")
+			return
+		}
+		_, _ = io.WriteString(writer, pairArrayJSON(marketPairA, marketTokenA, marketTokenB))
+	}))
+	defer server.Close()
+
+	client := newTestDexScreenerClient(t, server)
+	client.maxRetries = 1
+	client.retryDelay = time.Millisecond
+	client.maxBackoff = time.Millisecond
+	pairs, err := client.DiscoverPools(context.Background(), "bsc", marketTokenA)
+	if err != nil {
+		t.Fatalf("DiscoverPools() error = %v", err)
+	}
+	if requests.Load() != 2 || len(pairs) != 1 {
+		t.Fatalf("requests/pairs = %d/%d, want 2/1", requests.Load(), len(pairs))
+	}
+
+	apiError := &DexScreenerHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       "must not reach a user-facing error",
+	}
+	if strings.Contains(apiError.Error(), apiError.Body) {
+		t.Fatalf("provider response body leaked through error: %q", apiError.Error())
+	}
+}
+
+func TestDexScreenerUsesStaleCacheDuringTemporaryFailure(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = io.WriteString(writer, pairArrayJSON(marketPairA, marketTokenA, marketTokenB))
+			return
+		}
+		writer.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := newTestDexScreenerClient(t, server)
+	client.discoveryCacheTTL = time.Millisecond
+	client.discoveryStaleTTL = time.Minute
+	first, err := client.DiscoverPools(context.Background(), "bsc", marketTokenA)
+	if err != nil {
+		t.Fatalf("first DiscoverPools() error = %v", err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	second, err := client.DiscoverPools(context.Background(), "bsc", marketTokenA)
+	if err != nil {
+		t.Fatalf("stale DiscoverPools() error = %v", err)
+	}
+	if requests.Load() != 2 || len(first) != 1 || len(second) != 1 ||
+		second[0].PairAddress != first[0].PairAddress {
+		t.Fatalf(
+			"requests/first/second = %d/%d/%d",
+			requests.Load(),
+			len(first),
+			len(second),
+		)
+	}
+	third, err := client.DiscoverPools(context.Background(), "bsc", marketTokenA)
+	if err != nil || len(third) != 1 || requests.Load() != 2 {
+		t.Fatalf(
+			"cooldown cache requests/pairs/error = %d/%d/%v",
+			requests.Load(),
+			len(third),
+			err,
+		)
+	}
+}
+
 func TestDexScreenerValidatesInputsAndHTTPFailures(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Retry-After", "3")
@@ -247,6 +324,7 @@ func newTestDexScreenerClient(t *testing.T, server *httptest.Server) *DexScreene
 	if err != nil {
 		t.Fatalf("NewDexScreenerClient() error = %v", err)
 	}
+	client.maxRetries = 0
 	return client
 }
 

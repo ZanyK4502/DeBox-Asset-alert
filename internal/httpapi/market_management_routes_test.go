@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 )
 
 func TestMarketManagementRoutesRequireAuthenticatedSession(t *testing.T) {
@@ -58,5 +59,22 @@ func TestMarketManagementRoutesRequireAuthenticatedSession(t *testing.T) {
 				t.Fatalf("unexpected unauthorized response: %s", recorder.Body)
 			}
 		})
+	}
+}
+
+func TestWriteMarketErrorMapsTemporaryProviderFailure(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeMarketError(recorder, marketview.ErrMarketDataUnavailable)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf(
+			"status = %d, want %d",
+			recorder.Code,
+			http.StatusServiceUnavailable,
+		)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "行情数据服务暂时繁忙") ||
+		strings.Contains(strings.ToLower(body), "dexscreener") {
+		t.Fatalf("unexpected response body: %s", body)
 	}
 }

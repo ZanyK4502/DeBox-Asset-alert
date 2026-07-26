@@ -3,11 +3,14 @@ package marketdata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +21,14 @@ import (
 const (
 	defaultDexScreenerBaseURL      = "https://api.dexscreener.com"
 	defaultDexScreenerTimeout      = 15 * time.Second
-	defaultDexScreenerRateInterval = 200 * time.Millisecond
+	defaultDexScreenerRateInterval = 350 * time.Millisecond
 	defaultDiscoveryCacheTTL       = 2 * time.Minute
 	defaultQuoteCacheTTL           = 15 * time.Second
+	defaultDiscoveryStaleTTL       = time.Hour
+	defaultQuoteStaleTTL           = 2 * time.Minute
+	defaultDexScreenerMaxRetries   = 2
+	defaultDexScreenerRetryDelay   = 2 * time.Second
+	defaultDexScreenerMaxBackoff   = 30 * time.Second
 	maxDexScreenerBatchSize        = 30
 	maxDexScreenerCacheEntries     = 2048
 	maxDexScreenerErrorBody        = 500
@@ -69,15 +77,23 @@ type DexScreenerClient struct {
 	limiter           Limiter
 	discoveryCacheTTL time.Duration
 	quoteCacheTTL     time.Duration
+	discoveryStaleTTL time.Duration
+	quoteStaleTTL     time.Duration
+	maxRetries        int
+	retryDelay        time.Duration
+	maxBackoff        time.Duration
 
-	mu       sync.Mutex
-	cache    map[string]cachedPairs
-	inflight map[string]*pairCall
+	mu                sync.Mutex
+	cache             map[string]cachedPairs
+	inflight          map[string]*pairCall
+	cooldownUntil     time.Time
+	rateLimitFailures int
 }
 
 type cachedPairs struct {
-	pairs     []Pair
-	expiresAt time.Time
+	pairs      []Pair
+	expiresAt  time.Time
+	staleUntil time.Time
 }
 
 type pairCall struct {
@@ -93,10 +109,7 @@ type DexScreenerHTTPError struct {
 }
 
 func (e *DexScreenerHTTPError) Error() string {
-	if e.Body == "" {
-		return fmt.Sprintf("DexScreener API error %d", e.StatusCode)
-	}
-	return fmt.Sprintf("DexScreener API error %d: %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("DexScreener API error %d", e.StatusCode)
 }
 
 func NewDexScreenerClient(baseURL string, options ...DexScreenerOption) (*DexScreenerClient, error) {
@@ -113,6 +126,11 @@ func NewDexScreenerClient(baseURL string, options ...DexScreenerOption) (*DexScr
 		limiter:           newIntervalLimiter(defaultDexScreenerRateInterval),
 		discoveryCacheTTL: defaultDiscoveryCacheTTL,
 		quoteCacheTTL:     defaultQuoteCacheTTL,
+		discoveryStaleTTL: defaultDiscoveryStaleTTL,
+		quoteStaleTTL:     defaultQuoteStaleTTL,
+		maxRetries:        defaultDexScreenerMaxRetries,
+		retryDelay:        defaultDexScreenerRetryDelay,
+		maxBackoff:        defaultDexScreenerMaxBackoff,
 		cache:             make(map[string]cachedPairs),
 		inflight:          make(map[string]*pairCall),
 	}
@@ -136,13 +154,19 @@ func (c *DexScreenerClient) DiscoverPools(
 		url.PathEscape(addresses[0]),
 	)
 	cacheKey := "discover:" + normalizedChain + ":" + addresses[0]
-	return c.cachedFetch(ctx, cacheKey, c.discoveryCacheTTL, func(ctx context.Context) ([]Pair, error) {
-		pairs, err := c.getPairs(ctx, path, false)
-		if err != nil {
-			return nil, err
-		}
-		return filterPairs(pairs, normalizedChain, addresses, false)
-	})
+	return c.cachedFetch(
+		ctx,
+		cacheKey,
+		c.discoveryCacheTTL,
+		c.discoveryStaleTTL,
+		func(ctx context.Context) ([]Pair, error) {
+			pairs, err := c.getPairs(ctx, path, false)
+			if err != nil {
+				return nil, err
+			}
+			return filterPairs(pairs, normalizedChain, addresses, false)
+		},
+	)
 }
 
 func (c *DexScreenerClient) PairsByTokens(
@@ -184,7 +208,7 @@ func (c *DexScreenerClient) fetchBatches(
 		}
 		batch := addresses[start:end]
 		cacheKey := mode + ":" + chainID + ":" + strings.Join(batch, ",")
-		pairs, err := c.cachedFetch(ctx, cacheKey, cacheTTL, func(ctx context.Context) ([]Pair, error) {
+		pairs, err := c.cachedFetch(ctx, cacheKey, cacheTTL, c.quoteStaleTTL, func(ctx context.Context) ([]Pair, error) {
 			var path string
 			if mode == "tokens" {
 				path = fmt.Sprintf("/tokens/v1/%s/%s", url.PathEscape(chainID), strings.Join(batch, ","))
@@ -206,6 +230,43 @@ func (c *DexScreenerClient) fetchBatches(
 }
 
 func (c *DexScreenerClient) getPairs(
+	ctx context.Context,
+	path string,
+	wrapped bool,
+) ([]Pair, error) {
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if err := c.waitForCooldown(ctx); err != nil {
+			return nil, err
+		}
+		pairs, err := c.getPairsOnce(ctx, path, wrapped)
+		if err == nil {
+			c.clearRateLimitBackoff()
+			return pairs, nil
+		}
+		lastErr = err
+		if !IsTemporaryError(err) {
+			return nil, err
+		}
+		var apiError *DexScreenerHTTPError
+		if errors.As(err, &apiError) && apiError.StatusCode == http.StatusTooManyRequests {
+			c.noteRateLimit(apiError.RetryAfter)
+			if attempt == c.maxRetries {
+				return nil, err
+			}
+			continue
+		}
+		if attempt == c.maxRetries {
+			return nil, err
+		}
+		if err := waitContext(ctx, c.retryBackoff(attempt)); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *DexScreenerClient) getPairsOnce(
 	ctx context.Context,
 	path string,
 	wrapped bool,
@@ -254,16 +315,26 @@ func (c *DexScreenerClient) cachedFetch(
 	ctx context.Context,
 	key string,
 	ttl time.Duration,
+	staleTTL time.Duration,
 	fetch func(context.Context) ([]Pair, error),
 ) ([]Pair, error) {
 	now := time.Now()
+	var stale []Pair
 	c.mu.Lock()
 	if item, ok := c.cache[key]; ok && now.Before(item.expiresAt) {
 		pairs := clonePairs(item.pairs)
 		c.mu.Unlock()
 		return pairs, nil
 	} else if ok {
-		delete(c.cache, key)
+		if now.Before(item.staleUntil) {
+			stale = clonePairs(item.pairs)
+			if now.Before(c.cooldownUntil) {
+				c.mu.Unlock()
+				return stale, nil
+			}
+		} else {
+			delete(c.cache, key)
+		}
 	}
 	if active, ok := c.inflight[key]; ok {
 		c.mu.Unlock()
@@ -279,21 +350,118 @@ func (c *DexScreenerClient) cachedFetch(
 	c.mu.Unlock()
 
 	pairs, err := fetch(ctx)
+	cacheFresh := err == nil
+	if err != nil && stale != nil && IsTemporaryError(err) {
+		pairs = stale
+		err = nil
+		cacheFresh = false
+	}
 
 	c.mu.Lock()
 	active.pairs = clonePairs(pairs)
 	active.err = err
-	if err == nil && ttl > 0 {
-		c.evictCacheEntries(time.Now())
+	if cacheFresh && ttl > 0 {
+		cachedAt := time.Now()
+		c.evictCacheEntries(cachedAt)
 		c.cache[key] = cachedPairs{
-			pairs:     clonePairs(pairs),
-			expiresAt: time.Now().Add(ttl),
+			pairs:      clonePairs(pairs),
+			expiresAt:  cachedAt.Add(ttl),
+			staleUntil: cachedAt.Add(ttl).Add(staleTTL),
 		}
 	}
 	delete(c.inflight, key)
 	close(active.done)
 	c.mu.Unlock()
 	return pairs, err
+}
+
+// IsTemporaryError reports failures that callers may safely retry or satisfy
+// with a recent cached response.
+func IsTemporaryError(err error) bool {
+	if err == nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var apiError *DexScreenerHTTPError
+	if errors.As(err, &apiError) {
+		return apiError.StatusCode == http.StatusTooManyRequests ||
+			apiError.StatusCode == http.StatusBadGateway ||
+			apiError.StatusCode == http.StatusServiceUnavailable ||
+			apiError.StatusCode == http.StatusGatewayTimeout
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
+}
+
+func (c *DexScreenerClient) waitForCooldown(ctx context.Context) error {
+	c.mu.Lock()
+	wait := time.Until(c.cooldownUntil)
+	c.mu.Unlock()
+	return waitContext(ctx, wait)
+}
+
+func (c *DexScreenerClient) noteRateLimit(retryAfter string) {
+	c.mu.Lock()
+	c.rateLimitFailures++
+	delay := c.retryBackoff(c.rateLimitFailures - 1)
+	if suggested := parseRetryAfter(retryAfter, time.Now()); suggested > delay {
+		delay = suggested
+	}
+	if delay > c.maxBackoff {
+		delay = c.maxBackoff
+	}
+	until := time.Now().Add(delay)
+	if until.After(c.cooldownUntil) {
+		c.cooldownUntil = until
+	}
+	c.mu.Unlock()
+}
+
+func (c *DexScreenerClient) clearRateLimitBackoff() {
+	c.mu.Lock()
+	c.rateLimitFailures = 0
+	c.cooldownUntil = time.Time{}
+	c.mu.Unlock()
+}
+
+func (c *DexScreenerClient) retryBackoff(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 8 {
+		attempt = 8
+	}
+	delay := c.retryDelay * time.Duration(1<<attempt)
+	if delay > c.maxBackoff {
+		return c.maxBackoff
+	}
+	return delay
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(value); err == nil && deadline.After(now) {
+		return deadline.Sub(now)
+	}
+	return 0
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // evictCacheEntries is called with c.mu held. It keeps a long-running worker
@@ -303,7 +471,7 @@ func (c *DexScreenerClient) evictCacheEntries(now time.Time) {
 		return
 	}
 	for key, item := range c.cache {
-		if !now.Before(item.expiresAt) {
+		if !now.Before(item.staleUntil) {
 			delete(c.cache, key)
 		}
 	}
@@ -311,9 +479,9 @@ func (c *DexScreenerClient) evictCacheEntries(now time.Time) {
 		var oldestKey string
 		var oldestExpiry time.Time
 		for key, item := range c.cache {
-			if oldestKey == "" || item.expiresAt.Before(oldestExpiry) {
+			if oldestKey == "" || item.staleUntil.Before(oldestExpiry) {
 				oldestKey = key
-				oldestExpiry = item.expiresAt
+				oldestExpiry = item.staleUntil
 			}
 		}
 		if oldestKey == "" {

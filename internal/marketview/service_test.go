@@ -3,6 +3,7 @@ package marketview
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
@@ -117,6 +118,28 @@ func TestQueryTokenRejectsUnsupportedChain(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("QueryToken() accepted unsupported chain")
+	}
+}
+
+func TestQueryTokenMapsTemporaryProviderFailure(t *testing.T) {
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{plan: plans.Plan{MarketQuery: true}},
+		Chain: fakeChain{metadata: chain.TokenMetadata{
+			Address: testToken, Name: "Project", Symbol: "PRJ", Decimals: 18,
+		}},
+		Market: fakeMarket{err: &marketdata.DexScreenerHTTPError{
+			StatusCode: 429,
+			Body:       "provider diagnostics must stay private",
+		}},
+	})
+	_, err := service.QueryToken(context.Background(), "user", TokenQueryInput{
+		ChainKey: "bsc", TokenAddress: testToken,
+	})
+	if !errors.Is(err, ErrMarketDataUnavailable) {
+		t.Fatalf("QueryToken() error = %v, want ErrMarketDataUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "provider diagnostics") {
+		t.Fatalf("provider details leaked through service error: %v", err)
 	}
 }
 

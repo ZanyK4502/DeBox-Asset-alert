@@ -24,6 +24,8 @@ const (
 	defaultChainID  = int64(56)
 )
 
+var ErrMarketDataUnavailable = errors.New("行情数据服务暂时繁忙，请稍后重试。")
+
 type Repository interface {
 	ListMarketProjects(context.Context, string, bool) ([]store.MarketProject, error)
 	GetMarketProject(context.Context, int64, string) (*store.MarketProject, error)
@@ -165,6 +167,9 @@ func (s *Service) QueryToken(
 	}
 	pairs, err := s.deps.Market.DiscoverPools(ctx, chainKey, tokenAddress)
 	if err != nil {
+		if marketdata.IsTemporaryError(err) {
+			return TokenQueryResult{}, ErrMarketDataUnavailable
+		}
 		return TokenQueryResult{}, fmt.Errorf("查询交易池失败：%w", err)
 	}
 	previews := make([]PoolPreview, 0, len(pairs))

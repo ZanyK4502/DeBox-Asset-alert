@@ -2545,8 +2545,12 @@ async function queryMarketToken(event) {
       body: JSON.stringify({ chain_key: "bsc", token_address: address }),
     });
   } catch (error) {
-    $("marketQueryStatus").textContent = t("marketQueryFailed");
-    throw error;
+    const message = error?.status === 503
+      ? t("marketQueryUnavailable")
+      : t("marketQueryFailed");
+    $("marketQueryStatus").textContent = message;
+    toast(message);
+    return;
   }
   $("marketQueryStatus").textContent = t("marketQuerySuccess", {
     symbol: state.marketQuery.token?.symbol || "-",
