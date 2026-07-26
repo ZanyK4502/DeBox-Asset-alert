@@ -116,61 +116,6 @@ func TestRestorePaidRuleReportsQuotaLimit(t *testing.T) {
 	}
 }
 
-func TestComplimentaryAccessIsNormalizedAndOneTime(t *testing.T) {
-	t.Parallel()
-
-	expiresAt := time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)
-	repository := &fakeRepository{
-		grant: &store.ComplimentaryGrant{
-			WalletAddress: allowlistedWallet,
-			PlanCode:      plans.Professional,
-			ExpiresAt:     expiresAt,
-		},
-	}
-	service := newTestService(t, repository)
-
-	result, err := service.ComplimentaryAccess(
-		context.Background(),
-		"0xCBA3FCE9D49CE5D7870443F324A8DD56A5788BFC",
-	)
-	if err != nil {
-		t.Fatalf("ComplimentaryAccess(): %v", err)
-	}
-	if !result.Eligible || !result.Used || result.Available {
-		t.Fatalf("complimentary access = %+v", result)
-	}
-	if repository.grantWallet != allowlistedWallet {
-		t.Fatalf("grant lookup wallet = %q", repository.grantWallet)
-	}
-}
-
-func TestActivateComplimentaryPlanUsesThirtyDays(t *testing.T) {
-	t.Parallel()
-
-	repository := &fakeRepository{}
-	service := newTestService(t, repository)
-
-	_, err := service.ActivateComplimentaryPlan(
-		context.Background(),
-		"user-1",
-		allowlistedWallet,
-		plans.Standard,
-	)
-	if err != nil {
-		t.Fatalf("ActivateComplimentaryPlan(): %v", err)
-	}
-	if repository.complimentaryWallet != allowlistedWallet ||
-		repository.complimentaryPlan != plans.Standard ||
-		repository.complimentaryDays != ComplimentaryDays {
-		t.Fatalf(
-			"complimentary activation = %s/%s/%d",
-			repository.complimentaryWallet,
-			repository.complimentaryPlan,
-			repository.complimentaryDays,
-		)
-	}
-}
-
 func TestDaysRemainingRoundsUp(t *testing.T) {
 	t.Parallel()
 
@@ -250,7 +195,7 @@ func newTestService(t *testing.T, repository Repository) *Service {
 	if err != nil {
 		t.Fatalf("NewCatalog(): %v", err)
 	}
-	return New(repository, catalog, allowlistedWallet)
+	return New(repository, catalog)
 }
 
 type fakeRepository struct {
@@ -276,13 +221,6 @@ type fakeRepository struct {
 	restoreErr           error
 	createdGroup         store.NotificationGroup
 	groupErr             error
-
-	grant               *store.ComplimentaryGrant
-	grantWallet         string
-	complimentaryWallet string
-	complimentaryPlan   string
-	complimentaryDays   int
-	complimentaryErr    error
 }
 
 func (f *fakeRepository) GetActiveSubscription(
@@ -429,27 +367,6 @@ func (f *fakeRepository) ActivateSubscription(
 	int,
 ) (store.Subscription, error) {
 	return store.Subscription{}, nil
-}
-
-func (f *fakeRepository) GetComplimentaryGrant(
-	_ context.Context,
-	wallet string,
-) (*store.ComplimentaryGrant, error) {
-	f.grantWallet = wallet
-	return f.grant, nil
-}
-
-func (f *fakeRepository) ActivateComplimentarySubscription(
-	_ context.Context,
-	_ string,
-	wallet string,
-	plan string,
-	days int,
-) (store.ComplimentaryActivation, error) {
-	f.complimentaryWallet = wallet
-	f.complimentaryPlan = plan
-	f.complimentaryDays = days
-	return store.ComplimentaryActivation{}, f.complimentaryErr
 }
 
 var _ Repository = (*fakeRepository)(nil)

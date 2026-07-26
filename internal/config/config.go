@@ -31,52 +31,51 @@ const (
 )
 
 type Config struct {
-	AppName                      string
-	Environment                  string
-	Host                         string
-	Port                         int
-	ReceiveMode                  string
-	StaticDir                    string
-	DatabaseURL                  string
-	PublicAppURL                 string
-	DeBoxBotAPIKey               string
-	DeBoxBotAPISecret            string
-	DeBoxBotUserID               string
-	DeBoxWebhookKey              string
-	DeBoxOpenAPIBase             string
-	DeBoxNotificationChatID      string
-	DeBoxNotificationChatType    string
-	ChainKey                     string
-	NoditAPIKey                  string
-	NoditBaseURL                 string
-	NoditCUPerSecond             int64
-	SubscriptionTokenAddress     string
-	SubscriptionTokenSymbol      string
-	SubscriptionTokenDecimals    int
-	SubscriptionPrice            string
-	SubscriptionDays             int
-	PaymentRecipientAddress      string
-	PaymentMode                  string
-	ComplimentaryWalletAddresses string
-	MarketCollectorEnabled       bool
-	MarketRuleEngineEnabled      bool
-	MarketRuleInterval           time.Duration
-	MarketHolderRefreshInterval  time.Duration
-	DexScreenerBaseURL           string
-	NoditWebhookSigningKey       string
-	NoditWebhookSigningKeys      map[string]string
-	MarketWebhookAutoRepair      bool
-	MarketConfirmationDepth      int64
-	MarketScanBatchSize          int64
-	MarketInitialLookback        int64
-	MarketReorgLookback          int
-	MarketInboxInterval          time.Duration
-	MarketScanInterval           time.Duration
-	MarketSnapshotInterval       time.Duration
-	MarketDiscoveryInterval      time.Duration
-	MarketHealthInterval         time.Duration
-	MarketCleanupInterval        time.Duration
-	NoditMonthlyCULimit          int64
+	AppName                     string
+	Environment                 string
+	Host                        string
+	Port                        int
+	ReceiveMode                 string
+	StaticDir                   string
+	DatabaseURL                 string
+	PublicAppURL                string
+	DeBoxBotAPIKey              string
+	DeBoxBotAPISecret           string
+	DeBoxBotUserID              string
+	DeBoxWebhookKey             string
+	DeBoxOpenAPIBase            string
+	DeBoxNotificationChatID     string
+	DeBoxNotificationChatType   string
+	ChainKey                    string
+	NoditAPIKey                 string
+	NoditBaseURL                string
+	NoditCUPerSecond            int64
+	SubscriptionTokenAddress    string
+	SubscriptionTokenSymbol     string
+	SubscriptionTokenDecimals   int
+	SubscriptionPrice           string
+	SubscriptionDays            int
+	PaymentRecipientAddress     string
+	PaymentMode                 string
+	MarketCollectorEnabled      bool
+	MarketRuleEngineEnabled     bool
+	MarketRuleInterval          time.Duration
+	MarketHolderRefreshInterval time.Duration
+	DexScreenerBaseURL          string
+	NoditWebhookSigningKey      string
+	NoditWebhookSigningKeys     map[string]string
+	MarketWebhookAutoRepair     bool
+	MarketConfirmationDepth     int64
+	MarketScanBatchSize         int64
+	MarketInitialLookback       int64
+	MarketReorgLookback         int
+	MarketInboxInterval         time.Duration
+	MarketScanInterval          time.Duration
+	MarketSnapshotInterval      time.Duration
+	MarketDiscoveryInterval     time.Duration
+	MarketHealthInterval        time.Duration
+	MarketCleanupInterval       time.Duration
+	NoditMonthlyCULimit         int64
 }
 
 func Load() (Config, error) {
@@ -178,52 +177,51 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		AppName:                      firstNonEmpty(os.Getenv("APP_NAME"), defaultAppName),
-		Environment:                  firstNonEmpty(os.Getenv("APP_ENV"), defaultEnvironment),
-		Host:                         firstNonEmpty(os.Getenv("APP_HOST"), defaultHost),
-		Port:                         port,
-		ReceiveMode:                  strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_BOT_RECEIVE_MODE"), defaultReceiveMode)),
-		StaticDir:                    firstNonEmpty(os.Getenv("STATIC_DIR"), "static"),
-		DatabaseURL:                  strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PublicAppURL:                 strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_APP_URL")), "/"),
-		DeBoxBotAPIKey:               strings.TrimSpace(os.Getenv("DEBOX_BOT_API_KEY")),
-		DeBoxBotAPISecret:            strings.TrimSpace(os.Getenv("DEBOX_BOT_API_SECRET")),
-		DeBoxBotUserID:               strings.TrimSpace(os.Getenv("DEBOX_BOT_USER_ID")),
-		DeBoxWebhookKey:              strings.TrimSpace(os.Getenv("DEBOX_WEBHOOK_KEY")),
-		DeBoxOpenAPIBase:             firstNonEmpty(os.Getenv("DEBOX_OPENAPI_BASE"), defaultDeBoxAPI),
-		DeBoxNotificationChatID:      strings.TrimSpace(os.Getenv("DEBOX_NOTIFICATION_CHAT_ID")),
-		DeBoxNotificationChatType:    strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_NOTIFICATION_CHAT_TYPE"), "private")),
-		ChainKey:                     strings.ToLower(firstNonEmpty(os.Getenv("CHAIN_KEY"), defaultChainKey)),
-		NoditAPIKey:                  strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
-		NoditBaseURL:                 firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
-		NoditCUPerSecond:             cuPerSecond,
-		SubscriptionTokenAddress:     strings.TrimSpace(os.Getenv("SUBSCRIPTION_TOKEN_ADDRESS")),
-		SubscriptionTokenSymbol:      firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
-		SubscriptionTokenDecimals:    decimals,
-		SubscriptionPrice:            firstNonEmpty(os.Getenv("SUBSCRIPTION_PRICE"), defaultPlanPrice),
-		SubscriptionDays:             days,
-		PaymentRecipientAddress:      strings.TrimSpace(os.Getenv("PAYMENT_RECIPIENT_ADDRESS")),
-		PaymentMode:                  strings.ToLower(firstNonEmpty(os.Getenv("PAYMENT_MODE"), defaultPaymentMode)),
-		ComplimentaryWalletAddresses: strings.TrimSpace(os.Getenv("COMPLIMENTARY_WALLET_ADDRESSES")),
-		MarketCollectorEnabled:       collectorEnabled,
-		MarketRuleEngineEnabled:      ruleEngineEnabled,
-		MarketRuleInterval:           ruleInterval,
-		MarketHolderRefreshInterval:  holderRefreshInterval,
-		DexScreenerBaseURL:           firstNonEmpty(os.Getenv("DEXSCREENER_BASE_URL"), defaultDexScreenerAPI),
-		NoditWebhookSigningKey:       strings.TrimSpace(os.Getenv("NODIT_WEBHOOK_SIGNING_KEY")),
-		NoditWebhookSigningKeys:      webhookSigningKeys,
-		MarketWebhookAutoRepair:      webhookAutoRepair,
-		MarketConfirmationDepth:      confirmationDepth,
-		MarketScanBatchSize:          scanBatchSize,
-		MarketInitialLookback:        initialLookback,
-		MarketReorgLookback:          reorgLookback,
-		MarketInboxInterval:          inboxInterval,
-		MarketScanInterval:           scanInterval,
-		MarketSnapshotInterval:       snapshotInterval,
-		MarketDiscoveryInterval:      discoveryInterval,
-		MarketHealthInterval:         healthInterval,
-		MarketCleanupInterval:        cleanupInterval,
-		NoditMonthlyCULimit:          monthlyCULimit,
+		AppName:                     firstNonEmpty(os.Getenv("APP_NAME"), defaultAppName),
+		Environment:                 firstNonEmpty(os.Getenv("APP_ENV"), defaultEnvironment),
+		Host:                        firstNonEmpty(os.Getenv("APP_HOST"), defaultHost),
+		Port:                        port,
+		ReceiveMode:                 strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_BOT_RECEIVE_MODE"), defaultReceiveMode)),
+		StaticDir:                   firstNonEmpty(os.Getenv("STATIC_DIR"), "static"),
+		DatabaseURL:                 strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		PublicAppURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_APP_URL")), "/"),
+		DeBoxBotAPIKey:              strings.TrimSpace(os.Getenv("DEBOX_BOT_API_KEY")),
+		DeBoxBotAPISecret:           strings.TrimSpace(os.Getenv("DEBOX_BOT_API_SECRET")),
+		DeBoxBotUserID:              strings.TrimSpace(os.Getenv("DEBOX_BOT_USER_ID")),
+		DeBoxWebhookKey:             strings.TrimSpace(os.Getenv("DEBOX_WEBHOOK_KEY")),
+		DeBoxOpenAPIBase:            firstNonEmpty(os.Getenv("DEBOX_OPENAPI_BASE"), defaultDeBoxAPI),
+		DeBoxNotificationChatID:     strings.TrimSpace(os.Getenv("DEBOX_NOTIFICATION_CHAT_ID")),
+		DeBoxNotificationChatType:   strings.ToLower(firstNonEmpty(os.Getenv("DEBOX_NOTIFICATION_CHAT_TYPE"), "private")),
+		ChainKey:                    strings.ToLower(firstNonEmpty(os.Getenv("CHAIN_KEY"), defaultChainKey)),
+		NoditAPIKey:                 strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
+		NoditBaseURL:                firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
+		NoditCUPerSecond:            cuPerSecond,
+		SubscriptionTokenAddress:    strings.TrimSpace(os.Getenv("SUBSCRIPTION_TOKEN_ADDRESS")),
+		SubscriptionTokenSymbol:     firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
+		SubscriptionTokenDecimals:   decimals,
+		SubscriptionPrice:           firstNonEmpty(os.Getenv("SUBSCRIPTION_PRICE"), defaultPlanPrice),
+		SubscriptionDays:            days,
+		PaymentRecipientAddress:     strings.TrimSpace(os.Getenv("PAYMENT_RECIPIENT_ADDRESS")),
+		PaymentMode:                 strings.ToLower(firstNonEmpty(os.Getenv("PAYMENT_MODE"), defaultPaymentMode)),
+		MarketCollectorEnabled:      collectorEnabled,
+		MarketRuleEngineEnabled:     ruleEngineEnabled,
+		MarketRuleInterval:          ruleInterval,
+		MarketHolderRefreshInterval: holderRefreshInterval,
+		DexScreenerBaseURL:          firstNonEmpty(os.Getenv("DEXSCREENER_BASE_URL"), defaultDexScreenerAPI),
+		NoditWebhookSigningKey:      strings.TrimSpace(os.Getenv("NODIT_WEBHOOK_SIGNING_KEY")),
+		NoditWebhookSigningKeys:     webhookSigningKeys,
+		MarketWebhookAutoRepair:     webhookAutoRepair,
+		MarketConfirmationDepth:     confirmationDepth,
+		MarketScanBatchSize:         scanBatchSize,
+		MarketInitialLookback:       initialLookback,
+		MarketReorgLookback:         reorgLookback,
+		MarketInboxInterval:         inboxInterval,
+		MarketScanInterval:          scanInterval,
+		MarketSnapshotInterval:      snapshotInterval,
+		MarketDiscoveryInterval:     discoveryInterval,
+		MarketHealthInterval:        healthInterval,
+		MarketCleanupInterval:       cleanupInterval,
+		NoditMonthlyCULimit:         monthlyCULimit,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

@@ -38,8 +38,6 @@ type SubscriptionService interface {
 	Entitlement(context.Context, string) (subscription.Entitlement, error)
 	BindPermanentWallet(context.Context, string, string) (*store.Subscription, error)
 	EnableFreePlan(context.Context, string) (*store.Subscription, error)
-	ComplimentaryAccess(context.Context, string) (subscription.ComplimentaryAccess, error)
-	ActivateComplimentaryPlan(context.Context, string, string, string) (store.ComplimentaryActivation, error)
 }
 
 type ChainService interface {
@@ -151,7 +149,6 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", h.postAuthLogout)
 	mux.HandleFunc("GET /api/subscription/current", h.getCurrentSubscription)
 	mux.HandleFunc("POST /api/subscription/free-trial", h.postFreePlan)
-	mux.HandleFunc("POST /api/subscription/complimentary", h.postComplimentaryPlan)
 	mux.HandleFunc("POST /api/subscription/summary-settings", h.postSummarySettings)
 	mux.HandleFunc("GET /api/watch-rules", h.getWatchRules)
 	mux.HandleFunc("POST /api/watch-rules", h.postWatchRule)

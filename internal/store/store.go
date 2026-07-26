@@ -15,7 +15,6 @@ var (
 	ErrActiveSubscriptionConflict = errors.New("an active subscription prevents this plan change")
 	ErrCombinationMemberManaged   = errors.New("combination members are managed by their combination rule")
 	ErrCombinationRulesDenied     = errors.New("combination rules are not allowed")
-	ErrComplimentaryAlreadyUsed   = errors.New("complimentary access has already been used")
 	ErrGroupLimitReached          = errors.New("notification group limit reached")
 	ErrGroupNotificationDenied    = errors.New("group notification is not allowed")
 	ErrInvalidFreeWatchRule       = errors.New("watch rule is not eligible for the free plan")

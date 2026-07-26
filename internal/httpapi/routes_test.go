@@ -79,7 +79,6 @@ func (f *fakeAuthService) RevokeSession(_ context.Context, token string) (bool, 
 type fakeSubscriptionService struct {
 	entitlementUser string
 	enabledUser     string
-	activationInput [3]string
 	bindingInput    [2]string
 	binding         *store.Subscription
 	bindingErr      error
@@ -111,28 +110,6 @@ func (f *fakeSubscriptionService) EnableFreePlan(
 ) (*store.Subscription, error) {
 	f.enabledUser = deboxUserID
 	return nil, nil
-}
-
-func (f *fakeSubscriptionService) ComplimentaryAccess(
-	context.Context,
-	string,
-) (subscription.ComplimentaryAccess, error) {
-	return subscription.ComplimentaryAccess{Eligible: true, Available: true}, nil
-}
-
-func (f *fakeSubscriptionService) ActivateComplimentaryPlan(
-	_ context.Context,
-	deboxUserID string,
-	walletAddress string,
-	planCode string,
-) (store.ComplimentaryActivation, error) {
-	f.activationInput = [3]string{deboxUserID, walletAddress, planCode}
-	return store.ComplimentaryActivation{
-		Grant: store.ComplimentaryGrant{
-			DeBoxUserID: deboxUserID,
-			PlanCode:    planCode,
-		},
-	}, nil
 }
 
 type fakeChainService struct {
@@ -345,11 +322,6 @@ func TestSubscriptionAndExternalDataRoutesUseAuthenticatedIdentity(t *testing.T)
 		{method: http.MethodGet, path: "/api/subscription/current"},
 		{method: http.MethodPost, path: "/api/subscription/free-trial"},
 		{
-			method: http.MethodPost,
-			path:   "/api/subscription/complimentary",
-			body:   `{"plan_code":"professional"}`,
-		},
-		{
 			method: http.MethodGet,
 			path:   "/api/chain/balance?address=" + wallet + "&chain_key=bsc",
 		},
@@ -368,8 +340,7 @@ func TestSubscriptionAndExternalDataRoutesUseAuthenticatedIdentity(t *testing.T)
 		}
 	}
 	if subscriptions.entitlementUser != "user-1" ||
-		subscriptions.enabledUser != "user-1" ||
-		subscriptions.activationInput != [3]string{"user-1", wallet, "professional"} {
+		subscriptions.enabledUser != "user-1" {
 		t.Fatalf("subscription identity inputs = %#v", subscriptions)
 	}
 	if chainService.input != [4]string{wallet, "", "bsc", "bsc"} {

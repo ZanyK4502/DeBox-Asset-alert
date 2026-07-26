@@ -13,8 +13,6 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
-const ComplimentaryDays = 30
-
 type Repository interface {
 	GetActiveSubscription(context.Context, string) (*store.Subscription, error)
 	BindPermanentPlan(context.Context, string, string) (store.PermanentPlanBinding, error)
@@ -34,23 +32,19 @@ type Repository interface {
 	RestoreCombinationRuleWithinQuota(context.Context, int64, string, store.QuotaPolicy) (store.CombinationRule, error)
 	CreateNotificationGroupWithinQuota(context.Context, string, string, string, store.QuotaPolicy) (store.NotificationGroup, error)
 	ActivateSubscription(context.Context, string, string, int) (store.Subscription, error)
-	GetComplimentaryGrant(context.Context, string) (*store.ComplimentaryGrant, error)
-	ActivateComplimentarySubscription(context.Context, string, string, string, int) (store.ComplimentaryActivation, error)
 }
 
 type Service struct {
-	repository           Repository
-	catalog              *plans.Catalog
-	complimentaryWallets map[string]struct{}
-	now                  func() time.Time
+	repository Repository
+	catalog    *plans.Catalog
+	now        func() time.Time
 }
 
-func New(repository Repository, catalog *plans.Catalog, complimentaryWallets string) *Service {
+func New(repository Repository, catalog *plans.Catalog) *Service {
 	return &Service{
-		repository:           repository,
-		catalog:              catalog,
-		complimentaryWallets: parseComplimentaryWallets(complimentaryWallets),
-		now:                  func() time.Time { return time.Now().UTC() },
+		repository: repository,
+		catalog:    catalog,
+		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -433,84 +427,6 @@ func (s *Service) ActivatePaidSubscription(
 	return activated, nil
 }
 
-type ComplimentaryAccess struct {
-	Eligible  bool       `json:"eligible"`
-	Used      bool       `json:"used"`
-	Available bool       `json:"available"`
-	PlanCode  string     `json:"plan_code"`
-	ExpiresAt *time.Time `json:"expires_at"`
-}
-
-func (s *Service) ComplimentaryAccess(
-	ctx context.Context,
-	walletAddress string,
-) (ComplimentaryAccess, error) {
-	wallet, err := normalizeAddress(walletAddress)
-	if err != nil {
-		return ComplimentaryAccess{}, nil
-	}
-	if _, eligible := s.complimentaryWallets[wallet]; !eligible {
-		return ComplimentaryAccess{}, nil
-	}
-	grant, err := s.repository.GetComplimentaryGrant(ctx, wallet)
-	if err != nil {
-		return ComplimentaryAccess{}, err
-	}
-	if grant == nil {
-		return ComplimentaryAccess{Eligible: true, Available: true}, nil
-	}
-	return ComplimentaryAccess{
-		Eligible:  true,
-		Used:      true,
-		Available: false,
-		PlanCode:  grant.PlanCode,
-		ExpiresAt: &grant.ExpiresAt,
-	}, nil
-}
-
-func (s *Service) ActivateComplimentaryPlan(
-	ctx context.Context,
-	deboxUserID string,
-	walletAddress string,
-	planCode string,
-) (store.ComplimentaryActivation, error) {
-	wallet, err := normalizeAddress(walletAddress)
-	if err != nil {
-		return store.ComplimentaryActivation{}, err
-	}
-	permanent, err := s.BindPermanentWallet(ctx, deboxUserID, wallet)
-	if err != nil {
-		return store.ComplimentaryActivation{}, err
-	}
-	if permanent != nil {
-		return store.ComplimentaryActivation{}, errors.New("永久白名单套餐无需开通限时体验")
-	}
-	if _, eligible := s.complimentaryWallets[wallet]; !eligible {
-		return store.ComplimentaryActivation{}, errors.New("当前钱包不在免费开通白名单中。")
-	}
-	plan, err := s.catalog.Get(planCode)
-	if err != nil {
-		return store.ComplimentaryActivation{}, err
-	}
-	if plan.Code != plans.Standard && plan.Code != plans.Professional {
-		return store.ComplimentaryActivation{}, errors.New("白名单只能选择标准版或专业版。")
-	}
-	activation, err := s.repository.ActivateComplimentarySubscription(
-		ctx,
-		deboxUserID,
-		wallet,
-		plan.Code,
-		ComplimentaryDays,
-	)
-	if err != nil {
-		return store.ComplimentaryActivation{}, err
-	}
-	if err := s.ReconcileActivePlan(ctx, deboxUserID, plan.Code); err != nil {
-		return store.ComplimentaryActivation{}, err
-	}
-	return activation, nil
-}
-
 func classifyRules(
 	rules []store.WatchRule,
 	plan plans.Plan,
@@ -683,16 +599,6 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 	default:
 		return err
 	}
-}
-
-func parseComplimentaryWallets(values string) map[string]struct{} {
-	result := make(map[string]struct{})
-	for _, value := range strings.Split(values, ",") {
-		if wallet, err := normalizeAddress(value); err == nil {
-			result[wallet] = struct{}{}
-		}
-	}
-	return result
 }
 
 func normalizeAddress(value string) (string, error) {

@@ -15,7 +15,7 @@ const acceptanceWallet = "0x1111111111111111111111111111111111111111"
 func TestAcceptanceCreateRuleUsesRealQuotaState(t *testing.T) {
 	database := testdb.Open(t)
 	catalog := acceptanceCatalog(t)
-	entitlements := subscription.New(database, catalog, "")
+	entitlements := subscription.New(database, catalog)
 	service := New(Dependencies{
 		Repository:   database,
 		Entitlements: entitlements,
@@ -66,7 +66,7 @@ func TestAcceptanceCreateRuleUsesRealQuotaState(t *testing.T) {
 func TestAcceptanceGroupUnbindRemovesOnlyThatSummaryTarget(t *testing.T) {
 	database := testdb.Open(t)
 	catalog := acceptanceCatalog(t)
-	entitlements := subscription.New(database, catalog, "")
+	entitlements := subscription.New(database, catalog)
 	userID := "acceptance-group-user"
 	if _, err := database.ActivateSubscription(
 		context.Background(),

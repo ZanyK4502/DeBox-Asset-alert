@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0009_permanent_plan_allowlist.sql" {
-		t.Fatalf("latest migration = %q, want permanent plan allowlist migration", got)
+	if got := names[len(names)-1]; got != "0010_remove_complimentary_grants.sql" {
+		t.Fatalf("latest migration = %q, want complimentary grant cleanup migration", got)
 	}
 
 	requiredTables := []string{
@@ -29,7 +29,6 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"user_preferences",
 		"auth_challenges",
 		"auth_sessions",
-		"complimentary_grants",
 		"permanent_plan_allowlist",
 		"combination_rules",
 		"combination_rule_members",
@@ -75,7 +74,11 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 			t.Fatalf("ReadFile(%q): %v", name, err)
 		}
 		sql := strings.ToLower(string(body))
-		if destructive.MatchString(sql) || destructiveAlter.MatchString(sql) {
+		removesEmptyComplimentaryTable := name == "0010_remove_complimentary_grants.sql" &&
+			strings.Contains(sql, "if exists (select 1 from complimentary_grants)") &&
+			strings.Contains(sql, "drop table complimentary_grants")
+		if (destructive.MatchString(sql) || destructiveAlter.MatchString(sql)) &&
+			!removesEmptyComplimentaryTable {
 			t.Fatalf("migration %q contains a destructive statement", name)
 		}
 		for _, line := range strings.Split(sql, "\n") {

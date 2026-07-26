@@ -285,15 +285,6 @@ type AuthSession struct {
 	CreatedAt     time.Time  `db:"created_at" json:"created_at"`
 }
 
-type ComplimentaryGrant struct {
-	WalletAddress string    `db:"wallet_address" json:"wallet_address"`
-	DeBoxUserID   string    `db:"debox_user_id" json:"debox_user_id"`
-	PlanCode      string    `db:"plan_code" json:"plan_code"`
-	StartsAt      time.Time `db:"starts_at" json:"starts_at"`
-	ExpiresAt     time.Time `db:"expires_at" json:"expires_at"`
-	CreatedAt     time.Time `db:"created_at" json:"created_at"`
-}
-
 type SummaryStatistics struct {
 	RuleCount                     int64  `db:"rule_count" json:"rule_count"`
 	WalletCount                   int64  `db:"wallet_count" json:"wallet_count"`

@@ -132,7 +132,7 @@ func buildDependencies(
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create DeBox messenger: %w", err)
 	}
-	subscriptions := subscription.New(repository, catalog, cfg.ComplimentaryWalletAddresses)
+	subscriptions := subscription.New(repository, catalog)
 	marketRuleService := marketrules.New(
 		marketrules.Dependencies{
 			Repository:    repository,

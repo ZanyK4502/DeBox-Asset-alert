@@ -27,7 +27,6 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"auth_sessions",
 		"combination_rule_members",
 		"combination_rules",
-		"complimentary_grants",
 		"daily_summary_deliveries",
 		"daily_summary_targets",
 		"market_address_labels",

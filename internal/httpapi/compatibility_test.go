@@ -27,7 +27,6 @@ func TestPythonBaselineRouteContract(t *testing.T) {
 		{http.MethodPost, "/api/auth/logout"},
 		{http.MethodGet, "/api/subscription/current"},
 		{http.MethodPost, "/api/subscription/free-trial"},
-		{http.MethodPost, "/api/subscription/complimentary"},
 		{http.MethodPost, "/api/subscription/summary-settings"},
 		{http.MethodGet, "/api/watch-rules"},
 		{http.MethodPost, "/api/watch-rules"},
@@ -64,6 +63,18 @@ func TestPythonBaselineRouteContract(t *testing.T) {
 				t.Fatalf("baseline route is unavailable: status=%d body=%s", recorder.Code, recorder.Body)
 			}
 		})
+	}
+}
+
+func TestRemovedComplimentaryRouteIsUnavailable(t *testing.T) {
+	handler := New(testConfig(t))
+	request := httptest.NewRequest(http.MethodPost, "/api/subscription/complimentary", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
 	}
 }
 

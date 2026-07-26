@@ -24,7 +24,6 @@ const requiredAPIs = [
   "/api/auth/session",
   "/api/auth/logout",
   "/api/subscription/current",
-  "/api/subscription/complimentary",
   "/api/payment/config",
   "/api/payment/prepare",
   "/api/payment/verify",
@@ -43,11 +42,25 @@ const requiredAPIs = [
 for (const endpoint of requiredAPIs) {
   assert.ok(app.includes(endpoint), `H5 no longer references required API: ${endpoint}`);
 }
+assert.ok(
+  !app.includes("/api/subscription/complimentary"),
+  "H5 still references the removed complimentary subscription API",
+);
 
 const context = { window: {} };
 vm.runInNewContext(i18nSource, context, { filename: "static/i18n.js" });
 const translations = context.window.H5_I18N;
 assert.ok(translations?.zh && translations?.en, "Chinese and English H5 dictionaries are required");
+for (const key of [
+  "complimentaryActivate",
+  "complimentaryAvailable",
+  "complimentaryActive",
+  "complimentaryConfirm",
+  "complimentaryActivated",
+]) {
+  assert.ok(!Object.hasOwn(translations.zh, key), `Chinese legacy translation remains: ${key}`);
+  assert.ok(!Object.hasOwn(translations.en, key), `English legacy translation remains: ${key}`);
+}
 
 const translationKeys = new Set();
 for (const match of html.matchAll(/\bdata-i18n(?:-placeholder|-aria-label|-label)?="([^"]+)"/g)) {

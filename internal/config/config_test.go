@@ -34,7 +34,6 @@ func TestLoadDefaults(t *testing.T) {
 		"SUBSCRIPTION_DAYS",
 		"PAYMENT_RECIPIENT_ADDRESS",
 		"PAYMENT_MODE",
-		"COMPLIMENTARY_WALLET_ADDRESSES",
 		"MARKET_COLLECTOR_ENABLED",
 		"MARKET_RULE_ENGINE_ENABLED",
 		"MARKET_RULE_INTERVAL",
@@ -209,7 +208,6 @@ func TestLoadReadsSubscriptionSettings(t *testing.T) {
 	t.Setenv("SUBSCRIPTION_DAYS", "45")
 	t.Setenv("PAYMENT_RECIPIENT_ADDRESS", " 0x2222222222222222222222222222222222222222 ")
 	t.Setenv("PAYMENT_MODE", "LIVE")
-	t.Setenv("COMPLIMENTARY_WALLET_ADDRESSES", " 0xabc,0xdef ")
 	t.Setenv("STATIC_DIR", testStaticDir(t))
 
 	cfg, err := Load()
@@ -224,9 +222,6 @@ func TestLoadReadsSubscriptionSettings(t *testing.T) {
 		cfg.PaymentRecipientAddress != "0x2222222222222222222222222222222222222222" ||
 		cfg.PaymentMode != "live" {
 		t.Fatalf("unexpected payment settings: %#v", cfg)
-	}
-	if cfg.ComplimentaryWalletAddresses != "0xabc,0xdef" {
-		t.Fatalf("ComplimentaryWalletAddresses = %q", cfg.ComplimentaryWalletAddresses)
 	}
 }
 

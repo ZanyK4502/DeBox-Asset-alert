@@ -577,19 +577,10 @@ function renderPlans() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  const complimentary = state.entitlement?.complimentary_access;
-  const complimentaryAvailable = Boolean(
-    complimentary?.available && !currentPaidPlan
-  );
-  const complimentaryActive = Boolean(complimentary?.used && currentPaidPlan);
   $("payBtn").textContent = permanent
     ? t("permanentPlanButton")
-    : complimentaryAvailable
-      ? t("complimentaryActivate")
-      : complimentaryActive
-        ? t("currentPlanButton")
-        : t("payRenew");
-  $("payBtn").disabled = permanent || complimentaryActive;
+    : t("payRenew");
+  $("payBtn").disabled = permanent;
 }
 
 function selectedBillingOption(plan) {
@@ -1480,14 +1471,8 @@ function addCombinationMember() {
 function renderPaymentStatus() {
   const status = $("paymentStatus");
   const config = state.paymentConfig;
-  const complimentary = state.entitlement?.complimentary_access;
-  const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
   if (state.entitlement?.permanent) {
     status.textContent = t("permanentPlanActive");
-  } else if (complimentary?.available && !currentPaidPlan) {
-    status.textContent = t("complimentaryAvailable");
-  } else if (complimentary?.used && currentPaidPlan) {
-    status.textContent = t("complimentaryActive", { date: complimentary.expires_at || "-" });
   } else if (state.paymentError) {
     status.textContent = localizedApiError(state.paymentError);
   } else if (!config) {
@@ -1687,29 +1672,6 @@ async function payOrRenew() {
   }
   if (state.entitlement?.permanent) {
     toast(t("permanentPlanActive"));
-    return;
-  }
-  const complimentary = state.entitlement?.complimentary_access;
-  const hasPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
-  if (complimentary?.available && !hasPaidPlan) {
-    const planName = localizedPlan(state.plans.find((plan) => plan.code === state.selectedPlan)).name;
-    if (!confirm(t("complimentaryConfirm", { plan: planName }))) {
-      return;
-    }
-    const button = $("payBtn");
-    button.disabled = true;
-    try {
-      await api("/api/subscription/complimentary", {
-        method: "POST",
-        body: JSON.stringify({ plan_code: state.selectedPlan }),
-      });
-      await refreshAccount();
-      toast(t("complimentaryActivated"));
-    } catch (error) {
-      toast(localizedApiError(error.message));
-    } finally {
-      renderPlans();
-    }
     return;
   }
   const button = $("payBtn");

@@ -65,7 +65,6 @@ GET    /api/auth/session
 POST   /api/auth/logout
 GET    /api/subscription/current
 POST   /api/subscription/free-trial
-POST   /api/subscription/complimentary
 POST   /api/subscription/summary-settings
 GET    /api/watch-rules
 POST   /api/watch-rules
@@ -91,7 +90,7 @@ separate contract change is approved.
 
 ## Database Contract
 
-The existing PostgreSQL data remains in place. The baseline has nine application tables:
+The existing PostgreSQL data remains in place. The baseline has eight application tables:
 
 1. `subscriptions`
 2. `watch_rules`
@@ -101,7 +100,6 @@ The existing PostgreSQL data remains in place. The baseline has nine application
 6. `user_preferences`
 7. `auth_challenges`
 8. `auth_sessions`
-9. `complimentary_grants`
 
 Existing primary keys, foreign keys, partial unique indexes, transaction boundaries, and
 PostgreSQL advisory locks are part of the compatibility contract. Migration work must not

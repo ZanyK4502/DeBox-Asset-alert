@@ -86,7 +86,3 @@ const authChallengeColumns = `
 const authSessionColumns = `
 	token_hash, debox_user_id, wallet_address, expires_at, revoked_at, last_seen_at, created_at
 `
-
-const complimentaryGrantColumns = `
-	wallet_address, debox_user_id, plan_code, starts_at, expires_at, created_at
-`
