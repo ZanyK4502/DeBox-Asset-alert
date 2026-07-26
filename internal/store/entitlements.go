@@ -6,17 +6,30 @@ import (
 )
 
 type QuotaPolicy struct {
-	PlanCode          string
-	WalletLimit       int
-	RuleLimit         int
-	GroupLimit        int
-	AllowedRuleTypes  []string
-	GroupNotification bool
-	CombinationRules  bool
+	PlanCode               string
+	WalletLimit            int
+	RuleLimit              int
+	GroupLimit             int
+	MarketProjectLimit     int
+	AllowedRuleTypes       []string
+	AllowedMarketRuleTypes []string
+	GroupNotification      bool
+	StageNotifications     bool
+	CombinationRules       bool
+	MultiPoolMonitoring    bool
 }
 
 func (p QuotaPolicy) allowsRuleType(ruleType string) bool {
 	for _, allowed := range p.AllowedRuleTypes {
+		if allowed == ruleType {
+			return true
+		}
+	}
+	return false
+}
+
+func (p QuotaPolicy) allowsMarketRuleType(ruleType string) bool {
+	for _, allowed := range p.AllowedMarketRuleTypes {
 		if allowed == ruleType {
 			return true
 		}
@@ -116,28 +129,199 @@ func (s *Store) ApplyPaidExpiryFallback(
 			return false, nil
 		}
 
-		query := `
-			UPDATE watch_rules
-			SET run_status = 'paused'
-			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
-		`
-		args := []any{deboxUserID}
-		if exceptRuleID != nil {
-			query += " AND id <> $2"
-			args = append(args, *exceptRuleID)
-		}
-		if _, err := tx.Exec(ctx, query, args...); err != nil {
-			return false, fmt.Errorf("pause expired subscription rules: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE combination_rules
-			SET run_status = 'paused'
-			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
-		`, deboxUserID); err != nil {
-			return false, fmt.Errorf("pause expired combination rules: %w", err)
+		if err := pauseExpiredUserResources(
+			ctx,
+			tx,
+			deboxUserID,
+			exceptRuleID,
+		); err != nil {
+			return false, err
 		}
 		return true, nil
 	})
+}
+
+type expiredEntitlementUser struct {
+	DeBoxUserID     string `db:"debox_user_id"`
+	FreeWatchRuleID *int64 `db:"free_watch_rule_id"`
+}
+
+// ApplyExpiredEntitlementFallbacks provides a background safety net so paid
+// capabilities stop at expiry even when the user never opens the H5 or bot.
+func (s *Store) ApplyExpiredEntitlementFallbacks(ctx context.Context) (int64, error) {
+	return withTxValue(ctx, s.db, func(tx DBTX) (int64, error) {
+		if _, err := expireSubscriptions(ctx, tx, ""); err != nil {
+			return 0, err
+		}
+		users, err := collectMany[expiredEntitlementUser](ctx, tx, `
+			SELECT paid.debox_user_id, up.free_watch_rule_id
+			FROM (
+				SELECT DISTINCT debox_user_id
+				FROM subscriptions
+				WHERE plan_code <> 'free'
+			) paid
+			LEFT JOIN user_preferences up
+			  ON up.debox_user_id = paid.debox_user_id
+			WHERE NOT EXISTS (
+				SELECT 1
+				FROM subscriptions active
+				WHERE active.debox_user_id = paid.debox_user_id
+				  AND active.status = 'active'
+				  AND active.expires_at > NOW()
+				  AND active.plan_code <> 'free'
+			)
+			  AND (
+				EXISTS (
+					SELECT 1 FROM watch_rules wr
+					WHERE wr.debox_user_id = paid.debox_user_id
+					  AND wr.enabled = 1 AND wr.run_status = 'active'
+					  AND (up.free_watch_rule_id IS NULL OR wr.id <> up.free_watch_rule_id)
+				)
+				OR EXISTS (
+					SELECT 1 FROM combination_rules cr
+					WHERE cr.debox_user_id = paid.debox_user_id
+					  AND cr.enabled = 1 AND cr.run_status = 'active'
+				)
+				OR EXISTS (
+					SELECT 1 FROM market_rules mr
+					WHERE mr.debox_user_id = paid.debox_user_id
+					  AND mr.enabled = 1 AND mr.run_status = 'active'
+				)
+				OR EXISTS (
+					SELECT 1 FROM market_combination_rules mcr
+					WHERE mcr.debox_user_id = paid.debox_user_id
+					  AND mcr.enabled = 1 AND mcr.run_status = 'active'
+				)
+				OR EXISTS (
+					SELECT 1 FROM market_projects mp
+					WHERE mp.debox_user_id = paid.debox_user_id
+					  AND mp.status = 'active'
+				)
+			  )
+			ORDER BY paid.debox_user_id
+		`)
+		if err != nil {
+			return 0, fmt.Errorf("list expired entitlement users: %w", err)
+		}
+		var reconciled int64
+		for _, user := range users {
+			if err := lockUser(ctx, tx, user.DeBoxUserID); err != nil {
+				return reconciled, err
+			}
+			planCode, err := effectivePlanCode(ctx, tx, user.DeBoxUserID)
+			if err != nil {
+				return reconciled, err
+			}
+			if planCode != "free" {
+				continue
+			}
+			if err := pauseExpiredUserResources(
+				ctx,
+				tx,
+				user.DeBoxUserID,
+				user.FreeWatchRuleID,
+			); err != nil {
+				return reconciled, err
+			}
+			reconciled++
+		}
+		return reconciled, nil
+	})
+}
+
+func pauseExpiredUserResources(
+	ctx context.Context,
+	tx DBTX,
+	deboxUserID string,
+	exceptRuleID *int64,
+) error {
+	query := `
+		UPDATE watch_rules
+		SET run_status = 'paused', pause_reason = 'subscription_expired'
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`
+	args := []any{deboxUserID}
+	if exceptRuleID != nil {
+		query += " AND id <> $2"
+		args = append(args, *exceptRuleID)
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		return fmt.Errorf("pause expired subscription rules: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE combination_rules
+		SET run_status = 'paused', pause_reason = 'subscription_expired'
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("pause expired combination rules: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_rule_events mre
+		SET notification_status = 'skipped',
+		    notification_error = 'subscription expired before delivery'
+		FROM market_rules mr
+		WHERE mr.id = mre.market_rule_id
+		  AND mr.debox_user_id = $1
+		  AND mre.notification_status IN (
+			'pending', 'sending', 'failed', 'staged', 'combined'
+		  )
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("skip expired market rule deliveries: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_stage_windows msw
+		SET notification_status = 'skipped',
+		    notification_error = 'subscription expired before delivery',
+		    closed_at = COALESCE(closed_at, NOW()),
+		    updated_at = NOW()
+		FROM market_rules mr
+		WHERE mr.id = msw.market_rule_id
+		  AND mr.debox_user_id = $1
+		  AND msw.notification_status NOT IN ('sent', 'skipped')
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("close expired market stage windows: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_combination_windows mcw
+		SET notification_status = 'skipped',
+		    notification_error = 'subscription expired before delivery',
+		    closed_at = COALESCE(closed_at, NOW()),
+		    updated_at = NOW()
+		FROM market_combination_rules mcr
+		WHERE mcr.id = mcw.market_combination_rule_id
+		  AND mcr.debox_user_id = $1
+		  AND mcw.notification_status NOT IN ('sent', 'skipped')
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("close expired market combination windows: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_rules
+		SET run_status = 'paused',
+		    pause_reason = 'subscription_expired',
+		    updated_at = NOW()
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("pause expired market rules: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_combination_rules
+		SET run_status = 'paused',
+		    pause_reason = 'subscription_expired',
+		    updated_at = NOW()
+		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("pause expired market combinations: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE market_projects
+		SET status = 'paused',
+		    pause_reason = 'subscription_expired',
+		    updated_at = NOW()
+		WHERE debox_user_id = $1 AND status = 'active'
+	`, deboxUserID); err != nil {
+		return fmt.Errorf("pause expired market projects: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) CreateWatchRuleWithinQuota(
@@ -287,6 +471,7 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 		restored, err := collectOne[WatchRule](ctx, tx, `
 			UPDATE watch_rules
 			SET run_status = 'active',
+			    pause_reason = '',
 			    aggregation_anchor_at = CASE
 			      WHEN delivery_mode = 'stage' AND cycle_type = 'fixed' THEN NOW()
 			      ELSE NULL
@@ -315,6 +500,14 @@ func countActiveRuleSlots(ctx context.Context, db DBTX, deboxUserID string) (int
 		SELECT COUNT(*) + (
 			SELECT COUNT(*)
 			FROM combination_rules
+			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+		) + (
+			SELECT COUNT(*)
+			FROM market_rules
+			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
+		) + (
+			SELECT COUNT(*)
+			FROM market_combination_rules
 			WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 		)
 		FROM watch_rules

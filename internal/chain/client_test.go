@@ -70,6 +70,7 @@ func TestNoditBalancesPreserveRequestAndResponseShape(t *testing.T) {
 }
 
 func TestNoditRPCMethodsAndErrors(t *testing.T) {
+	var observedCU int64
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var payload struct {
 			Method string `json:"method"`
@@ -95,6 +96,9 @@ func TestNoditRPCMethodsAndErrors(t *testing.T) {
 		server.URL,
 		WithHTTPClient(server.Client()),
 		WithRPCBaseURL(server.URL),
+		WithUsageObserver(func(usage NoditUsage) {
+			observedCU += usage.CU
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
@@ -114,6 +118,9 @@ func TestNoditRPCMethodsAndErrors(t *testing.T) {
 	if _, err := client.rpc(context.Background(), profiles["bsc"], "unknown", nil); err == nil ||
 		!strings.Contains(err.Error(), "method failed") {
 		t.Fatalf("rpc error = %v", err)
+	}
+	if observedCU != 41 {
+		t.Fatalf("observed CU = %d, want 41", observedCU)
 	}
 }
 

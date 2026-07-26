@@ -16,6 +16,9 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
+	if got := names[len(names)-1]; got != "0008_market_rules_notifications.sql" {
+		t.Fatalf("latest migration = %q, want market rules notification migration", got)
+	}
 
 	requiredTables := []string{
 		"subscriptions",
@@ -33,9 +36,36 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"aggregation_window_members",
 		"rule_trigger_events",
 		"aggregate_notifications",
+		"market_projects",
+		"market_pools",
+		"market_project_pools",
+		"market_snapshots",
+		"market_rules",
+		"market_events",
+		"market_rule_events",
+		"market_holders",
+		"market_holder_snapshots",
+		"market_address_labels",
+		"market_chain_cursors",
+		"nodit_webhook_subscriptions",
+		"webhook_inbox",
+		"market_scanned_blocks",
+		"market_provider_health",
+		"market_provider_usage",
+		"market_stage_windows",
+		"market_stage_window_events",
+		"market_combination_rules",
+		"market_combination_members",
+		"market_combination_windows",
+		"market_combination_window_members",
+		"market_combination_trigger_events",
 	}
-	destructive := regexp.MustCompile(`(?im)^\s*(drop|truncate|delete|update|rename)\b`)
-	destructiveAlter := regexp.MustCompile(`(?im)^\s*alter\s+table\b.*\b(drop|rename)\b`)
+	destructive := regexp.MustCompile(
+		`(?im)^\s*(drop\s+(table|column)|truncate|delete|update|rename)\b`,
+	)
+	destructiveAlter := regexp.MustCompile(
+		`(?im)^\s*alter\s+table\b.*\b(drop\s+(column|table)|rename)\b`,
+	)
 
 	combined := ""
 	for _, name := range names {
@@ -50,7 +80,9 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		for _, line := range strings.Split(sql, "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "alter table") &&
-				!strings.Contains(line, "add column if not exists") {
+				!strings.Contains(line, "add column if not exists") &&
+				!strings.Contains(line, "drop constraint if exists") &&
+				!strings.Contains(line, "add constraint") {
 				t.Fatalf("migration %q has a non-additive ALTER TABLE: %s", name, line)
 			}
 		}
@@ -61,5 +93,9 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		if !strings.Contains(combined, "create table if not exists "+table) {
 			t.Errorf("missing idempotent creation for table %q", table)
 		}
+	}
+	if strings.Contains(combined, " double precision") ||
+		strings.Contains(combined, " real ") {
+		t.Fatal("financial market data must not use floating-point PostgreSQL types")
 	}
 }

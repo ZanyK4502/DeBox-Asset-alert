@@ -43,6 +43,13 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 		!free.AllowsRuleType(HighBalanceThreshold) {
 		t.Fatal("free plan capabilities do not match the product contract")
 	}
+	if !free.MarketQuery || free.MarketProjectLimit != 0 ||
+		len(free.AllowedMarketRules) != 0 ||
+		free.MarketPoolMode != "query" ||
+		free.FourMemeMode != "query" ||
+		free.MarketCombination {
+		t.Fatal("free market capabilities do not match the product contract")
+	}
 
 	standard, err := catalog.Get(" STANDARD ")
 	if err != nil {
@@ -65,6 +72,14 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	if free.AllowsStageNotifications() || !standard.AllowsStageNotifications() {
 		t.Fatal("stage notification capabilities do not match the product contract")
 	}
+	if standard.MarketProjectLimit != 1 ||
+		!standard.AllowsMarketRuleType(MarketPriceAbove) ||
+		standard.AllowsMarketRuleType(MarketLargeBuy) ||
+		standard.MarketPoolMode != "main" ||
+		standard.FourMemeMode != "market" ||
+		standard.MarketCombination {
+		t.Fatal("standard market capabilities do not match the product contract")
+	}
 
 	professional, err := catalog.Get("professional")
 	if err != nil {
@@ -78,6 +93,15 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 	}
 	if !professional.AllowsStageNotifications() {
 		t.Fatal("professional plan must allow stage notifications")
+	}
+	if professional.MarketProjectLimit != 5 ||
+		!professional.AllowsMarketRuleType(MarketPriceAbove) ||
+		!professional.AllowsMarketRuleType(MarketLargeBuy) ||
+		!professional.AllowsMarketRuleType(MarketHolderDecrease) ||
+		professional.MarketPoolMode != "multiple" ||
+		professional.FourMemeMode != "full" ||
+		!professional.MarketCombination {
+		t.Fatal("professional market capabilities do not match the product contract")
 	}
 	assertBillingOption(t, professional, Monthly, "15", 30)
 	assertBillingOption(t, professional, Quarterly, "42", 90)
@@ -110,6 +134,7 @@ func TestCatalogDefaultsToStandardAndReturnsCopies(t *testing.T) {
 	}
 
 	first.AllowedRuleTypes[0] = "changed"
+	first.AllowedMarketRules[0] = "changed"
 	first.BillingOptions[0].Price = "changed"
 	second, _ := catalog.Get(Standard)
 	if second.AllowedRuleTypes[0] != BalanceChange {
@@ -117,6 +142,9 @@ func TestCatalogDefaultsToStandardAndReturnsCopies(t *testing.T) {
 	}
 	if second.BillingOptions[0].Price != "12.5" {
 		t.Fatal("Get returned shared billing option slices")
+	}
+	if second.AllowedMarketRules[0] != MarketPriceAbove {
+		t.Fatal("Get returned shared market rule slices")
 	}
 }
 

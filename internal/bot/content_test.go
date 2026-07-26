@@ -186,6 +186,32 @@ func TestMenuIncludesLocalizedSummaryDetailsEntry(t *testing.T) {
 	}
 }
 
+func TestMenuIncludesLocalizedProjectTokenEntry(t *testing.T) {
+	service, _, _, _ := newTestService(t)
+	tests := []struct {
+		language string
+		label    string
+	}{
+		{language: "zh", label: "项目币监控"},
+		{language: "en", label: "Project-token Monitor"},
+	}
+	for _, test := range tests {
+		t.Run(test.language, func(t *testing.T) {
+			markup := service.menuMarkup(test.language)
+			for _, row := range markup.InlineKeyboard {
+				for _, button := range row {
+					if button.Text == test.label &&
+						button.URL != nil &&
+						*button.URL == "https://example.test#market" {
+						return
+					}
+				}
+			}
+			t.Fatalf("project-token entry missing from %s menu", test.language)
+		})
+	}
+}
+
 func TestSummaryDetailsCallbackIsLocalizedAndLinksToAggregateEvents(t *testing.T) {
 	service, _, _, _ := newTestService(t)
 	tests := []struct {

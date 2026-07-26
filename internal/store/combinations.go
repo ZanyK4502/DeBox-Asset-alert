@@ -356,6 +356,7 @@ func (s *Store) RestoreCombinationRuleWithinQuota(
 		restored, err := collectOne[CombinationRule](ctx, tx, `
 			UPDATE combination_rules
 			SET run_status = 'active',
+			    pause_reason = '',
 			    aggregation_anchor_at = CASE WHEN cycle_type = 'fixed' THEN NOW() ELSE NULL END
 			WHERE id = $1
 			RETURNING `+combinationRuleColumns,
@@ -366,7 +367,7 @@ func (s *Store) RestoreCombinationRuleWithinQuota(
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE watch_rules
-			SET run_status = 'active'
+			SET run_status = 'active', pause_reason = ''
 			WHERE debox_user_id = $1
 			  AND rule_scope = 'combination'
 			  AND id IN (

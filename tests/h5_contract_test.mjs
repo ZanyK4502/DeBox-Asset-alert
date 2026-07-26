@@ -34,6 +34,11 @@ const requiredAPIs = [
   "/api/aggregate-events",
   "/api/subscription/summary-settings",
   "/api/notification-groups",
+  "/api/market/catalog",
+  "/api/market/query",
+  "/api/market/projects",
+  "/api/market/rules/",
+  "/api/market/labels/",
 ];
 for (const endpoint of requiredAPIs) {
   assert.ok(app.includes(endpoint), `H5 no longer references required API: ${endpoint}`);

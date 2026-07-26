@@ -34,6 +34,25 @@ func TestLoadDefaults(t *testing.T) {
 		"PAYMENT_RECIPIENT_ADDRESS",
 		"PAYMENT_MODE",
 		"COMPLIMENTARY_WALLET_ADDRESSES",
+		"MARKET_COLLECTOR_ENABLED",
+		"MARKET_RULE_ENGINE_ENABLED",
+		"MARKET_RULE_INTERVAL",
+		"MARKET_HOLDER_REFRESH_INTERVAL",
+		"DEXSCREENER_BASE_URL",
+		"NODIT_WEBHOOK_SIGNING_KEY",
+		"NODIT_WEBHOOK_SIGNING_KEYS_JSON",
+		"MARKET_WEBHOOK_AUTO_REPAIR",
+		"MARKET_CONFIRMATION_DEPTH",
+		"MARKET_SCAN_BATCH_SIZE",
+		"MARKET_INITIAL_LOOKBACK",
+		"MARKET_REORG_LOOKBACK",
+		"MARKET_INBOX_INTERVAL",
+		"MARKET_SCAN_INTERVAL",
+		"MARKET_SNAPSHOT_INTERVAL",
+		"MARKET_DISCOVERY_INTERVAL",
+		"MARKET_HEALTH_INTERVAL",
+		"MARKET_CLEANUP_INTERVAL",
+		"NODIT_MONTHLY_CU_LIMIT",
 	} {
 		t.Setenv(name, "")
 	}
@@ -55,6 +74,17 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ReceiveMode != defaultReceiveMode {
 		t.Fatalf("ReceiveMode = %q, want %q", cfg.ReceiveMode, defaultReceiveMode)
 	}
+	if cfg.MarketCollectorEnabled || cfg.MarketRuleEngineEnabled ||
+		cfg.MarketRuleInterval.String() != "5s" ||
+		cfg.MarketHolderRefreshInterval.String() != "15m0s" {
+		t.Fatalf(
+			"market worker defaults = collector:%v rules:%v interval:%s holders:%s",
+			cfg.MarketCollectorEnabled,
+			cfg.MarketRuleEngineEnabled,
+			cfg.MarketRuleInterval,
+			cfg.MarketHolderRefreshInterval,
+		)
+	}
 	if cfg.DeBoxOpenAPIBase != defaultDeBoxAPI || cfg.ChainKey != defaultChainKey || cfg.NoditBaseURL != defaultNoditAPI {
 		t.Fatalf("external API defaults = %q/%q/%q", cfg.DeBoxOpenAPIBase, cfg.ChainKey, cfg.NoditBaseURL)
 	}
@@ -70,6 +100,23 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.SubscriptionPrice != defaultPlanPrice || cfg.SubscriptionDays != defaultPlanDays {
 		t.Fatalf("subscription price/days = %s/%d", cfg.SubscriptionPrice, cfg.SubscriptionDays)
+	}
+}
+
+func TestLoadReadsPerWebhookSigningKeys(t *testing.T) {
+	t.Setenv(
+		"NODIT_WEBHOOK_SIGNING_KEYS_JSON",
+		`{"v2-v3":" first ","infinity":"second"}`,
+	)
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.NoditWebhookSigningKeys["v2-v3"] != "first" ||
+		cfg.NoditWebhookSigningKeys["infinity"] != "second" {
+		t.Fatalf("unexpected webhook signing keys")
 	}
 }
 

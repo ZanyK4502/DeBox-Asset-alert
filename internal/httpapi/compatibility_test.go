@@ -90,6 +90,7 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				"balance_threshold", "balance_threshold_high",
 			},
 			AllowedRules: ruleTypes[:5], PrivateNotification: true,
+			MarketQuery: true, MarketPoolMode: "query", FourMemeMode: "query",
 			Description: "1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。",
 		},
 		{
@@ -104,9 +105,12 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				"balance_change", "incoming", "outgoing",
 				"balance_threshold", "balance_threshold_high", "approval_change",
 			},
-			AllowedRules: ruleTypes[:6], PrivateNotification: true, DailySummary: true,
+			MarketProjectLimit: 1,
+			AllowedMarketRules: expectedStandardMarketRuleTypes(),
+			AllowedRules:       ruleTypes[:6], PrivateNotification: true, DailySummary: true,
 			SummaryTargets: []string{"private"},
-			Description:    "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
+			MarketQuery:    true, MarketPoolMode: "main", FourMemeMode: "market",
+			Description: "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
 		},
 		{
 			Code: "professional", Name: "专业版", Price: "15", Asset: "USDT", Days: 30,
@@ -121,9 +125,13 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				"balance_threshold", "balance_threshold_high",
 				"approval_change", "address_interaction",
 			},
-			AllowedRules: ruleTypes, PrivateNotification: true, GroupNotification: true,
+			MarketProjectLimit: 5,
+			AllowedMarketRules: expectedProfessionalMarketRuleTypes(),
+			AllowedRules:       ruleTypes, PrivateNotification: true, GroupNotification: true,
 			DailySummary: true, SummaryTargets: []string{"private", "group"},
-			Description: "适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
+			MarketQuery: true, MarketPoolMode: "multiple", FourMemeMode: "full",
+			MarketCombination: true,
+			Description:       "适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
 		},
 	}
 	if !reflect.DeepEqual(planPayload.RuleTypes, ruleTypes) {
@@ -146,6 +154,39 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 	if !reflect.DeepEqual(chains, expectedChains) {
 		t.Fatalf("chain contract changed:\ngot:  %#v\nwant: %#v", chains, expectedChains)
 	}
+}
+
+func expectedStandardMarketRuleTypes() []string {
+	return []string{
+		"market_price_above",
+		"market_price_below",
+		"market_price_increase",
+		"market_price_decrease",
+		"market_liquidity_below",
+		"market_liquidity_decrease",
+		"market_volume_above",
+		"market_volume_spike",
+		"market_trade_imbalance",
+	}
+}
+
+func expectedProfessionalMarketRuleTypes() []string {
+	return append(expectedStandardMarketRuleTypes(),
+		"market_large_buy",
+		"market_large_sell",
+		"market_consecutive_large_buy",
+		"market_consecutive_large_sell",
+		"market_liquidity_added",
+		"market_liquidity_removed",
+		"market_new_pool",
+		"market_holder_increase",
+		"market_holder_decrease",
+		"market_holder_rank_entered",
+		"market_holder_rank_exited",
+		"market_four_meme_large_trade",
+		"market_four_meme_progress",
+		"market_four_meme_migration",
+	)
 }
 
 func expectedRuleTypes() []plans.RuleType {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,20 @@ var (
 		"approval_change":        "Approval change",
 		"address_interaction":    "Specified address interaction",
 	}
+	marketEventLabels = map[string]string{
+		"buy": "买入", "sell": "卖出",
+		"liquidity_added": "加池", "liquidity_removed": "撤池",
+		"holder_increase": "大户增持", "holder_decrease": "大户减持",
+		"holder_rank_entered": "进入大户榜", "holder_rank_exited": "退出大户榜",
+		"pool_initialized": "新交易池", "migrated": "迁移外盘",
+	}
+	marketEventLabelsEN = map[string]string{
+		"buy": "Buy", "sell": "Sell",
+		"liquidity_added": "Liquidity added", "liquidity_removed": "Liquidity removed",
+		"holder_increase": "Holder increase", "holder_decrease": "Holder decrease",
+		"holder_rank_entered": "Entered holder ranking", "holder_rank_exited": "Exited holder ranking",
+		"pool_initialized": "New pool", "migrated": "Migration",
+	}
 )
 
 type Repository interface {
@@ -48,6 +63,7 @@ type Repository interface {
 	MarkDailySummaryTargetSent(context.Context, int64, time.Time, store.DailySummaryTarget) error
 	DailySummaryStatistics(context.Context, string, time.Time, time.Time) (store.SummaryStatistics, error)
 	ListSummaryRecentEvents(context.Context, string, time.Time, time.Time, int) ([]store.SummaryEvent, error)
+	ListSummaryRecentMarketEvents(context.Context, string, time.Time, time.Time, int) ([]store.MarketSummaryEvent, error)
 	MarkScheduledPushSent(context.Context, int64, string, time.Time) error
 }
 
@@ -271,7 +287,24 @@ func (e *Executor) summaryText(
 	if err != nil {
 		return "", err
 	}
-	return buildSummaryText(subscription, periodStart, periodEnd, statistics, events), nil
+	marketEvents, err := e.deps.Repository.ListSummaryRecentMarketEvents(
+		ctx,
+		subscription.DeBoxUserID,
+		periodStart,
+		periodEnd,
+		recentEventLimit,
+	)
+	if err != nil {
+		return "", err
+	}
+	return buildSummaryText(
+		subscription,
+		periodStart,
+		periodEnd,
+		statistics,
+		events,
+		marketEvents,
+	), nil
 }
 
 func buildSummaryText(
@@ -280,6 +313,7 @@ func buildSummaryText(
 	periodEnd time.Time,
 	statistics store.SummaryStatistics,
 	events []store.SummaryEvent,
+	marketEvents []store.MarketSummaryEvent,
 ) string {
 	english := normalizeLanguage(subscription.DailySummaryLanguage) == "en"
 	periodText := periodLabel(
@@ -290,6 +324,7 @@ func buildSummaryText(
 	)
 	summaryLabel := strings.TrimSpace(subscription.DailySummaryLabel)
 	recentText := recentEventsText(events, english)
+	recentMarketText := recentMarketEventsText(marketEvents, english)
 
 	if english {
 		title := "DeBox Asset Alert Daily Summary"
@@ -312,12 +347,16 @@ func buildSummaryText(
 				"Running rules: %d<br/>"+
 				"Rules: Assets %d, approvals %d, interactions %d<br/>"+
 				"Events: Assets %d, approvals %d, interactions %d<br/>"+
+				"Market monitoring: %d projects, %d running rules<br/>"+
+				"Market trades: %d buys ($%s), %d sells ($%s), net buy $%s<br/>"+
+				"Market events: %d total, %d liquidity, %d holder changes<br/>"+
 				"Risk notice: %s<br/><br/>"+
-				"<b>Recent events</b><br/>%s",
+				"<b>Recent address events</b><br/>%s<br/><br/>"+
+				"<b>Recent market events</b><br/>%s",
 			title,
 			html.EscapeString(periodText),
 			statistics.EventCount,
-			statistics.FailedNotificationCount,
+			statistics.FailedNotificationCount+statistics.MarketFailedNotificationCount,
 			statistics.WalletCount,
 			statistics.RuleCount,
 			statistics.AssetRuleCount,
@@ -326,8 +365,19 @@ func buildSummaryText(
 			statistics.AssetEventCount,
 			statistics.ApprovalEventCount,
 			statistics.InteractionEventCount,
+			statistics.MarketProjectCount,
+			statistics.MarketRuleCount,
+			statistics.MarketBuyCount,
+			moneyText(statistics.MarketBuyUSD),
+			statistics.MarketSellCount,
+			moneyText(statistics.MarketSellUSD),
+			signedMoneyText(statistics.MarketNetBuyUSD),
+			statistics.MarketEventCount,
+			statistics.LiquidityEventCount,
+			statistics.HolderEventCount,
 			html.EscapeString(alertHint),
 			recentText,
+			recentMarketText,
 		)
 	}
 
@@ -351,12 +401,16 @@ func buildSummaryText(
 			"运行规则数：%d<br/>"+
 			"资产规则：%d，授权规则：%d，交互规则：%d<br/>"+
 			"事件概览：资产 %d，授权 %d，交互 %d<br/>"+
+			"市场监控：%d 个项目币，%d 条运行规则<br/>"+
+			"市场成交：买入 %d 笔（$%s），卖出 %d 笔（$%s），净买入 $%s<br/>"+
+			"市场事件：共 %d 条，流动性 %d 条，大户变化 %d 条<br/>"+
 			"异常提醒：%s<br/><br/>"+
-			"<b>最近事件</b><br/>%s",
+			"<b>最近地址事件</b><br/>%s<br/><br/>"+
+			"<b>最近市场事件</b><br/>%s",
 		title,
 		html.EscapeString(periodText),
 		statistics.EventCount,
-		statistics.FailedNotificationCount,
+		statistics.FailedNotificationCount+statistics.MarketFailedNotificationCount,
 		statistics.WalletCount,
 		statistics.RuleCount,
 		statistics.AssetRuleCount,
@@ -365,9 +419,79 @@ func buildSummaryText(
 		statistics.AssetEventCount,
 		statistics.ApprovalEventCount,
 		statistics.InteractionEventCount,
+		statistics.MarketProjectCount,
+		statistics.MarketRuleCount,
+		statistics.MarketBuyCount,
+		moneyText(statistics.MarketBuyUSD),
+		statistics.MarketSellCount,
+		moneyText(statistics.MarketSellUSD),
+		signedMoneyText(statistics.MarketNetBuyUSD),
+		statistics.MarketEventCount,
+		statistics.LiquidityEventCount,
+		statistics.HolderEventCount,
 		html.EscapeString(alertHint),
 		recentText,
+		recentMarketText,
 	)
+}
+
+func recentMarketEventsText(events []store.MarketSummaryEvent, english bool) string {
+	if len(events) == 0 {
+		if english {
+			return "No market events were recorded this period."
+		}
+		return "本期暂无市场事件。"
+	}
+	labels := marketEventLabels
+	if english {
+		labels = marketEventLabelsEN
+	}
+	lines := make([]string, 0, min(len(events), recentEventLimit))
+	for _, event := range events[:min(len(events), recentEventLimit)] {
+		label := labels[event.EventType]
+		if label == "" {
+			label = event.EventType
+		}
+		detail := ""
+		if event.USDValue != nil && strings.TrimSpace(*event.USDValue) != "" {
+			detail = " $" + moneyText(*event.USDValue)
+		} else if event.TokenAmount != nil && strings.TrimSpace(*event.TokenAmount) != "" {
+			detail = " " + *event.TokenAmount
+		}
+		wallet := ""
+		if event.WalletAddress != nil && strings.TrimSpace(*event.WalletAddress) != "" {
+			wallet = " · " + shortAddress(*event.WalletAddress)
+		}
+		lines = append(lines, fmt.Sprintf(
+			"- %s · %s%s%s",
+			html.EscapeString(event.TokenSymbol),
+			html.EscapeString(label),
+			html.EscapeString(detail),
+			html.EscapeString(wallet),
+		))
+	}
+	return strings.Join(lines, "<br/>")
+}
+
+func moneyText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "0"
+	}
+	number, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return value
+	}
+	text := number.FloatString(2)
+	return strings.TrimRight(strings.TrimRight(text, "0"), ".")
+}
+
+func signedMoneyText(value string) string {
+	value = moneyText(value)
+	if value != "0" && !strings.HasPrefix(value, "-") {
+		return "+" + value
+	}
+	return value
 }
 
 func recentEventsText(events []store.SummaryEvent, english bool) string {

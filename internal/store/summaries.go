@@ -63,7 +63,22 @@ func (s *Store) UpdateDailySummarySettings(
 		); err != nil {
 			return Subscription{}, fmt.Errorf("replace daily summary targets: %w", err)
 		}
-		for _, target := range settings.Targets {
+		targets := settings.Targets
+		if settings.Enabled && len(targets) == 0 {
+			chatType := settings.ChatType
+			chatID := settings.ChatID
+			if chatType == "private" {
+				chatID = deboxUserID
+			}
+			if chatID != "" {
+				targets = []DailySummaryTarget{{
+					SubscriptionID: subscription.ID,
+					ChatType:       chatType,
+					ChatID:         chatID,
+				}}
+			}
+		}
+		for _, target := range targets {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO daily_summary_targets (subscription_id, chat_type, chat_id)
 				VALUES ($1, $2, $3)

@@ -28,6 +28,30 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"combination_rule_members",
 		"combination_rules",
 		"complimentary_grants",
+		"daily_summary_deliveries",
+		"daily_summary_targets",
+		"market_address_labels",
+		"market_chain_cursors",
+		"market_combination_members",
+		"market_combination_rules",
+		"market_combination_trigger_events",
+		"market_combination_window_members",
+		"market_combination_windows",
+		"market_events",
+		"market_holder_snapshots",
+		"market_holders",
+		"market_pools",
+		"market_project_pools",
+		"market_projects",
+		"market_provider_health",
+		"market_provider_usage",
+		"market_rule_events",
+		"market_rules",
+		"market_scanned_blocks",
+		"market_snapshots",
+		"market_stage_window_events",
+		"market_stage_windows",
+		"nodit_webhook_subscriptions",
 		"notification_groups",
 		"orders",
 		"rule_trigger_events",
@@ -35,6 +59,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"subscriptions",
 		"user_preferences",
 		"watch_rules",
+		"webhook_inbox",
 	}
 	rows, err := pool.Query(context.Background(), `
 		SELECT table_name
@@ -55,6 +80,609 @@ func TestPostgresMigrationContract(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(expected) {
 		t.Fatalf("migrated tables = %v, want %v", got, expected)
+	}
+	var latestVersion int64
+	var latestName string
+	if err := pool.QueryRow(context.Background(), `
+		SELECT version, name
+		FROM schema_migrations
+		ORDER BY version DESC
+		LIMIT 1
+	`).Scan(&latestVersion, &latestName); err != nil {
+		t.Fatalf("read latest migration: %v", err)
+	}
+	if latestVersion != 8 || latestName != "0008_market_rules_notifications.sql" {
+		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
+	}
+}
+
+func TestPostgresConcurrentMarketProjectQuota(t *testing.T) {
+	store, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	const userID = "integration-market-project-quota"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO subscriptions (
+			debox_user_id, plan_code, status, starts_at, expires_at
+		)
+		VALUES ($1, 'standard', 'active', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 day')
+	`, userID); err != nil {
+		t.Fatalf("create standard subscription: %v", err)
+	}
+	policy := QuotaPolicy{
+		PlanCode:               "standard",
+		RuleLimit:              10,
+		MarketProjectLimit:     1,
+		AllowedMarketRuleTypes: []string{"market_price_above"},
+	}
+
+	const attempts = 8
+	var successes atomic.Int32
+	errorsSeen := make(chan error, attempts)
+	var workers sync.WaitGroup
+	for index := range attempts {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			address := fmt.Sprintf("0x%040x", index+1)
+			_, err := store.CreateMarketProjectWithinQuota(ctx, CreateMarketProjectParams{
+				DeBoxUserID:   userID,
+				ChainKey:      "bsc",
+				ChainID:       56,
+				TokenAddress:  address,
+				TokenName:     fmt.Sprintf("Token %d", index+1),
+				TokenSymbol:   fmt.Sprintf("T%d", index+1),
+				TokenDecimals: 18,
+			}, policy)
+			if err == nil {
+				successes.Add(1)
+				return
+			}
+			errorsSeen <- err
+		}(index)
+	}
+	workers.Wait()
+	close(errorsSeen)
+
+	if got := successes.Load(); got != 1 {
+		t.Fatalf("successful concurrent market projects = %d, want 1", got)
+	}
+	for err := range errorsSeen {
+		if !errors.Is(err, ErrMarketProjectLimitReached) {
+			t.Fatalf(
+				"concurrent market project error = %v, want ErrMarketProjectLimitReached",
+				err,
+			)
+		}
+	}
+}
+
+func TestPostgresWalletAndMarketRulesShareQuota(t *testing.T) {
+	store, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	const userID = "integration-shared-rule-quota"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO subscriptions (
+			debox_user_id, plan_code, status, starts_at, expires_at
+		)
+		VALUES ($1, 'standard', 'active', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 day')
+	`, userID); err != nil {
+		t.Fatalf("create standard subscription: %v", err)
+	}
+	policy := QuotaPolicy{
+		PlanCode:               "standard",
+		WalletLimit:            3,
+		RuleLimit:              10,
+		MarketProjectLimit:     1,
+		AllowedRuleTypes:       []string{"balance_change"},
+		AllowedMarketRuleTypes: []string{"market_price_above"},
+	}
+	project, err := store.CreateMarketProjectWithinQuota(ctx, CreateMarketProjectParams{
+		DeBoxUserID:   userID,
+		ChainKey:      "bsc",
+		ChainID:       56,
+		TokenAddress:  "0x1111111111111111111111111111111111111111",
+		TokenName:     "Integration Token",
+		TokenSymbol:   "INT",
+		TokenDecimals: 18,
+	}, policy)
+	if err != nil {
+		t.Fatalf("create market project: %v", err)
+	}
+	for index := 0; index < 9; index++ {
+		if _, err := store.CreateWatchRuleWithinQuota(ctx, CreateWatchRuleParams{
+			DeBoxUserID:          userID,
+			ChainKey:             "bsc",
+			ChainID:              56,
+			WalletAddress:        "0x2222222222222222222222222222222222222222",
+			RuleType:             "balance_change",
+			Threshold:            fmt.Sprint(index),
+			NotificationChatID:   userID,
+			NotificationChatType: "private",
+		}, policy); err != nil {
+			t.Fatalf("create wallet rule %d: %v", index+1, err)
+		}
+	}
+	if _, err := store.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{
+		DeBoxUserID:          userID,
+		MarketProjectID:      project.ID,
+		RuleType:             "market_price_above",
+		ThresholdValue:       "1.25",
+		ThresholdUnit:        "usd",
+		NotificationChatID:   userID,
+		NotificationChatType: "private",
+	}, policy); err != nil {
+		t.Fatalf("create tenth shared rule: %v", err)
+	}
+	if _, err := store.CreateWatchRuleWithinQuota(ctx, CreateWatchRuleParams{
+		DeBoxUserID:          userID,
+		ChainKey:             "bsc",
+		ChainID:              56,
+		WalletAddress:        "0x2222222222222222222222222222222222222222",
+		RuleType:             "balance_change",
+		Threshold:            "99",
+		NotificationChatID:   userID,
+		NotificationChatType: "private",
+	}, policy); !errors.Is(err, ErrRuleLimitReached) {
+		t.Fatalf("eleventh shared rule error = %v, want ErrRuleLimitReached", err)
+	}
+}
+
+func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
+	database, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	const (
+		firstUser   = "integration-market-shared-1"
+		secondUser  = "integration-market-shared-2"
+		token       = "0x1111111111111111111111111111111111111111"
+		wbnb        = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
+		poolAddress = "0x3333333333333333333333333333333333333333"
+		holder      = "0x4444444444444444444444444444444444444444"
+	)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO subscriptions (
+			debox_user_id, plan_code, status, starts_at, expires_at
+		)
+		VALUES
+			($1, 'standard', 'active', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 day'),
+			($2, 'standard', 'active', NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 day')
+	`, firstUser, secondUser); err != nil {
+		t.Fatalf("create shared market subscriptions: %v", err)
+	}
+	policy := QuotaPolicy{
+		PlanCode:               "standard",
+		RuleLimit:              10,
+		MarketProjectLimit:     1,
+		AllowedMarketRuleTypes: []string{"market_price_above"},
+	}
+	createProject := func(userID string) MarketProject {
+		project, err := database.CreateMarketProjectWithinQuota(ctx, CreateMarketProjectParams{
+			DeBoxUserID:   userID,
+			ChainKey:      "bsc",
+			ChainID:       56,
+			TokenAddress:  token,
+			TokenName:     "Shared Token",
+			TokenSymbol:   "SHR",
+			TokenDecimals: 18,
+		}, policy)
+		if err != nil {
+			t.Fatalf("create shared project for %s: %v", userID, err)
+		}
+		return project
+	}
+	firstProject := createProject(firstUser)
+	secondProject := createProject(secondUser)
+	label, err := database.UpsertMarketAddressLabel(ctx, UpsertMarketAddressLabelParams{
+		DeBoxUserID:     firstUser,
+		MarketProjectID: firstProject.ID,
+		Address:         holder,
+		LabelType:       "team",
+		Label:           "Team wallet",
+		Excluded:        true,
+	})
+	if err != nil || label.DeBoxUserID != firstUser || label.Excluded != 1 {
+		t.Fatalf("upsert user market label = %#v err:%v", label, err)
+	}
+	labels, err := database.ListMarketAddressLabels(ctx, firstProject.ID, firstUser)
+	if err != nil || len(labels) != 1 || labels[0].ID != label.ID {
+		t.Fatalf("list user market labels = %#v err:%v", labels, err)
+	}
+	labels, err = database.ListMarketAddressLabels(ctx, firstProject.ID, secondUser)
+	if err != nil || len(labels) != 0 {
+		t.Fatalf("cross-user market labels = %#v err:%v", labels, err)
+	}
+
+	marketPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		ChainKey:        "bsc",
+		ChainID:         56,
+		Protocol:        "pancakeswap",
+		ProtocolVersion: "v2",
+		PoolKey:         poolAddress,
+		PoolAddress:     pointerOf(poolAddress),
+		Token0Address:   token,
+		Token0Symbol:    "SHR",
+		Token0Decimals:  18,
+		Token1Address:   wbnb,
+		Token1Symbol:    "WBNB",
+		Token1Decimals:  18,
+		LiquidityUSD:    "100000",
+	})
+	if err != nil {
+		t.Fatalf("upsert shared market pool: %v", err)
+	}
+	fourMemePool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		ChainKey:        "bsc",
+		ChainID:         56,
+		Protocol:        "fourmeme",
+		ProtocolVersion: "bonding",
+		PoolKey:         token + ":4meme",
+		PoolAddress:     nil,
+		Token0Address:   token,
+		Token0Symbol:    "SHR",
+		Token0Decimals:  18,
+		Token1Address:   wbnb,
+		Token1Symbol:    "WBNB",
+		Token1Decimals:  18,
+		LiquidityUSD:    "0",
+	})
+	if err != nil || fourMemePool.PoolKey != token+":4meme" ||
+		fourMemePool.PoolAddress != nil {
+		t.Fatalf("upsert Four.meme pseudo pool = %#v err:%v", fourMemePool, err)
+	}
+	for _, project := range []MarketProject{firstProject, secondProject} {
+		if _, err := database.LinkMarketProjectPool(ctx, LinkMarketProjectPoolParams{
+			DeBoxUserID:     project.DeBoxUserID,
+			MarketProjectID: project.ID,
+			MarketPoolID:    marketPool.ID,
+			Selected:        true,
+			IsPrimary:       true,
+			DiscoverySource: "integration",
+		}); err != nil {
+			t.Fatalf("link shared pool for %s: %v", project.DeBoxUserID, err)
+		}
+	}
+	secondPoolAddress := "0x5555555555555555555555555555555555555555"
+	secondPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		ChainKey:        "bsc",
+		ChainID:         56,
+		Protocol:        "pancakeswap",
+		ProtocolVersion: "v3",
+		PoolKey:         secondPoolAddress,
+		PoolAddress:     &secondPoolAddress,
+		Token0Address:   token,
+		Token0Symbol:    "SHR",
+		Token0Decimals:  18,
+		Token1Address:   wbnb,
+		Token1Symbol:    "WBNB",
+		Token1Decimals:  18,
+		LiquidityUSD:    "50000",
+	})
+	if err != nil {
+		t.Fatalf("upsert second market pool: %v", err)
+	}
+	if _, err := database.LinkMarketProjectPool(ctx, LinkMarketProjectPoolParams{
+		DeBoxUserID:     firstUser,
+		MarketProjectID: firstProject.ID,
+		MarketPoolID:    secondPool.ID,
+		DiscoverySource: "integration",
+	}); err != nil {
+		t.Fatalf("discover second market pool: %v", err)
+	}
+	if _, err := database.LinkMarketProjectPoolWithinQuota(
+		ctx,
+		LinkMarketProjectPoolParams{
+			DeBoxUserID:     firstUser,
+			MarketProjectID: firstProject.ID,
+			MarketPoolID:    secondPool.ID,
+			Selected:        true,
+			DiscoverySource: "integration",
+		},
+		policy,
+	); err != nil {
+		t.Fatalf("select standard plan main pool: %v", err)
+	}
+	var selectedPoolCount, mainPoolID int64
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*)
+			 FROM market_project_pools
+			 WHERE market_project_id = $1 AND selected = 1),
+			main_pool_id
+		FROM market_projects
+		WHERE id = $1
+	`, firstProject.ID).Scan(&selectedPoolCount, &mainPoolID); err != nil {
+		t.Fatalf("read standard selected pools: %v", err)
+	}
+	if selectedPoolCount != 1 || mainPoolID != secondPool.ID {
+		t.Fatalf(
+			"standard selected pools = count:%d main:%d, want count:1 main:%d",
+			selectedPoolCount,
+			mainPoolID,
+			secondPool.ID,
+		)
+	}
+
+	if _, err := database.CreateMarketSnapshot(ctx, CreateMarketSnapshotParams{
+		ChainKey:     "bsc",
+		ChainID:      56,
+		TokenAddress: token,
+		MarketPoolID: marketPool.ID,
+		PriceUSD:     pointerOf("0.0125"),
+		LiquidityUSD: pointerOf("100000"),
+		Source:       "integration",
+	}); err != nil {
+		t.Fatalf("create shared market snapshot: %v", err)
+	}
+	if _, err := database.UpsertMarketHolder(ctx, UpsertMarketHolderParams{
+		ChainKey:       "bsc",
+		ChainID:        56,
+		TokenAddress:   token,
+		HolderAddress:  holder,
+		BalanceRaw:     "1000000000000000000000",
+		Balance:        "1000",
+		SupplyPercent:  pointerOf("1"),
+		Rank:           pointerOf(int32(1)),
+		Source:         "integration",
+		RecordSnapshot: true,
+	}); err != nil {
+		t.Fatalf("upsert shared market holder: %v", err)
+	}
+	event, created, err := database.CreateMarketEvent(ctx, CreateMarketEventParams{
+		MarketPoolID: pointerOf(marketPool.ID),
+		ChainKey:     "bsc",
+		ChainID:      56,
+		TokenAddress: token,
+		EventType:    "buy",
+		EventKey:     "integration:shared:buy:1",
+		USDValue:     pointerOf("2500"),
+		Source:       "integration",
+		Confidence:   "1",
+		OccurredAt:   time.Now().UTC(),
+	})
+	if err != nil || !created {
+		t.Fatalf("create shared market event = created:%v err:%v", created, err)
+	}
+	duplicate, created, err := database.CreateMarketEvent(ctx, CreateMarketEventParams{
+		MarketPoolID: pointerOf(marketPool.ID),
+		ChainKey:     "bsc",
+		ChainID:      56,
+		TokenAddress: token,
+		EventType:    "buy",
+		EventKey:     "integration:shared:buy:1",
+		USDValue:     pointerOf("2500"),
+		Source:       "integration",
+		Confidence:   "1",
+		OccurredAt:   time.Now().UTC(),
+	})
+	if err != nil || created || duplicate.ID != event.ID {
+		t.Fatalf("duplicate shared event = %#v created:%v err:%v", duplicate, created, err)
+	}
+	for _, project := range []MarketProject{firstProject, secondProject} {
+		rule, err := database.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{
+			DeBoxUserID:          project.DeBoxUserID,
+			MarketProjectID:      project.ID,
+			RuleType:             "market_price_above",
+			ThresholdValue:       "0.01",
+			ThresholdUnit:        "usd",
+			NotificationChatID:   project.DeBoxUserID,
+			NotificationChatType: "private",
+		}, policy)
+		if err != nil {
+			t.Fatalf("create distributed market rule for %s: %v", project.DeBoxUserID, err)
+		}
+		ruleEvent, inserted, err := database.CreateMarketRuleEvent(
+			ctx,
+			CreateMarketRuleEventParams{
+				MarketRuleID:  rule.ID,
+				MarketEventID: event.ID,
+				TriggerKey:    fmt.Sprintf("rule:%d:event:%d", rule.ID, event.ID),
+			},
+		)
+		if err != nil || !inserted {
+			t.Fatalf(
+				"create distributed rule event for %s = %#v inserted:%v err:%v",
+				project.DeBoxUserID,
+				ruleEvent,
+				inserted,
+				err,
+			)
+		}
+		duplicateRuleEvent, inserted, err := database.CreateMarketRuleEvent(
+			ctx,
+			CreateMarketRuleEventParams{
+				MarketRuleID:  rule.ID,
+				MarketEventID: event.ID,
+				TriggerKey:    fmt.Sprintf("rule:%d:event:%d", rule.ID, event.ID),
+			},
+		)
+		if err != nil || inserted || duplicateRuleEvent.ID != ruleEvent.ID {
+			t.Fatalf(
+				"duplicate distributed rule event for %s = %#v inserted:%v err:%v",
+				project.DeBoxUserID,
+				duplicateRuleEvent,
+				inserted,
+				err,
+			)
+		}
+	}
+
+	for _, test := range []struct {
+		userID    string
+		projectID int64
+	}{
+		{firstUser, firstProject.ID},
+		{secondUser, secondProject.ID},
+	} {
+		snapshots, err := database.ListMarketSnapshots(ctx, test.projectID, test.userID, 10)
+		if err != nil || len(snapshots) != 1 {
+			t.Fatalf("shared snapshots for %s = %v err:%v", test.userID, snapshots, err)
+		}
+		holders, err := database.ListMarketHolders(ctx, test.projectID, test.userID, false, 10)
+		if err != nil || len(holders) != 1 || holders[0].HolderAddress != holder {
+			t.Fatalf("shared holders for %s = %v err:%v", test.userID, holders, err)
+		}
+		events, err := database.ListMarketEvents(ctx, test.projectID, test.userID, 0, 10)
+		if err != nil || len(events) != 1 || events[0].ID != event.ID {
+			t.Fatalf("shared events for %s = %v err:%v", test.userID, events, err)
+		}
+	}
+	events, err := database.ListMarketEvents(ctx, firstProject.ID, secondUser, 0, 10)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("cross-user market event access = %v err:%v", events, err)
+	}
+}
+
+func TestPostgresMarketIngestionStateIsIdempotent(t *testing.T) {
+	database, _ := openIntegrationStore(t)
+	ctx := context.Background()
+
+	cursor, err := database.AdvanceMarketChainCursor(ctx, AdvanceMarketChainCursorParams{
+		ChainKey:        "bsc",
+		ChainID:         56,
+		CursorKey:       "market-logs",
+		NextBlockNumber: 101,
+		SafeBlockNumber: 95,
+		Status:          "active",
+	})
+	if err != nil || cursor.NextBlockNumber != 101 || cursor.SafeBlockNumber != 95 {
+		t.Fatalf("initial market cursor = %#v err:%v", cursor, err)
+	}
+	cursor, err = database.AdvanceMarketChainCursor(ctx, AdvanceMarketChainCursorParams{
+		ChainKey:        "bsc",
+		ChainID:         56,
+		CursorKey:       "market-logs",
+		NextBlockNumber: 90,
+		SafeBlockNumber: 80,
+		Status:          "active",
+	})
+	if err != nil || cursor.NextBlockNumber != 101 || cursor.SafeBlockNumber != 95 {
+		t.Fatalf("non-regressing market cursor = %#v err:%v", cursor, err)
+	}
+	cursor, err = database.RewindMarketChainCursor(
+		ctx,
+		56,
+		"market-logs",
+		88,
+		nil,
+		"integration reorg",
+	)
+	if err != nil || cursor.NextBlockNumber != 88 || cursor.SafeBlockNumber != 88 {
+		t.Fatalf("rewound market cursor = %#v err:%v", cursor, err)
+	}
+
+	syncedAt := time.Now().UTC()
+	webhook, err := database.UpsertNoditWebhookSubscription(
+		ctx,
+		UpsertNoditWebhookSubscriptionParams{
+			Provider:        "nodit",
+			ExternalID:      pointerOf("integration-webhook"),
+			ChainKey:        "bsc",
+			ChainID:         56,
+			EventCategory:   "v2-v3-swaps",
+			CallbackURLHash: "sha256:integration",
+			SecretReference: "env:NODIT_WEBHOOK_SECRET",
+			Status:          "active",
+			Configuration:   []byte(`{"event":"LOG"}`),
+			LastSyncedAt:    &syncedAt,
+		},
+	)
+	if err != nil || webhook.Status != "active" {
+		t.Fatalf("upsert webhook subscription = %#v err:%v", webhook, err)
+	}
+	params := CreateWebhookInboxParams{
+		WebhookSubscriptionID: &webhook.ID,
+		Provider:              "nodit",
+		DeliveryID:            "delivery-1",
+		DedupeKey:             "delivery-1",
+		SignatureValid:        true,
+		Headers:               []byte(`{"content-type":"application/json"}`),
+		RawBody:               []byte(`{"event":"LOG"}`),
+		Payload:               []byte(`{"event":"LOG"}`),
+	}
+	message, inserted, err := database.CreateWebhookInboxMessage(ctx, params)
+	if err != nil || !inserted || message.ProcessingStatus != "pending" {
+		t.Fatalf("create webhook inbox = %#v inserted:%v err:%v", message, inserted, err)
+	}
+	duplicate, inserted, err := database.CreateWebhookInboxMessage(ctx, params)
+	if err != nil || inserted || duplicate.ID != message.ID {
+		t.Fatalf("duplicate webhook inbox = %#v inserted:%v err:%v", duplicate, inserted, err)
+	}
+	claimed, err := database.ClaimWebhookInboxMessages(ctx, 10)
+	if err != nil || len(claimed) != 1 ||
+		claimed[0].ID != message.ID ||
+		claimed[0].ProcessingStatus != "processing" ||
+		claimed[0].Attempts != 1 {
+		t.Fatalf("claimed webhook inbox = %#v err:%v", claimed, err)
+	}
+	processed, err := database.MarkWebhookInboxProcessed(ctx, message.ID)
+	if err != nil || processed.ProcessingStatus != "processed" ||
+		processed.ProcessedAt == nil {
+		t.Fatalf("processed webhook inbox = %#v err:%v", processed, err)
+	}
+
+	blockHashA := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	blockHashB := "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	parentHash := "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	if _, err := database.UpsertMarketScannedBlock(ctx, UpsertMarketScannedBlockParams{
+		ChainKey:    "bsc",
+		ChainID:     56,
+		CursorKey:   "market-logs",
+		BlockNumber: 87,
+		BlockHash:   blockHashA,
+		ParentHash:  parentHash,
+	}); err != nil {
+		t.Fatalf("upsert scanned block: %v", err)
+	}
+	if _, err := database.UpsertMarketScannedBlock(ctx, UpsertMarketScannedBlockParams{
+		ChainKey:    "bsc",
+		ChainID:     56,
+		CursorKey:   "market-logs",
+		BlockNumber: 87,
+		BlockHash:   blockHashB,
+		ParentHash:  parentHash,
+	}); err != nil {
+		t.Fatalf("replace scanned block: %v", err)
+	}
+	blocks, err := database.ListCanonicalMarketScannedBlocks(
+		ctx,
+		56,
+		"market-logs",
+		87,
+		10,
+	)
+	if err != nil || len(blocks) != 1 || blocks[0].BlockHash != blockHashB {
+		t.Fatalf("canonical scanned blocks = %#v err:%v", blocks, err)
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		health, err := database.RecordMarketProviderHealth(
+			ctx,
+			RecordMarketProviderHealthParams{
+				Provider:  "nodit",
+				Component: "integration",
+				ChainKey:  "bsc",
+				ChainID:   56,
+				Success:   false,
+				Error:     "integration failure",
+			},
+		)
+		if err != nil {
+			t.Fatalf("record provider failure: %v", err)
+		}
+		if attempt == 2 && health.Status != "unavailable" {
+			t.Fatalf("provider health after failures = %#v", health)
+		}
+	}
+	usage, err := database.AddMarketProviderUsage(ctx, AddMarketProviderUsageParams{
+		Provider:    "nodit",
+		Metric:      "integration_cu",
+		PeriodStart: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:   time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		DeltaUnits:  "75",
+		LimitUnits:  "100",
+	})
+	if err != nil || usage.AlertLevel != 70 || usage.UsagePercent == nil ||
+		*usage.UsagePercent != "75.000" {
+		t.Fatalf("provider usage = %#v err:%v", usage, err)
 	}
 }
 
@@ -632,4 +1260,8 @@ func createIntegrationOrder(t *testing.T, store *Store, userID, token string) Or
 		t.Fatalf("create order for %s: %v", userID, err)
 	}
 	return order
+}
+
+func pointerOf[T any](value T) *T {
+	return &value
 }

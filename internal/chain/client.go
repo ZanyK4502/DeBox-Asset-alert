@@ -27,9 +27,16 @@ type Client struct {
 	baseURL    string
 	rpcBaseURL string
 	httpClient HTTPDoer
+	usage      func(NoditUsage)
 }
 
 type ClientOption func(*Client)
+
+type NoditUsage struct {
+	Product   string
+	Operation string
+	CU        int64
+}
 
 func WithHTTPClient(client HTTPDoer) ClientOption {
 	return func(target *Client) {
@@ -42,6 +49,12 @@ func WithHTTPClient(client HTTPDoer) ClientOption {
 func WithRPCBaseURL(baseURL string) ClientOption {
 	return func(target *Client) {
 		target.rpcBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	}
+}
+
+func WithUsageObserver(observer func(NoditUsage)) ClientOption {
+	return func(target *Client) {
+		target.usage = observer
 	}
 }
 
@@ -71,6 +84,7 @@ func (c *Client) post(ctx context.Context, profile Profile, path string, payload
 		profile.Network,
 		strings.TrimLeft(path, "/"),
 	)
+	c.observeUsage("web3_data", path, web3DataCU(path))
 	return c.postObject(ctx, endpoint, payload, "Nodit API")
 }
 
@@ -85,6 +99,7 @@ func (c *Client) rpc(ctx context.Context, profile Profile, method string, params
 		"method":  method,
 		"params":  params,
 	}
+	c.observeUsage("evm_node", method, evmNodeCU(method))
 	data, err := c.postObject(ctx, endpoint, payload, "Nodit Node API")
 	if err != nil {
 		return nil, err
@@ -98,6 +113,59 @@ func (c *Client) rpc(ctx context.Context, profile Profile, method string, params
 		return nil, fmt.Errorf("%v", rpcError)
 	}
 	return data["result"], nil
+}
+
+func (c *Client) observeUsage(product, operation string, units int64) {
+	if c.usage != nil && units > 0 {
+		c.usage(NoditUsage{
+			Product:   product,
+			Operation: operation,
+			CU:        units,
+		})
+	}
+}
+
+func evmNodeCU(method string) int64 {
+	switch method {
+	case "eth_blockNumber":
+		return 10
+	case "eth_call":
+		return 23
+	case "eth_getBalance":
+		return 26
+	case "eth_getBlockByHash":
+		return 32
+	case "eth_getBlockByNumber":
+		return 31
+	case "eth_getLogs":
+		return 66
+	case "eth_getTransactionByHash":
+		return 15
+	case "eth_getTransactionReceipt":
+		return 16
+	default:
+		return 0
+	}
+}
+
+func web3DataCU(path string) int64 {
+	path = strings.ToLower(strings.TrimSpace(path))
+	switch {
+	case strings.Contains(path, "getnativebalancebyaccount"):
+		return 30
+	case strings.Contains(path, "gettokenallowance"):
+		return 30
+	case strings.Contains(path, "gettokenholdersbycontract"):
+		return 150
+	case strings.Contains(path, "gettokensownedbyaccount"):
+		return 150
+	case strings.Contains(path, "gettransactionsbyaccount"):
+		return 150
+	case strings.Contains(path, "gettransactionbyhash"):
+		return 80
+	default:
+		return 0
+	}
 }
 
 func (c *Client) postObject(

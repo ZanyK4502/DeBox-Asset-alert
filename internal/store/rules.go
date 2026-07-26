@@ -186,6 +186,7 @@ func (s *Store) RestoreWatchRule(
 		rule, err := collectOne[WatchRule](ctx, tx, `
 			UPDATE watch_rules
 			SET run_status = 'active',
+			    pause_reason = '',
 			    aggregation_anchor_at = CASE
 			      WHEN delivery_mode = 'stage' AND cycle_type = 'fixed' THEN NOW()
 			      ELSE NULL
@@ -216,11 +217,7 @@ func (s *Store) RestoreWatchRule(
 }
 
 func (s *Store) CountUserWatchRules(ctx context.Context, deboxUserID string) (int64, error) {
-	return queryCount(ctx, s.db, `
-		SELECT COUNT(*)
-		FROM watch_rules
-		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
-	`, deboxUserID)
+	return countActiveRuleSlots(ctx, s.db, deboxUserID)
 }
 
 func (s *Store) CountUserWallets(ctx context.Context, deboxUserID string) (int64, error) {
@@ -355,14 +352,15 @@ func setFreeWatchRule(
 	}
 	if _, err := db.Exec(ctx, `
 			UPDATE watch_rules
-			SET run_status = CASE WHEN id = $1 THEN 'active' ELSE 'paused' END
+			SET run_status = CASE WHEN id = $1 THEN 'active' ELSE 'paused' END,
+			    pause_reason = CASE WHEN id = $1 THEN '' ELSE 'free_plan' END
 			WHERE debox_user_id = $2 AND enabled = 1
 	`, ruleID, deboxUserID); err != nil {
 		return UserPreference{}, fmt.Errorf("activate free watch rule: %w", err)
 	}
 	if _, err := db.Exec(ctx, `
 		UPDATE combination_rules
-		SET run_status = 'paused'
+		SET run_status = 'paused', pause_reason = 'free_plan'
 		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 	`, deboxUserID); err != nil {
 		return UserPreference{}, fmt.Errorf("pause free plan combination rules: %w", err)
@@ -389,7 +387,7 @@ func (s *Store) PauseUserWatchRules(
 ) (int64, error) {
 	query := `
 		UPDATE watch_rules
-		SET run_status = 'paused'
+		SET run_status = 'paused', pause_reason = 'subscription_expired'
 		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 	`
 	args := []any{deboxUserID}
@@ -403,7 +401,7 @@ func (s *Store) PauseUserWatchRules(
 	}
 	if _, err := s.db.Exec(ctx, `
 		UPDATE combination_rules
-		SET run_status = 'paused'
+		SET run_status = 'paused', pause_reason = 'subscription_expired'
 		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 	`, deboxUserID); err != nil {
 		return 0, fmt.Errorf("pause user combination rules: %w", err)

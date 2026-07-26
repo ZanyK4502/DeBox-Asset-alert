@@ -13,6 +13,9 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/config"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/management"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketcollector"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -82,6 +85,33 @@ type BotService interface {
 	HandleWebhookPayload(context.Context, []byte) (bot.HandleResult, error)
 }
 
+type MarketWebhookService interface {
+	AcceptWebhook(
+		context.Context,
+		string,
+		map[string][]string,
+		[]byte,
+	) (marketcollector.WebhookAcceptance, error)
+}
+
+type MarketManagementService interface {
+	Catalog(context.Context, string) (marketview.CatalogResult, error)
+	QueryToken(context.Context, string, marketview.TokenQueryInput) (marketview.TokenQueryResult, error)
+	CreateProject(context.Context, string, marketview.CreateProjectInput) (marketview.ProjectDetail, error)
+	ListProjects(context.Context, string, bool) ([]store.MarketProject, error)
+	Project(context.Context, string, int64) (marketview.ProjectDetail, error)
+	ArchiveProject(context.Context, string, int64) (store.MarketProject, error)
+	RestoreProject(context.Context, string, int64) (store.MarketProject, error)
+	SelectPool(context.Context, string, int64, marketview.PoolSelectionInput) (marketview.ProjectDetail, error)
+	CreateRule(context.Context, string, int64, marketview.CreateRuleInput) (store.MarketRule, error)
+	DeleteRule(context.Context, string, int64) error
+	RestoreRule(context.Context, string, int64) (store.MarketRule, error)
+	Recommendations(context.Context, string, int64) ([]marketrules.Recommendation, error)
+	Events(context.Context, string, int64, int64, int) ([]store.MarketEvent, error)
+	SaveAddressLabel(context.Context, string, int64, marketview.AddressLabelInput) (store.MarketAddressLabel, error)
+	DeleteAddressLabel(context.Context, string, int64) error
+}
+
 type Dependencies struct {
 	Auth          AuthService
 	Subscriptions SubscriptionService
@@ -90,6 +120,8 @@ type Dependencies struct {
 	Management    ManagementService
 	Payments      PaymentService
 	Bot           BotService
+	MarketWebhook MarketWebhookService
+	Market        MarketManagementService
 	Catalog       *plans.Catalog
 	ReadyCheck    func(context.Context) error
 }
@@ -141,6 +173,22 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/payment/verify", h.postVerifyPayment)
 	mux.HandleFunc("GET /api/bot/webhook-status", h.getBotWebhookStatus)
 	mux.HandleFunc("POST /bot/webhook", h.postBotWebhook)
+	mux.HandleFunc("POST /api/market/webhook/{category}", h.postMarketWebhook)
+	mux.HandleFunc("GET /api/market/catalog", h.getMarketCatalog)
+	mux.HandleFunc("POST /api/market/query", h.postMarketQuery)
+	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)
+	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)
+	mux.HandleFunc("GET /api/market/projects/{project_id}", h.getMarketProject)
+	mux.HandleFunc("DELETE /api/market/projects/{project_id}", h.deleteMarketProject)
+	mux.HandleFunc("POST /api/market/projects/{project_id}/restore", h.postRestoreMarketProject)
+	mux.HandleFunc("PATCH /api/market/projects/{project_id}/pool", h.patchMarketProjectPool)
+	mux.HandleFunc("GET /api/market/projects/{project_id}/recommendations", h.getMarketRecommendations)
+	mux.HandleFunc("GET /api/market/projects/{project_id}/events", h.getMarketEvents)
+	mux.HandleFunc("POST /api/market/projects/{project_id}/rules", h.postMarketRule)
+	mux.HandleFunc("DELETE /api/market/rules/{rule_id}", h.deleteMarketRule)
+	mux.HandleFunc("POST /api/market/rules/{rule_id}/restore", h.postRestoreMarketRule)
+	mux.HandleFunc("POST /api/market/projects/{project_id}/labels", h.postMarketAddressLabel)
+	mux.HandleFunc("DELETE /api/market/labels/{label_id}", h.deleteMarketAddressLabel)
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
 	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
 	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)

@@ -25,6 +25,30 @@ const (
 	BalanceThreshold     = "balance_threshold"
 	LowBalanceThreshold  = BalanceThreshold
 	HighBalanceThreshold = "balance_threshold_high"
+
+	MarketPriceAbove           = "market_price_above"
+	MarketPriceBelow           = "market_price_below"
+	MarketPriceIncrease        = "market_price_increase"
+	MarketPriceDecrease        = "market_price_decrease"
+	MarketLiquidityBelow       = "market_liquidity_below"
+	MarketLiquidityDecrease    = "market_liquidity_decrease"
+	MarketVolumeAbove          = "market_volume_above"
+	MarketVolumeSpike          = "market_volume_spike"
+	MarketTradeImbalance       = "market_trade_imbalance"
+	MarketLargeBuy             = "market_large_buy"
+	MarketLargeSell            = "market_large_sell"
+	MarketConsecutiveLargeBuy  = "market_consecutive_large_buy"
+	MarketConsecutiveLargeSell = "market_consecutive_large_sell"
+	MarketLiquidityAdded       = "market_liquidity_added"
+	MarketLiquidityRemoved     = "market_liquidity_removed"
+	MarketNewPool              = "market_new_pool"
+	MarketHolderIncrease       = "market_holder_increase"
+	MarketHolderDecrease       = "market_holder_decrease"
+	MarketHolderRankEntered    = "market_holder_rank_entered"
+	MarketHolderRankExited     = "market_holder_rank_exited"
+	MarketFourMemeLargeTrade   = "market_four_meme_large_trade"
+	MarketFourMemeProgress     = "market_four_meme_progress"
+	MarketFourMemeMigration    = "market_four_meme_migration"
 )
 
 var planOrder = []string{Free, Standard, Professional}
@@ -38,6 +62,36 @@ var ruleTypes = []RuleType{
 	{Code: ApprovalChange, Label: "授权 / Approve 监控", Description: "钱包对指定合约的代币授权额度发生变化时推送通知。"},
 	{Code: AddressInteraction, Label: "指定地址交互提醒", Description: "钱包与指定地址或合约发生交互时推送通知。"},
 }
+
+var standardMarketRuleTypes = []string{
+	MarketPriceAbove,
+	MarketPriceBelow,
+	MarketPriceIncrease,
+	MarketPriceDecrease,
+	MarketLiquidityBelow,
+	MarketLiquidityDecrease,
+	MarketVolumeAbove,
+	MarketVolumeSpike,
+	MarketTradeImbalance,
+}
+
+var professionalMarketRuleTypes = append(
+	append([]string(nil), standardMarketRuleTypes...),
+	MarketLargeBuy,
+	MarketLargeSell,
+	MarketConsecutiveLargeBuy,
+	MarketConsecutiveLargeSell,
+	MarketLiquidityAdded,
+	MarketLiquidityRemoved,
+	MarketNewPool,
+	MarketHolderIncrease,
+	MarketHolderDecrease,
+	MarketHolderRankEntered,
+	MarketHolderRankExited,
+	MarketFourMemeLargeTrade,
+	MarketFourMemeProgress,
+	MarketFourMemeMigration,
+)
 
 type RuleType struct {
 	Code        string `json:"code"`
@@ -55,13 +109,19 @@ type Plan struct {
 	WalletLimit         int             `json:"wallet_limit"`
 	RuleLimit           int             `json:"rule_limit"`
 	GroupLimit          int             `json:"group_limit"`
+	MarketProjectLimit  int             `json:"market_project_limit"`
 	DailyAlertLimit     *int            `json:"daily_alert_limit"`
 	AllowedRuleTypes    []string        `json:"allowed_rule_types"`
+	AllowedMarketRules  []string        `json:"allowed_market_rule_types"`
 	AllowedRules        []RuleType      `json:"allowed_rules"`
 	PrivateNotification bool            `json:"private_notification"`
 	GroupNotification   bool            `json:"group_notification"`
 	DailySummary        bool            `json:"daily_summary"`
 	SummaryTargets      []string        `json:"summary_targets"`
+	MarketQuery         bool            `json:"market_query"`
+	MarketPoolMode      string          `json:"market_pool_mode"`
+	FourMemeMode        string          `json:"four_meme_mode"`
+	MarketCombination   bool            `json:"market_combination"`
 	Description         string          `json:"description"`
 }
 
@@ -86,6 +146,15 @@ func (p Plan) BillingOption(code string) (BillingOption, error) {
 
 func (p Plan) AllowsRuleType(ruleType string) bool {
 	for _, allowed := range p.AllowedRuleTypes {
+		if allowed == ruleType {
+			return true
+		}
+	}
+	return false
+}
+
+func (p Plan) AllowsMarketRuleType(ruleType string) bool {
+	for _, allowed := range p.AllowedMarketRules {
 		if allowed == ruleType {
 			return true
 		}
@@ -182,7 +251,18 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			"适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
 		),
 	}}
+	free := catalog.plans[Free]
+	free.MarketQuery = true
+	free.MarketPoolMode = "query"
+	free.FourMemeMode = "query"
+	catalog.plans[Free] = free
+
 	standard := catalog.plans[Standard]
+	standard.MarketProjectLimit = 1
+	standard.AllowedMarketRules = append([]string(nil), standardMarketRuleTypes...)
+	standard.MarketQuery = true
+	standard.MarketPoolMode = "main"
+	standard.FourMemeMode = "market"
 	standard.BillingOptions = []BillingOption{
 		{Code: Monthly, Price: standard.Price, Days: standard.Days},
 		{Code: Quarterly, Price: "14", Days: 90},
@@ -191,6 +271,12 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 	catalog.plans[Standard] = standard
 
 	professional := catalog.plans[Professional]
+	professional.MarketProjectLimit = 5
+	professional.AllowedMarketRules = append([]string(nil), professionalMarketRuleTypes...)
+	professional.MarketQuery = true
+	professional.MarketPoolMode = "multiple"
+	professional.FourMemeMode = "full"
+	professional.MarketCombination = true
 	professional.BillingOptions = []BillingOption{
 		{Code: Monthly, Price: professional.Price, Days: professional.Days},
 		{Code: Quarterly, Price: "42", Days: 90},
@@ -273,6 +359,7 @@ func makePlan(
 
 func clonePlan(plan Plan) Plan {
 	plan.AllowedRuleTypes = append([]string(nil), plan.AllowedRuleTypes...)
+	plan.AllowedMarketRules = append([]string(nil), plan.AllowedMarketRules...)
 	plan.AllowedRules = append([]RuleType(nil), plan.AllowedRules...)
 	plan.BillingOptions = append([]BillingOption(nil), plan.BillingOptions...)
 	plan.SummaryTargets = append([]string(nil), plan.SummaryTargets...)

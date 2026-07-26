@@ -102,6 +102,38 @@ func activateSubscription(
 	if err != nil {
 		return Subscription{}, fmt.Errorf("select active subscription: %w", err)
 	}
+	if active == nil {
+		var paidHistory bool
+		if err := db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM subscriptions
+				WHERE debox_user_id = $1 AND plan_code <> 'free'
+			)
+		`, deboxUserID).Scan(&paidHistory); err != nil {
+			return Subscription{}, fmt.Errorf("check prior paid subscription: %w", err)
+		}
+		if paidHistory {
+			var freeWatchRuleID *int64
+			if err := db.QueryRow(ctx, `
+				SELECT (
+					SELECT free_watch_rule_id
+					FROM user_preferences
+					WHERE debox_user_id = $1
+				)
+			`, deboxUserID).Scan(&freeWatchRuleID); err != nil {
+				return Subscription{}, fmt.Errorf("read free fallback rule: %w", err)
+			}
+			if err := pauseExpiredUserResources(
+				ctx,
+				db,
+				deboxUserID,
+				freeWatchRuleID,
+			); err != nil {
+				return Subscription{}, err
+			}
+		}
+	}
 	if active != nil && active.PlanCode == planCode && allowRenewal {
 		subscription, err := collectOne[Subscription](ctx, db, `
 			UPDATE subscriptions

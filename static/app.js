@@ -37,6 +37,14 @@ const state = {
   aggregateLoadingMore: false,
   aggregateLoadError: "",
   aggregateScrollPaused: false,
+  marketCatalog: null,
+  marketGoal: "price",
+  marketQuery: null,
+  marketProjects: [],
+  marketDetail: null,
+  marketRecommendations: [],
+  marketEvents: [],
+  marketEventsNextBeforeId: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -165,6 +173,7 @@ function renderLocalizedState() {
   renderTokenInfo();
   renderBalanceInfo();
   renderBalanceInfo("combination");
+  renderMarket();
 }
 
 function toggleUiLanguage() {
@@ -461,6 +470,13 @@ function resetConnectionState() {
   state.aggregateLoadingMore = false;
   state.aggregateLoadError = "";
   state.aggregateScrollPaused = false;
+  state.marketCatalog = null;
+  state.marketQuery = null;
+  state.marketProjects = [];
+  state.marketDetail = null;
+  state.marketRecommendations = [];
+  state.marketEvents = [];
+  state.marketEventsNextBeforeId = null;
   $("walletAddressInput").value = "";
   $("profileBox").innerHTML = t("noWallet");
   $("subscriptionBox").innerHTML = t("connectToView");
@@ -471,6 +487,7 @@ function resetConnectionState() {
   renderTokenInfo();
   renderBalanceInfo();
   renderBalanceInfo("combination");
+  renderMarket();
   $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
   renderSummaryTargetOptions(new Set());
@@ -1634,6 +1651,7 @@ async function refreshAccount() {
   await Promise.all([
     loadPaymentConfig(),
     loadAggregateEvents(),
+    loadMarketContext(),
   ]);
 }
 
@@ -2086,6 +2104,645 @@ async function deleteGroup(groupId) {
   }
 }
 
+const MARKET_GOAL_RULES = {
+  price: ["market_price_above", "market_price_below", "market_price_increase", "market_price_decrease"],
+  liquidity: ["market_liquidity_below", "market_liquidity_decrease", "market_liquidity_added", "market_liquidity_removed", "market_new_pool"],
+  volume: ["market_volume_above", "market_volume_spike", "market_trade_imbalance"],
+  large_trade: ["market_large_buy", "market_large_sell", "market_consecutive_large_buy", "market_consecutive_large_sell"],
+  holder: ["market_holder_increase", "market_holder_decrease", "market_holder_rank_entered", "market_holder_rank_exited"],
+  four_meme: ["market_four_meme_large_trade", "market_four_meme_progress", "market_four_meme_migration"],
+};
+
+const MARKET_GOAL_HINT_KEYS = {
+  price: "marketGoalPriceHint",
+  liquidity: "marketGoalLiquidityHint",
+  volume: "marketGoalVolumeHint",
+  large_trade: "marketGoalLargeTradeHint",
+  holder: "marketGoalHolderHint",
+  four_meme: "marketGoalFourMemeHint",
+};
+
+const MARKET_UNIT_KEYS = {
+  usd: "unitUsd",
+  token: "unitToken",
+  percent: "unitPercent",
+  ratio: "unitRatio",
+  count: "unitCount",
+  progress: "unitProgress",
+};
+
+function marketRuleDefinition(code) {
+  return state.marketCatalog?.rules?.find((rule) => rule.code === code) || null;
+}
+
+function marketRuleName(rule) {
+  if (!rule) return "";
+  return state.uiLanguage === "en" ? rule.name_en : rule.name_zh;
+}
+
+function marketRuleDescription(rule) {
+  if (!rule) return "";
+  return state.uiLanguage === "en" ? rule.description_en : rule.description_zh;
+}
+
+function marketMoney(value, currency = true) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  const absolute = Math.abs(number);
+  const digits = absolute > 0 && absolute < 0.01 ? 8 : absolute < 1 ? 6 : 2;
+  const formatted = new Intl.NumberFormat(state.uiLanguage === "en" ? "en-US" : "zh-CN", {
+    maximumFractionDigits: digits,
+  }).format(number);
+  return currency ? `$${formatted}` : formatted;
+}
+
+function marketDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat(state.uiLanguage === "en" ? "en-US" : "zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function marketEventLabel(type) {
+  const labels = state.uiLanguage === "en"
+    ? {
+        buy: "Buy", sell: "Sell", liquidity_added: "Liquidity added",
+        liquidity_removed: "Liquidity removed", holder_increase: "Holder increase",
+        holder_decrease: "Holder decrease", holder_rank_entered: "Entered holder ranking",
+        holder_rank_exited: "Exited holder ranking", pool_initialized: "New pool",
+        migrated: "Migration", token_transfer: "Token transfer",
+      }
+    : {
+        buy: "买入", sell: "卖出", liquidity_added: "加池",
+        liquidity_removed: "撤池", holder_increase: "大户增持",
+        holder_decrease: "大户减持", holder_rank_entered: "进入大户榜",
+        holder_rank_exited: "退出大户榜", pool_initialized: "新交易池",
+        migrated: "迁移外盘", token_transfer: "代币转账",
+      };
+  return labels[type] || type;
+}
+
+function marketStatusSuffix(status) {
+  if (status === "active") return "Active";
+  if (status === "archived") return "Archived";
+  return "Paused";
+}
+
+function renderMarket() {
+  renderMarketCapability();
+  renderMarketGoal();
+  renderMarketQuery();
+  renderMarketProjects();
+  renderMarketDetail();
+}
+
+function renderMarketCapability() {
+  const badge = $("marketCapability");
+  if (!state.deboxUserId) {
+    badge.textContent = t("notConnected");
+    badge.classList.add("muted");
+    return;
+  }
+  const plan = currentPlan();
+  badge.textContent = localizedPlan(plan).name;
+  badge.classList.toggle("muted", plan?.code === "free");
+}
+
+function renderMarketGoal() {
+  document.querySelectorAll("[data-market-goal]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.marketGoal === state.marketGoal);
+  });
+  $("marketGoalHint").textContent = t(MARKET_GOAL_HINT_KEYS[state.marketGoal]);
+  renderMarketRuleEditor();
+}
+
+function renderMarketQuery() {
+  const result = $("marketQueryResult");
+  if (!state.marketQuery) {
+    result.hidden = true;
+    return;
+  }
+  result.hidden = false;
+  const token = state.marketQuery.token || {};
+  $("marketTokenOverview").innerHTML = `
+    <div>
+      <strong>${escapeHtml(token.name || token.symbol || "-")} (${escapeHtml(token.symbol || "-")})</strong>
+      <span>${escapeHtml(shortAddress(token.address))}</span>
+    </div>
+    <div>
+      <span>${escapeHtml(t("chain"))}</span>
+      <strong>BNB Chain</strong>
+    </div>
+  `;
+  const planCode = currentPlan()?.code || "free";
+  let selectedCount = 0;
+  $("marketQueryPools").innerHTML = (state.marketQuery.pools || []).map((preview, index) => {
+    const pair = preview.pair || {};
+    const checked = preview.supported && selectedCount++ === 0;
+    const disabled = !preview.supported;
+    return `
+      <label class="market-pool-card${disabled ? " unsupported" : ""}">
+        <input type="checkbox" data-market-query-pool="${escapeHtml(pair.pairAddress || "")}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""} />
+        <div>
+          <strong>${escapeHtml(preview.protocol || pair.dexId || "-")} ${escapeHtml(preview.protocol_version || "")}</strong>
+          <span>${escapeHtml(pair.baseToken?.symbol || "-")} / ${escapeHtml(pair.quoteToken?.symbol || "-")}</span>
+          <small>${escapeHtml(shortAddress(pair.pairAddress))}</small>
+        </div>
+        <div class="market-pool-values">
+          <strong>${marketMoney(pair.liquidity?.usd)}</strong>
+          <span>${disabled ? t("marketPoolUnsupported") : marketMoney(pair.priceUsd)}</span>
+        </div>
+      </label>
+    `;
+  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`;
+  const createButton = $("createMarketProjectBtn");
+  createButton.disabled = planCode === "free";
+  createButton.title = planCode === "free" ? t("marketFreeQueryOnly") : "";
+  $("marketQueryPools").querySelectorAll("[data-market-query-pool]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (planCode === "standard" && checkbox.checked) {
+        $("marketQueryPools").querySelectorAll("[data-market-query-pool]").forEach((other) => {
+          if (other !== checkbox) other.checked = false;
+        });
+      }
+    });
+  });
+}
+
+function renderMarketProjects() {
+  const list = $("marketProjectsList");
+  if (!state.deboxUserId) {
+    list.innerHTML = `<div class="empty-state">${escapeHtml(t("connectFirst"))}</div>`;
+    return;
+  }
+  const projects = state.marketProjects;
+  if (!projects.length) {
+    list.innerHTML = `<div class="empty-state">${escapeHtml(t("marketNoProjects"))}</div>`;
+    return;
+  }
+  list.innerHTML = projects.map((project) => `
+    <button class="market-project-card${project.status === "archived" ? " archived" : ""}" type="button" data-market-project="${project.id}">
+      <div>
+        <strong>${escapeHtml(project.token_name || project.token_symbol || "-")} (${escapeHtml(project.token_symbol || "-")})</strong>
+        <span>${escapeHtml(shortAddress(project.token_address))}</span>
+      </div>
+      <div>
+        <span class="badge">${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(project.status)}`))}</span>
+        <small>${escapeHtml(t("marketOpenProject"))} →</small>
+      </div>
+    </button>
+  `).join("");
+  list.querySelectorAll("[data-market-project]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => openMarketProject(Number(button.dataset.marketProject))));
+  });
+}
+
+function renderMarketDetail() {
+  const wrap = $("marketProjectDetail");
+  const detail = state.marketDetail;
+  if (!detail?.project) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  const project = detail.project;
+  $("marketProjectHeader").innerHTML = `
+    <div>
+      <p class="eyebrow">BNB Chain · ${escapeHtml(project.four_meme_status || "unknown")}</p>
+      <h3>${escapeHtml(project.token_name || project.token_symbol)} (${escapeHtml(project.token_symbol)})</h3>
+      <span>${escapeHtml(project.token_address)}</span>
+    </div>
+    <span class="badge">${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(project.status)}`))}</span>
+  `;
+  $("archiveMarketProjectBtn").textContent = t(
+    project.status === "archived" ? "restoreMarketProject" : "archiveMarketProject",
+  );
+  $("archiveMarketProjectBtn").classList.toggle("danger", project.status !== "archived");
+  const snapshot = detail.latest_snapshot || {};
+  const metrics = [
+    [t("marketMetricPrice"), marketMoney(snapshot.price_usd)],
+    [t("marketMetricLiquidity"), marketMoney(snapshot.liquidity_usd)],
+    [t("marketMetricVolume24h"), marketMoney(snapshot.volume_24h_usd)],
+    [t("marketMetricBuys24h"), snapshot.buys_24h ?? "-"],
+    [t("marketMetricSells24h"), snapshot.sells_24h ?? "-"],
+    [t("marketMetricMarketCap"), `${marketMoney(snapshot.market_cap_usd)} / ${marketMoney(snapshot.fdv_usd)}`],
+  ];
+  $("marketMetricGrid").innerHTML = metrics.map(([label, value]) => `
+    <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>
+  `).join("");
+  const providerHealth = detail.provider_health || [];
+  const degraded = providerHealth.some((item) => item.status !== "healthy");
+  const providerStatusKey = providerHealth.length
+    ? (degraded ? "marketProviderDegraded" : "marketProviderHealthy")
+    : "marketProviderPending";
+  $("marketProviderStatus").textContent = t(providerStatusKey);
+  $("marketProviderStatus").classList.toggle("warning", degraded);
+  renderMarketProjectPools();
+  renderMarketRuleEditor();
+  renderMarketRules();
+  renderMarketHolders();
+  renderMarketEvents();
+}
+
+function renderMarketProjectPools() {
+  const detail = state.marketDetail;
+  if (!detail) return;
+  const editable = detail.project?.status === "active";
+  $("marketProjectPools").innerHTML = (detail.pools || []).map((pool) => {
+    const selected = Number(pool.selected) === 1;
+    const primary = Number(pool.is_primary) === 1;
+    const supported = Number(pool.supports_event_parsing) === 1;
+    return `
+      <div class="market-pool-card${supported ? "" : " unsupported"}">
+        <div>
+          <strong>${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)}</strong>
+          <span>${escapeHtml(pool.token0_symbol)} / ${escapeHtml(pool.token1_symbol)}</span>
+          <small>${escapeHtml(shortAddress(pool.pool_address || pool.pool_key))}</small>
+        </div>
+        <div class="market-pool-values">
+          <strong>${marketMoney(pool.liquidity_usd)}</strong>
+          <span>${escapeHtml(primary ? t("marketPoolPrimary") : selected ? t("marketPoolSelected") : supported ? "" : t("marketPoolUnsupported"))}</span>
+        </div>
+        ${supported && editable ? `
+          <div class="market-pool-actions">
+            ${!primary ? `<button type="button" class="secondary compact" data-market-primary="${pool.id}">${escapeHtml(t("marketSetPrimary"))}</button>` : ""}
+            ${!primary ? `<button type="button" class="secondary compact" data-market-toggle-pool="${pool.id}" data-selected="${selected}">${escapeHtml(t(selected ? "marketDisablePool" : "marketEnablePool"))}</button>` : ""}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`;
+  $("marketProjectPools").querySelectorAll("[data-market-primary]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => updateMarketPool(Number(button.dataset.marketPrimary), true, true)));
+  });
+  $("marketProjectPools").querySelectorAll("[data-market-toggle-pool]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => updateMarketPool(
+      Number(button.dataset.marketTogglePool),
+      button.dataset.selected !== "true",
+      false,
+    )));
+  });
+}
+
+function renderMarketRuleEditor() {
+  const select = $("marketRuleTypeSelect");
+  if (!select || !state.marketCatalog) return;
+  const previous = select.value;
+  const goalRules = new Set(MARKET_GOAL_RULES[state.marketGoal] || []);
+  const definitions = (state.marketCatalog.rules || []).filter((rule) => goalRules.has(rule.code));
+  select.innerHTML = definitions.map((rule) => `
+    <option value="${escapeHtml(rule.code)}" ${rule.allowed ? "" : "disabled"}>
+      ${escapeHtml(marketRuleName(rule))}${rule.professional ? ` · ${escapeHtml(t("professional"))}` : ""}
+    </option>
+  `).join("");
+  if (definitions.some((rule) => rule.code === previous && rule.allowed)) {
+    select.value = previous;
+  } else {
+    const firstAllowed = definitions.find((rule) => rule.allowed);
+    if (firstAllowed) select.value = firstAllowed.code;
+  }
+  const definition = marketRuleDefinition(select.value);
+  $("marketRuleDescription").textContent = definition
+    ? marketRuleDescription(definition)
+    : t("marketProfessionalOnly");
+  const units = definition?.units || ["usd"];
+  const oldUnit = $("marketThresholdUnitSelect").value;
+  $("marketThresholdUnitSelect").innerHTML = units.map((unit) => `
+    <option value="${escapeHtml(unit)}">${escapeHtml(t(MARKET_UNIT_KEYS[unit] || unit))}</option>
+  `).join("");
+  $("marketThresholdUnitSelect").value = units.includes(oldUnit) ? oldUnit : (definition?.default_unit || units[0]);
+  if ($("marketSensitivitySelect").value !== "custom" && definition) {
+    const recommendation = selectedMarketRecommendation(definition.code, $("marketSensitivitySelect").value);
+    $("marketThresholdInput").value = recommendation?.threshold || definition.default_threshold;
+    $("marketCooldownInput").value = recommendation?.cooldown_seconds || 300;
+    $("marketWindowInput").value = recommendation?.window_minutes || definition.default_window_minutes || 60;
+  }
+  $("marketWindowWrap").hidden = !Number(definition?.default_window_minutes);
+  const pools = (state.marketDetail?.pools || []).filter((pool) => Number(pool.selected) === 1);
+  $("marketRulePoolSelect").innerHTML = `
+    <option value="">${escapeHtml(t("marketAllSelectedPools"))}</option>
+    ${pools.map((pool) => `<option value="${pool.id}">${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
+  `;
+  const editable = state.marketDetail?.project?.status === "active";
+  $("marketRuleForm").querySelectorAll("input, select, button").forEach((control) => {
+    control.disabled = !editable || !definition?.allowed;
+  });
+  const groupOption = [...$("marketTargetTypeSelect").options]
+    .find((option) => option.value === "group");
+  const groupAllowed = currentPlan()?.code === "professional" && state.groups.length > 0;
+  if (groupOption) groupOption.disabled = !groupAllowed;
+  if (!groupAllowed && $("marketTargetTypeSelect").value === "group") {
+    $("marketTargetTypeSelect").value = "private";
+  }
+  updateMarketDeliveryFields();
+  renderMarketGroupOptions();
+}
+
+function selectedMarketRecommendation(ruleType, sensitivity) {
+  return state.marketRecommendations.find(
+    (item) => item.rule_type === ruleType && item.sensitivity === sensitivity,
+  ) || null;
+}
+
+function renderMarketGroupOptions() {
+  const selected = $("marketGroupSelect").value;
+  $("marketGroupSelect").innerHTML = state.groups.map((group) => `
+    <option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>
+  `).join("");
+  if (state.groups.some((group) => group.gid === selected)) $("marketGroupSelect").value = selected;
+  $("marketGroupWrap").hidden = $("marketTargetTypeSelect").value !== "group";
+}
+
+function updateMarketDeliveryFields() {
+  $("marketStageSettings").hidden = $("marketDeliveryModeSelect").value !== "stage";
+}
+
+function renderMarketRules() {
+  const rules = state.marketDetail?.rules || [];
+  const projectActive = state.marketDetail?.project?.status === "active";
+  $("marketRulesList").innerHTML = rules.length ? rules.map((rule) => {
+    const definition = marketRuleDefinition(rule.rule_type);
+    const active = Number(rule.enabled) === 1 && rule.run_status === "active";
+    return `
+      <div class="list-item">
+        <div>
+          <strong>${escapeHtml(marketRuleName(definition) || rule.rule_type)}</strong>
+          <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(rule.delivery_mode)}</span>
+          <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${rule.pause_reason ? ` · ${escapeHtml(rule.pause_reason)}` : ""}</small>
+        </div>
+        <div class="list-item-actions">
+          ${active || !projectActive ? "" : `<button type="button" class="secondary compact" data-restore-market-rule="${rule.id}">${escapeHtml(t("restoreMonitor"))}</button>`}
+          <button type="button" class="secondary compact danger" data-delete-market-rule="${rule.id}">${escapeHtml(t("delete"))}</button>
+        </div>
+      </div>
+    `;
+  }).join("") : `<div class="empty-state">${escapeHtml(t("marketNoRules"))}</div>`;
+  $("marketRulesList").querySelectorAll("[data-delete-market-rule]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => deleteMarketRule(Number(button.dataset.deleteMarketRule))));
+  });
+  $("marketRulesList").querySelectorAll("[data-restore-market-rule]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => restoreMarketRule(Number(button.dataset.restoreMarketRule))));
+  });
+}
+
+function renderMarketHolders() {
+  const detail = state.marketDetail;
+  if (!detail) return;
+  $("marketLabelForm").querySelectorAll("input, select, button").forEach((control) => {
+    control.disabled = detail.project?.status !== "active";
+  });
+  $("marketLabelsList").innerHTML = (detail.labels || []).map((label) => `
+    <div class="market-label-chip">
+      <span>${escapeHtml(label.label || label.label_type)} · ${escapeHtml(shortAddress(label.address))}${Number(label.excluded) ? " · ⊘" : ""}</span>
+      <button type="button" data-delete-market-label="${label.id}" aria-label="${escapeHtml(t("delete"))}">×</button>
+    </div>
+  `).join("");
+  $("marketLabelsList").querySelectorAll("[data-delete-market-label]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() => deleteMarketLabel(Number(button.dataset.deleteMarketLabel))));
+  });
+  const labels = new Map((detail.labels || []).map((label) => [label.address, label]));
+  $("marketHoldersList").innerHTML = (detail.holders || []).map((holder) => {
+    const label = labels.get(holder.holder_address);
+    return `
+      <div class="market-holder-row">
+        <strong>#${holder.rank ?? "-"} · ${escapeHtml(label?.label || shortAddress(holder.holder_address))}</strong>
+        <span>${escapeHtml(holder.balance)} ${escapeHtml(detail.project.token_symbol)} · ${escapeHtml(holder.supply_percent || "-")}%</span>
+        <small>${escapeHtml(holder.address_kind || "wallet")}${Number(holder.excluded) ? " · excluded" : ""}</small>
+      </div>
+    `;
+  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoHolders"))}</div>`;
+}
+
+function renderMarketEvents() {
+  const list = $("marketEventsList");
+  list.innerHTML = state.marketEvents.length ? state.marketEvents.map((event) => `
+    <div class="market-event-row">
+      <div>
+        <strong>${escapeHtml(marketEventLabel(event.event_type))}</strong>
+        <span>${event.usd_value ? marketMoney(event.usd_value) : escapeHtml(event.token_amount || "-")} · ${escapeHtml(event.wallet_address ? shortAddress(event.wallet_address) : "-")}</span>
+      </div>
+      <div>
+        <time>${escapeHtml(marketDate(event.occurred_at))}</time>
+        <small>${escapeHtml(event.confirmed ? "✓" : "…")} ${escapeHtml(event.transaction_hash ? shortAddress(event.transaction_hash) : event.source || "")}</small>
+      </div>
+    </div>
+  `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;
+  $("loadMoreMarketEventsBtn").hidden = !state.marketEventsNextBeforeId;
+}
+
+async function loadMarketContext() {
+  if (!state.deboxUserId) {
+    renderMarket();
+    return;
+  }
+  const [catalog, projects] = await Promise.all([
+    api("/api/market/catalog"),
+    api("/api/market/projects?include_archived=true"),
+  ]);
+  state.marketCatalog = catalog;
+  state.marketProjects = projects.projects || [];
+  renderMarket();
+}
+
+async function queryMarketToken(event) {
+  event.preventDefault();
+  if (!state.deboxUserId) {
+    toast(t("connectFirst"));
+    return;
+  }
+  const address = $("marketTokenInput").value.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    toast(t("marketInvalidToken"));
+    return;
+  }
+  $("marketQueryStatus").textContent = t("marketQuerying");
+  try {
+    state.marketQuery = await api("/api/market/query", {
+      method: "POST",
+      body: JSON.stringify({ chain_key: "bsc", token_address: address }),
+    });
+  } catch (error) {
+    $("marketQueryStatus").textContent = t("marketQueryFailed");
+    throw error;
+  }
+  $("marketQueryStatus").textContent = t("marketQuerySuccess", {
+    symbol: state.marketQuery.token?.symbol || "-",
+    count: state.marketQuery.pools?.length || 0,
+  });
+  renderMarketQuery();
+}
+
+async function createMarketProject() {
+  if (!state.marketQuery) return;
+  if (currentPlan()?.code === "free") {
+    toast(t("marketFreeQueryOnly"));
+    return;
+  }
+  const selectedPools = [...$("marketQueryPools").querySelectorAll("[data-market-query-pool]:checked")]
+    .map((input) => input.dataset.marketQueryPool);
+  const supportedPools = (state.marketQuery.pools || []).filter((pool) => pool.supported);
+  if (supportedPools.length && !selectedPools.length) {
+    toast(t("marketSelectPoolRequired"));
+    return;
+  }
+  const detail = await api("/api/market/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      chain_key: "bsc",
+      token_address: state.marketQuery.token.address,
+      pool_addresses: selectedPools,
+    }),
+  });
+  state.marketQuery = null;
+  $("marketTokenInput").value = "";
+  await loadMarketContext();
+  state.marketDetail = detail;
+  await loadMarketProjectExtras(detail.project.id);
+  toast(t("marketProjectCreated"));
+}
+
+async function openMarketProject(projectId) {
+  state.marketDetail = await api(`/api/market/projects/${projectId}`);
+  await loadMarketProjectExtras(projectId);
+  $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function loadMarketProjectExtras(projectId) {
+  const [recommendations] = await Promise.all([
+    api(`/api/market/projects/${projectId}/recommendations`),
+    loadMarketEvents(projectId),
+  ]);
+  state.marketRecommendations = recommendations.recommendations || [];
+  renderMarketDetail();
+}
+
+async function loadMarketEvents(projectId = state.marketDetail?.project?.id, append = false) {
+  if (!projectId) return;
+  const query = new URLSearchParams({ limit: "50" });
+  if (append && state.marketEventsNextBeforeId) {
+    query.set("before_id", state.marketEventsNextBeforeId);
+  }
+  const result = await api(`/api/market/projects/${projectId}/events?${query}`);
+  state.marketEvents = append
+    ? [...state.marketEvents, ...(result.events || [])]
+    : (result.events || []);
+  state.marketEventsNextBeforeId = result.next_before_id || null;
+  renderMarketEvents();
+}
+
+async function refreshMarketProject() {
+  const projectId = state.marketDetail?.project?.id;
+  if (!projectId) return;
+  state.marketDetail = await api(`/api/market/projects/${projectId}`);
+  await loadMarketProjectExtras(projectId);
+}
+
+async function archiveMarketProject() {
+  const projectId = state.marketDetail?.project?.id;
+  if (!projectId) return;
+  if (state.marketDetail.project.status === "archived") {
+    await api(`/api/market/projects/${projectId}/restore`, { method: "POST" });
+    await loadMarketContext();
+    state.marketDetail = await api(`/api/market/projects/${projectId}`);
+    await loadMarketProjectExtras(projectId);
+    toast(t("marketProjectRestored"));
+    return;
+  }
+  if (!confirm(t("archiveMarketConfirm"))) return;
+  await api(`/api/market/projects/${projectId}`, { method: "DELETE" });
+  state.marketDetail = null;
+  await loadMarketContext();
+  toast(t("marketProjectArchived"));
+}
+
+async function updateMarketPool(poolId, selected, isPrimary) {
+  const projectId = state.marketDetail?.project?.id;
+  if (!projectId) return;
+  state.marketDetail = await api(`/api/market/projects/${projectId}/pool`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      market_pool_id: poolId,
+      selected,
+      is_primary: isPrimary,
+    }),
+  });
+  renderMarketDetail();
+  toast(t("marketPoolUpdated"));
+}
+
+async function createMarketRule(event) {
+  event.preventDefault();
+  const projectId = state.marketDetail?.project?.id;
+  const definition = marketRuleDefinition($("marketRuleTypeSelect").value);
+  if (!projectId || !definition?.allowed) {
+    toast(t("marketNotLoaded"));
+    return;
+  }
+  const poolValue = $("marketRulePoolSelect").value;
+  await api(`/api/market/projects/${projectId}/rules`, {
+    method: "POST",
+    body: JSON.stringify({
+      market_pool_id: poolValue ? Number(poolValue) : null,
+      rule_type: definition.code,
+      threshold_value: $("marketThresholdInput").value,
+      threshold_unit: $("marketThresholdUnitSelect").value,
+      window_minutes: $("marketWindowWrap").hidden ? null : Number($("marketWindowInput").value),
+      sensitivity: $("marketSensitivitySelect").value,
+      cooldown_seconds: Number($("marketCooldownInput").value),
+      delivery_mode: $("marketDeliveryModeSelect").value,
+      cycle_type: $("marketCycleTypeSelect").value,
+      cycle_minutes: Number($("marketCycleMinutesInput").value),
+      trigger_count_threshold: Number($("marketTriggerCountInput").value),
+      notification_chat_type: $("marketTargetTypeSelect").value,
+      notification_chat_id: $("marketTargetTypeSelect").value === "group" ? $("marketGroupSelect").value : "",
+      notification_language: $("marketRuleLanguageSelect").value,
+    }),
+  });
+  await refreshMarketProject();
+  toast(t("marketRuleCreated"));
+}
+
+async function deleteMarketRule(ruleId) {
+  await api(`/api/market/rules/${ruleId}`, { method: "DELETE" });
+  await refreshMarketProject();
+  toast(t("marketRuleDeleted"));
+}
+
+async function restoreMarketRule(ruleId) {
+  await api(`/api/market/rules/${ruleId}/restore`, { method: "POST" });
+  await refreshMarketProject();
+  toast(t("marketRuleRestored"));
+}
+
+async function saveMarketLabel(event) {
+  event.preventDefault();
+  const projectId = state.marketDetail?.project?.id;
+  if (!projectId) return;
+  await api(`/api/market/projects/${projectId}/labels`, {
+    method: "POST",
+    body: JSON.stringify({
+      address: $("marketLabelAddressInput").value.trim(),
+      label_type: $("marketLabelTypeSelect").value,
+      label: $("marketLabelInput").value.trim(),
+      excluded: $("marketLabelExcludedInput").checked,
+    }),
+  });
+  $("marketLabelAddressInput").value = "";
+  $("marketLabelInput").value = "";
+  $("marketLabelExcludedInput").checked = false;
+  await refreshMarketProject();
+  toast(t("holderLabelSaved"));
+}
+
+async function deleteMarketLabel(labelId) {
+  await api(`/api/market/labels/${labelId}`, { method: "DELETE" });
+  await refreshMarketProject();
+  toast(t("holderLabelDeleted"));
+}
+
 function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
@@ -2134,6 +2791,35 @@ function bindEvents() {
   $("summaryForm").addEventListener("submit", guardAsync(saveSummary));
   $("summaryEditBtn").addEventListener("click", editSummary);
   $("summaryDisableBtn").addEventListener("click", guardAsync(disableSummary));
+  $("marketQueryForm").addEventListener("submit", guardAsync(queryMarketToken));
+  $("createMarketProjectBtn").addEventListener("click", guardAsync(createMarketProject));
+  $("refreshMarketProjectsBtn").addEventListener("click", guardAsync(loadMarketContext));
+  $("closeMarketDetailBtn").addEventListener("click", () => {
+    state.marketDetail = null;
+    state.marketRecommendations = [];
+    state.marketEvents = [];
+    state.marketEventsNextBeforeId = null;
+    renderMarketDetail();
+    $("marketProjectsList").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+  $("archiveMarketProjectBtn").addEventListener("click", guardAsync(archiveMarketProject));
+  $("marketRuleForm").addEventListener("submit", guardAsync(createMarketRule));
+  $("marketLabelForm").addEventListener("submit", guardAsync(saveMarketLabel));
+  $("refreshMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents()));
+  $("loadMoreMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents(undefined, true)));
+  $("marketRuleTypeSelect").addEventListener("change", renderMarketRuleEditor);
+  $("marketSensitivitySelect").addEventListener("change", renderMarketRuleEditor);
+  $("marketDeliveryModeSelect").addEventListener("change", updateMarketDeliveryFields);
+  $("marketTargetTypeSelect").addEventListener("change", renderMarketGroupOptions);
+  $("marketThresholdInput").addEventListener("input", () => {
+    $("marketSensitivitySelect").value = "custom";
+  });
+  document.querySelectorAll("[data-market-goal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.marketGoal = button.dataset.marketGoal;
+      renderMarketGoal();
+    });
+  });
   $("targetTypeSelect").addEventListener("change", updateTargetVisibility);
   $("combinationTargetTypeSelect").addEventListener("change", updateCombinationTargetVisibility);
   $("ruleTypeSelect").addEventListener("change", () => {
@@ -2216,6 +2902,7 @@ async function boot() {
   renderRules();
   renderCombinationDraft();
   renderAggregateEvents({ resetScroll: true });
+  renderMarket();
   updateConnectionButton();
   await loadBootData();
   if (!(await restoreSession())) {

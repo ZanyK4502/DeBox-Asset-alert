@@ -53,6 +53,7 @@ type WatchRule struct {
 	AggregationAnchorAt   *time.Time `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
 	Enabled               int32      `db:"enabled" json:"enabled"`
 	RunStatus             string     `db:"run_status" json:"run_status"`
+	PauseReason           string     `db:"pause_reason" json:"pause_reason"`
 	LastValue             *string    `db:"last_value" json:"last_value"`
 	LastCheckedAt         *time.Time `db:"last_checked_at" json:"last_checked_at"`
 	CreatedAt             time.Time  `db:"created_at" json:"created_at"`
@@ -119,6 +120,7 @@ type CombinationRule struct {
 	NotificationLanguage string                  `db:"notification_language" json:"notification_language"`
 	Enabled              int32                   `db:"enabled" json:"enabled"`
 	RunStatus            string                  `db:"run_status" json:"run_status"`
+	PauseReason          string                  `db:"pause_reason" json:"pause_reason"`
 	AggregationAnchorAt  *time.Time              `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
 	CreatedAt            time.Time               `db:"created_at" json:"created_at"`
 	Members              []CombinationRuleMember `db:"-" json:"members"`
@@ -290,16 +292,39 @@ type ComplimentaryGrant struct {
 }
 
 type SummaryStatistics struct {
-	RuleCount               int64 `db:"rule_count" json:"rule_count"`
-	WalletCount             int64 `db:"wallet_count" json:"wallet_count"`
-	AssetRuleCount          int64 `db:"asset_rule_count" json:"asset_rule_count"`
-	ApprovalRuleCount       int64 `db:"approval_rule_count" json:"approval_rule_count"`
-	InteractionRuleCount    int64 `db:"interaction_rule_count" json:"interaction_rule_count"`
-	EventCount              int64 `db:"event_count" json:"event_count"`
-	AssetEventCount         int64 `db:"asset_event_count" json:"asset_event_count"`
-	ApprovalEventCount      int64 `db:"approval_event_count" json:"approval_event_count"`
-	InteractionEventCount   int64 `db:"interaction_event_count" json:"interaction_event_count"`
-	FailedNotificationCount int64 `db:"failed_notification_count" json:"failed_notification_count"`
+	RuleCount                     int64  `db:"rule_count" json:"rule_count"`
+	WalletCount                   int64  `db:"wallet_count" json:"wallet_count"`
+	AssetRuleCount                int64  `db:"asset_rule_count" json:"asset_rule_count"`
+	ApprovalRuleCount             int64  `db:"approval_rule_count" json:"approval_rule_count"`
+	InteractionRuleCount          int64  `db:"interaction_rule_count" json:"interaction_rule_count"`
+	EventCount                    int64  `db:"event_count" json:"event_count"`
+	AssetEventCount               int64  `db:"asset_event_count" json:"asset_event_count"`
+	ApprovalEventCount            int64  `db:"approval_event_count" json:"approval_event_count"`
+	InteractionEventCount         int64  `db:"interaction_event_count" json:"interaction_event_count"`
+	FailedNotificationCount       int64  `db:"failed_notification_count" json:"failed_notification_count"`
+	MarketProjectCount            int64  `db:"market_project_count" json:"market_project_count"`
+	MarketRuleCount               int64  `db:"market_rule_count" json:"market_rule_count"`
+	MarketEventCount              int64  `db:"market_event_count" json:"market_event_count"`
+	MarketBuyCount                int64  `db:"market_buy_count" json:"market_buy_count"`
+	MarketSellCount               int64  `db:"market_sell_count" json:"market_sell_count"`
+	MarketBuyUSD                  string `db:"market_buy_usd" json:"market_buy_usd"`
+	MarketSellUSD                 string `db:"market_sell_usd" json:"market_sell_usd"`
+	MarketNetBuyUSD               string `db:"market_net_buy_usd" json:"market_net_buy_usd"`
+	LiquidityEventCount           int64  `db:"liquidity_event_count" json:"liquidity_event_count"`
+	HolderEventCount              int64  `db:"holder_event_count" json:"holder_event_count"`
+	MarketFailedNotificationCount int64  `db:"market_failed_notification_count" json:"market_failed_notification_count"`
+}
+
+type MarketSummaryEvent struct {
+	ID              int64     `db:"id" json:"id"`
+	MarketProjectID int64     `db:"market_project_id" json:"market_project_id"`
+	TokenSymbol     string    `db:"token_symbol" json:"token_symbol"`
+	EventType       string    `db:"event_type" json:"event_type"`
+	WalletAddress   *string   `db:"wallet_address" json:"wallet_address"`
+	TokenAmount     *string   `db:"token_amount" json:"token_amount"`
+	USDValue        *string   `db:"usd_value" json:"usd_value"`
+	TransactionHash *string   `db:"transaction_hash" json:"transaction_hash"`
+	OccurredAt      time.Time `db:"occurred_at" json:"occurred_at"`
 }
 
 type SummaryEvent struct {

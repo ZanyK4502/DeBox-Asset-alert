@@ -43,6 +43,10 @@ type Blockchain interface {
 	LatestBlockNumber(context.Context, string, string) (uint64, error)
 }
 
+type EntitlementReconciler interface {
+	ReconcileActivePlan(context.Context, string, string) error
+}
+
 type Settings struct {
 	Mode             string
 	RecipientAddress string
@@ -52,10 +56,11 @@ type Settings struct {
 }
 
 type Service struct {
-	repository Repository
-	blockchain Blockchain
-	catalog    *plans.Catalog
-	settings   Settings
+	repository   Repository
+	blockchain   Blockchain
+	catalog      *plans.Catalog
+	settings     Settings
+	entitlements EntitlementReconciler
 }
 
 func New(
@@ -63,18 +68,23 @@ func New(
 	blockchain Blockchain,
 	catalog *plans.Catalog,
 	settings Settings,
+	entitlements ...EntitlementReconciler,
 ) *Service {
 	settings.Mode = strings.ToLower(strings.TrimSpace(settings.Mode))
 	if settings.Mode == "" {
 		settings.Mode = "preview"
 	}
 	settings.TokenSymbol = strings.TrimSpace(settings.TokenSymbol)
-	return &Service{
+	service := &Service{
 		repository: repository,
 		blockchain: blockchain,
 		catalog:    catalog,
 		settings:   settings,
 	}
+	if len(entitlements) > 0 {
+		service.entitlements = entitlements[0]
+	}
+	return service
 }
 
 type Configuration struct {
@@ -470,6 +480,15 @@ func (s *Service) verifyClaimedOrder(
 	)
 	if err != nil {
 		return VerifyResult{}, err
+	}
+	if s.entitlements != nil {
+		if err := s.entitlements.ReconcileActivePlan(
+			ctx,
+			finalized.Order.DeBoxUserID,
+			finalized.Order.PlanCode,
+		); err != nil {
+			return VerifyResult{}, err
+		}
 	}
 	return VerifyResult{
 		PaymentStatus:         "paid",

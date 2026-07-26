@@ -381,7 +381,19 @@ func (s *Service) ActivatePaidSubscription(
 	if plan.Code == plans.Free {
 		return store.Subscription{}, errors.New("免费版无需支付。")
 	}
-	return s.repository.ActivateSubscription(ctx, deboxUserID, plan.Code, plan.Days)
+	activated, err := s.repository.ActivateSubscription(
+		ctx,
+		deboxUserID,
+		plan.Code,
+		plan.Days,
+	)
+	if err != nil {
+		return store.Subscription{}, err
+	}
+	if err := s.ReconcileActivePlan(ctx, deboxUserID, plan.Code); err != nil {
+		return store.Subscription{}, err
+	}
+	return activated, nil
 }
 
 type ComplimentaryAccess struct {
@@ -439,13 +451,20 @@ func (s *Service) ActivateComplimentaryPlan(
 	if plan.Code != plans.Standard && plan.Code != plans.Professional {
 		return store.ComplimentaryActivation{}, errors.New("白名单只能选择标准版或专业版。")
 	}
-	return s.repository.ActivateComplimentarySubscription(
+	activation, err := s.repository.ActivateComplimentarySubscription(
 		ctx,
 		deboxUserID,
 		wallet,
 		plan.Code,
 		ComplimentaryDays,
 	)
+	if err != nil {
+		return store.ComplimentaryActivation{}, err
+	}
+	if err := s.ReconcileActivePlan(ctx, deboxUserID, plan.Code); err != nil {
+		return store.ComplimentaryActivation{}, err
+	}
+	return activation, nil
 }
 
 func classifyRules(
@@ -567,13 +586,17 @@ func daysRemaining(subscription *store.Subscription, now time.Time) int {
 
 func quotaPolicy(plan plans.Plan) store.QuotaPolicy {
 	return store.QuotaPolicy{
-		PlanCode:          plan.Code,
-		WalletLimit:       plan.WalletLimit,
-		RuleLimit:         plan.RuleLimit,
-		GroupLimit:        plan.GroupLimit,
-		AllowedRuleTypes:  append([]string(nil), plan.AllowedRuleTypes...),
-		GroupNotification: plan.GroupNotification,
-		CombinationRules:  plan.AllowsCombinationRules(),
+		PlanCode:               plan.Code,
+		WalletLimit:            plan.WalletLimit,
+		RuleLimit:              plan.RuleLimit,
+		GroupLimit:             plan.GroupLimit,
+		MarketProjectLimit:     plan.MarketProjectLimit,
+		AllowedRuleTypes:       append([]string(nil), plan.AllowedRuleTypes...),
+		AllowedMarketRuleTypes: append([]string(nil), plan.AllowedMarketRules...),
+		GroupNotification:      plan.GroupNotification,
+		StageNotifications:     plan.AllowsStageNotifications(),
+		CombinationRules:       plan.AllowsCombinationRules(),
+		MultiPoolMonitoring:    plan.MarketPoolMode == "multiple",
 	}
 }
 
@@ -583,6 +606,16 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 		return errors.New("当前套餐不支持该规则类型。")
 	case errors.Is(err, store.ErrGroupNotificationDenied):
 		return errors.New("当前套餐不支持群通知，请升级专业版。")
+	case errors.Is(err, store.ErrStageNotificationsDenied):
+		return errors.New("当前套餐不支持阶段提醒。")
+	case errors.Is(err, store.ErrMarketMonitoringDenied):
+		return errors.New("当前套餐不支持持续项目币监控。")
+	case errors.Is(err, store.ErrMarketRuleTypeDenied):
+		return errors.New("当前套餐不支持该市场规则类型。")
+	case errors.Is(err, store.ErrMarketProjectLimitReached):
+		return fmt.Errorf("当前套餐最多支持 %d 个持续监控项目币。", plan.MarketProjectLimit)
+	case errors.Is(err, store.ErrMarketPoolMismatch):
+		return errors.New("当前套餐只能监控项目主池；多池监控需要专业版。")
 	case errors.Is(err, store.ErrCombinationRulesDenied):
 		return errors.New("组合规则仅支持专业版。")
 	case errors.Is(err, store.ErrInvalidCombinationRule):

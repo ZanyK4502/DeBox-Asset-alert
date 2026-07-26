@@ -19,6 +19,7 @@ type fakeRepository struct {
 	targets       map[int64][]store.DailySummaryTarget
 	statistics    store.SummaryStatistics
 	events        []store.SummaryEvent
+	marketEvents  []store.MarketSummaryEvent
 	listAfterIDs  []int64
 	marks         []summaryMark
 	targetMarks   []targetMark
@@ -167,6 +168,17 @@ func (f *fakeRepository) ListSummaryRecentEvents(
 ) ([]store.SummaryEvent, error) {
 	f.calls = append(f.calls, fmt.Sprintf("events:%d", limit))
 	return f.events, f.eventsErr
+}
+
+func (f *fakeRepository) ListSummaryRecentMarketEvents(
+	_ context.Context,
+	_ string,
+	_ time.Time,
+	_ time.Time,
+	limit int,
+) ([]store.MarketSummaryEvent, error) {
+	f.calls = append(f.calls, fmt.Sprintf("market-events:%d", limit))
+	return f.marketEvents, f.eventsErr
 }
 
 func (f *fakeRepository) MarkScheduledPushSent(
@@ -414,6 +426,7 @@ func TestBuildSummaryTextPreservesTotalsAndEscapesLabel(t *testing.T) {
 		periodEnd,
 		statistics,
 		events,
+		nil,
 	)
 
 	for _, expected := range []string{
@@ -446,6 +459,7 @@ func TestBuildChineseSummaryWithoutEvents(t *testing.T) {
 		periodEnd,
 		store.SummaryStatistics{},
 		nil,
+		nil,
 	)
 
 	for _, expected := range []string{
@@ -457,6 +471,56 @@ func TestBuildChineseSummaryWithoutEvents(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, text)
 		}
+	}
+}
+
+func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.T) {
+	subscription := testSubscription(1)
+	buyUSD := "1250.50"
+	wallet := "0x1111111111111111111111111111111111111111"
+	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+
+	text := buildSummaryText(
+		subscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		store.SummaryStatistics{
+			MarketProjectCount:            2,
+			MarketRuleCount:               7,
+			MarketEventCount:              9,
+			MarketBuyCount:                4,
+			MarketSellCount:               3,
+			MarketBuyUSD:                  "1250.50",
+			MarketSellUSD:                 "400",
+			MarketNetBuyUSD:               "850.50",
+			LiquidityEventCount:           1,
+			HolderEventCount:              1,
+			MarketFailedNotificationCount: 2,
+		},
+		nil,
+		[]store.MarketSummaryEvent{{
+			TokenSymbol:   "<PRJ>",
+			EventType:     "buy",
+			WalletAddress: &wallet,
+			USDValue:      &buyUSD,
+		}},
+	)
+
+	for _, expected := range []string{
+		"通知失败次数：2",
+		"市场监控：2 个项目币，7 条运行规则",
+		"买入 4 笔（$1250.5）",
+		"卖出 3 笔（$400）",
+		"净买入 $+850.5",
+		"市场事件：共 9 条，流动性 1 条，大户变化 1 条",
+		"&lt;PRJ&gt; · 买入 $1250.5",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("unified summary missing %q:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "<PRJ>") {
+		t.Fatalf("market token symbol was not escaped:\n%s", text)
 	}
 }
 

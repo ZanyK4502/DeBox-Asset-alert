@@ -169,6 +169,33 @@ func (s *Store) DeleteNotificationGroup(
 		`, deboxUserID, group.GID); err != nil {
 			return GroupDeletion{}, fmt.Errorf("fallback group combination rules to private: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE market_rules
+			SET notification_chat_id = $1,
+			    notification_chat_type = 'private',
+			    notification_label = '私聊通知',
+			    updated_at = NOW()
+			WHERE debox_user_id = $1
+			  AND notification_chat_type = 'group'
+			  AND notification_chat_id = $2
+		`, deboxUserID, group.GID); err != nil {
+			return GroupDeletion{}, fmt.Errorf("fallback group market rules to private: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE market_combination_rules
+			SET notification_chat_id = $1,
+			    notification_chat_type = 'private',
+			    notification_label = '私聊通知',
+			    updated_at = NOW()
+			WHERE debox_user_id = $1
+			  AND notification_chat_type = 'group'
+			  AND notification_chat_id = $2
+		`, deboxUserID, group.GID); err != nil {
+			return GroupDeletion{}, fmt.Errorf(
+				"fallback group market combinations to private: %w",
+				err,
+			)
+		}
 
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM daily_summary_targets t
