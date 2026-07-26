@@ -39,6 +39,25 @@ func (h handler) postPreparePayment(w http.ResponseWriter, r *http.Request) {
 		serviceUnavailable(w)
 		return
 	}
+	if h.deps.Subscriptions != nil {
+		if _, err := h.deps.Subscriptions.BindPermanentWallet(
+			r.Context(),
+			session.DeBoxUserID,
+			session.WalletAddress,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		entitlement, err := h.deps.Subscriptions.Entitlement(r.Context(), session.DeBoxUserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if entitlement.Permanent {
+			writeError(w, http.StatusBadRequest, errors.New("永久白名单套餐无需购买或续费"))
+			return
+		}
+	}
 	var input preparePaymentInput
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)

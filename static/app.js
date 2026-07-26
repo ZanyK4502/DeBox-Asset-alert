@@ -529,6 +529,7 @@ function renderRuleTypes() {
 }
 
 function renderPlans() {
+  const permanent = Boolean(state.entitlement?.permanent);
   const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code)
     ? currentPlan().code
     : "";
@@ -537,7 +538,9 @@ function renderPlans() {
       const selectable = plan.code !== "free";
       const tag = selectable ? "button" : "div";
       const active = selectable && plan.code === state.selectedPlan ? " active" : "";
-      const locked = selectable && Boolean(currentPaidPlan && plan.code !== currentPaidPlan);
+      const locked = selectable && Boolean(
+        permanent || (currentPaidPlan && plan.code !== currentPaidPlan)
+      );
       const attributes = selectable
         ? ` type="button" data-plan="${escapeHtml(plan.code)}"${locked ? " disabled" : ""}`
         : "";
@@ -579,12 +582,14 @@ function renderPlans() {
     complimentary?.available && !currentPaidPlan
   );
   const complimentaryActive = Boolean(complimentary?.used && currentPaidPlan);
-  $("payBtn").textContent = complimentaryAvailable
-    ? t("complimentaryActivate")
-    : complimentaryActive
-      ? t("currentPlanButton")
-      : t("payRenew");
-  $("payBtn").disabled = complimentaryActive;
+  $("payBtn").textContent = permanent
+    ? t("permanentPlanButton")
+    : complimentaryAvailable
+      ? t("complimentaryActivate")
+      : complimentaryActive
+        ? t("currentPlanButton")
+        : t("payRenew");
+  $("payBtn").disabled = permanent || complimentaryActive;
 }
 
 function selectedBillingOption(plan) {
@@ -634,6 +639,7 @@ function renderSubscription(syncSummary = true) {
   }
   const sub = state.entitlement.subscription || {};
   const isFree = plan.code === "free";
+  const isPermanent = Boolean(state.entitlement.permanent);
   const planText = localizedPlan(plan);
   const freeHint =
     state.entitlement.paid_history && state.entitlement.fallback_free
@@ -642,14 +648,20 @@ function renderSubscription(syncSummary = true) {
   box.innerHTML = `
     <div class="metric-row">
       <strong>${escapeHtml(planText.name)}</strong>
-      <span>${escapeHtml(isFree ? t("permanent") : t("remainingDays", { days: state.entitlement.days_remaining }))}</span>
+      <span>${escapeHtml(isFree || isPermanent ? t("permanent") : t("remainingDays", { days: state.entitlement.days_remaining }))}</span>
     </div>
     <div class="mini-grid">
       <span>${escapeHtml(t("walletMetric", { used: state.entitlement.wallet_count, limit: plan.wallet_limit }))}</span>
       <span>${escapeHtml(t("ruleMetric", { used: state.entitlement.rule_count, limit: plan.rule_limit }))}</span>
       <span>${escapeHtml(t("groupMetric", { used: state.entitlement.group_count, limit: plan.group_limit }))}</span>
     </div>
-    <small class="muted">${escapeHtml(isFree ? freeHint : t("expiresAt", { date: TIME.formatExpiryDate(sub.expires_at, state.uiLanguage) }))}</small>
+    <small class="muted">${escapeHtml(
+      isFree
+        ? freeHint
+        : isPermanent
+          ? t("permanentPlanActive")
+          : t("expiresAt", { date: TIME.formatExpiryDate(sub.expires_at, state.uiLanguage) })
+    )}</small>
   `;
   if (syncSummary) fillSummaryForm();
 }
@@ -1470,7 +1482,9 @@ function renderPaymentStatus() {
   const config = state.paymentConfig;
   const complimentary = state.entitlement?.complimentary_access;
   const currentPaidPlan = ["standard", "professional"].includes(currentPlan()?.code);
-  if (complimentary?.available && !currentPaidPlan) {
+  if (state.entitlement?.permanent) {
+    status.textContent = t("permanentPlanActive");
+  } else if (complimentary?.available && !currentPaidPlan) {
     status.textContent = t("complimentaryAvailable");
   } else if (complimentary?.used && currentPaidPlan) {
     status.textContent = t("complimentaryActive", { date: complimentary.expires_at || "-" });
@@ -1669,6 +1683,10 @@ async function loadPaymentConfig() {
 async function payOrRenew() {
   if (!state.deboxUserId || !state.walletAddress) {
     toast(t("connectFirst"));
+    return;
+  }
+  if (state.entitlement?.permanent) {
+    toast(t("permanentPlanActive"));
     return;
   }
   const complimentary = state.entitlement?.complimentary_access;

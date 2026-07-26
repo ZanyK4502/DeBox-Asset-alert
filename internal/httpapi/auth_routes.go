@@ -62,6 +62,17 @@ func (h handler) postAuthVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err)
 		return
 	}
+	if h.deps.Subscriptions != nil {
+		if _, err := h.deps.Subscriptions.BindPermanentWallet(
+			r.Context(),
+			result.DeBoxUserID,
+			result.WalletAddress,
+		); err != nil {
+			_, _ = h.deps.Auth.RevokeSession(r.Context(), result.SessionToken)
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.CookieName,
 		Value:    result.SessionToken,

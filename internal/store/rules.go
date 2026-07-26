@@ -419,8 +419,10 @@ func (s *Store) ListEnabledWatchRules(ctx context.Context, limit int) ([]WatchRu
 			FROM subscriptions sub
 			WHERE sub.debox_user_id = wr.debox_user_id
 			  AND sub.status = 'active'
-			  AND sub.expires_at > NOW()
-			ORDER BY sub.expires_at DESC
+			  AND (sub.is_permanent = 1 OR sub.expires_at > NOW())
+			ORDER BY CASE sub.plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
+			         sub.is_permanent DESC,
+			         sub.expires_at DESC
 			LIMIT 1
 		) active_subscription ON TRUE
 		WHERE wr.enabled = 1
@@ -434,6 +436,7 @@ func (s *Store) ListEnabledWatchRules(ctx context.Context, limit int) ([]WatchRu
 				  SELECT 1 FROM subscriptions history
 				  WHERE history.debox_user_id = wr.debox_user_id
 				    AND history.plan_code <> 'free'
+				    AND history.is_permanent = 0
 				)
 			  )
 			  AND EXISTS (

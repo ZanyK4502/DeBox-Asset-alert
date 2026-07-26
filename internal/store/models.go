@@ -20,6 +20,9 @@ type Subscription struct {
 	ScheduledPushLastSentAt     *time.Time `db:"scheduled_push_last_sent_at" json:"scheduled_push_last_sent_at"`
 	DailySummaryLastPeriodEndAt *time.Time `db:"daily_summary_last_period_end_at" json:"daily_summary_last_period_end_at"`
 	CreatedAt                   time.Time  `db:"created_at" json:"created_at"`
+	IsPermanent                 int32      `db:"is_permanent" json:"is_permanent"`
+	EntitlementSource           string     `db:"entitlement_source" json:"entitlement_source"`
+	EntitlementWalletAddress    *string    `db:"entitlement_wallet_address" json:"entitlement_wallet_address,omitempty"`
 }
 
 type DailySummaryTarget struct {

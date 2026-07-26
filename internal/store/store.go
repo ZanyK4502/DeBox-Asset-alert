@@ -41,6 +41,7 @@ var (
 	ErrOrderConflict              = errors.New("payment order conflict")
 	ErrOrderInvalid               = errors.New("payment order is missing, expired, or not owned by the user")
 	ErrOrderTransactionUsed       = errors.New("transaction is already assigned to another order")
+	ErrPermanentEntitlement       = errors.New("permanent plan does not require payment")
 	ErrPoolRequired               = errors.New("a PostgreSQL pool is required for this operation")
 	ErrRuleLimitReached           = errors.New("watch rule limit reached")
 	ErrRuleTypeDenied             = errors.New("watch rule type is not allowed")

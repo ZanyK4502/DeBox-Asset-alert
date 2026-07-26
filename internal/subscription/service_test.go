@@ -181,6 +181,69 @@ func TestDaysRemainingRoundsUp(t *testing.T) {
 	}
 }
 
+func TestPermanentEntitlementHasNoExpiryCountdown(t *testing.T) {
+	t.Parallel()
+
+	repository := &fakeRepository{
+		activeSubscription: &store.Subscription{
+			ID:                12,
+			DeBoxUserID:       "user-1",
+			PlanCode:          plans.Professional,
+			Status:            "active",
+			IsPermanent:       1,
+			EntitlementSource: "permanent_allowlist",
+			ExpiresAt:         time.Now().Add(-time.Hour),
+		},
+	}
+	service := newTestService(t, repository)
+
+	result, err := service.Entitlement(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("Entitlement(): %v", err)
+	}
+	if !result.Permanent || result.Plan.Code != plans.Professional {
+		t.Fatalf("permanent entitlement = %+v", result)
+	}
+	if result.DaysRemaining != 0 {
+		t.Fatalf("DaysRemaining = %d, want 0 for permanent plan", result.DaysRemaining)
+	}
+}
+
+func TestBindPermanentWalletNormalizesAddress(t *testing.T) {
+	t.Parallel()
+
+	subscription := &store.Subscription{
+		PlanCode:    plans.Professional,
+		IsPermanent: 1,
+	}
+	repository := &fakeRepository{
+		permanentBinding: store.PermanentPlanBinding{
+			Subscription: subscription,
+			Changed:      true,
+		},
+	}
+	service := newTestService(t, repository)
+
+	result, err := service.BindPermanentWallet(
+		context.Background(),
+		"user-1",
+		"0xCBA3FCE9D49CE5D7870443F324A8DD56A5788BFC",
+	)
+	if err != nil {
+		t.Fatalf("BindPermanentWallet(): %v", err)
+	}
+	if result != subscription ||
+		repository.permanentUser != "user-1" ||
+		repository.permanentWallet != allowlistedWallet {
+		t.Fatalf(
+			"binding = %#v, input = %q/%q",
+			result,
+			repository.permanentUser,
+			repository.permanentWallet,
+		)
+	}
+}
+
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	catalog, err := plans.NewCatalog("10", 30, "USDT")
@@ -192,6 +255,10 @@ func newTestService(t *testing.T, repository Repository) *Service {
 
 type fakeRepository struct {
 	activeSubscription *store.Subscription
+	permanentBinding   store.PermanentPlanBinding
+	permanentUser      string
+	permanentWallet    string
+	permanentErr       error
 	paidHistory        bool
 	preferences        store.UserPreference
 	rules              []store.WatchRule
@@ -223,6 +290,16 @@ func (f *fakeRepository) GetActiveSubscription(
 	string,
 ) (*store.Subscription, error) {
 	return f.activeSubscription, nil
+}
+
+func (f *fakeRepository) BindPermanentPlan(
+	_ context.Context,
+	deboxUserID string,
+	walletAddress string,
+) (store.PermanentPlanBinding, error) {
+	f.permanentUser = deboxUserID
+	f.permanentWallet = walletAddress
+	return f.permanentBinding, f.permanentErr
 }
 
 func (f *fakeRepository) HasPaidSubscriptionHistory(context.Context, string) (bool, error) {

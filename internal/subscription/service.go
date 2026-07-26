@@ -17,6 +17,7 @@ const ComplimentaryDays = 30
 
 type Repository interface {
 	GetActiveSubscription(context.Context, string) (*store.Subscription, error)
+	BindPermanentPlan(context.Context, string, string) (store.PermanentPlanBinding, error)
 	HasPaidSubscriptionHistory(context.Context, string) (bool, error)
 	GetUserPreferences(context.Context, string) (store.UserPreference, error)
 	ApplyPaidExpiryFallback(context.Context, string, *int64) (bool, error)
@@ -75,6 +76,7 @@ type Entitlement struct {
 	DeBoxUserID     string                    `json:"debox_user_id"`
 	Subscription    *store.Subscription       `json:"subscription"`
 	Plan            plans.Plan                `json:"plan"`
+	Permanent       bool                      `json:"permanent"`
 	PaidHistory     bool                      `json:"paid_history"`
 	FallbackFree    bool                      `json:"fallback_free"`
 	Preferences     store.UserPreference      `json:"preferences"`
@@ -159,6 +161,7 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 		DeBoxUserID:     deboxUserID,
 		Subscription:    activeSubscription,
 		Plan:            plan,
+		Permanent:       activeSubscription != nil && activeSubscription.IsPermanent == 1,
 		PaidHistory:     paidHistory,
 		FallbackFree:    fallbackFree,
 		Preferences:     preferences,
@@ -172,6 +175,40 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 		Groups:          groups,
 		SummarySettings: summarySettings(activeSubscription, summaryTargets),
 	}, nil
+}
+
+func (s *Service) BindPermanentWallet(
+	ctx context.Context,
+	deboxUserID string,
+	walletAddress string,
+) (*store.Subscription, error) {
+	wallet, err := normalizeAddress(walletAddress)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := s.repository.BindPermanentPlan(ctx, deboxUserID, wallet)
+	if err != nil {
+		return nil, err
+	}
+	if binding.Subscription != nil && binding.Changed {
+		if binding.PreviousDeBoxUserID != "" {
+			if err := s.ReconcileActivePlan(
+				ctx,
+				binding.PreviousDeBoxUserID,
+				"",
+			); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.ReconcileActivePlan(
+			ctx,
+			deboxUserID,
+			"",
+		); err != nil {
+			return nil, err
+		}
+	}
+	return binding.Subscription, nil
 }
 
 func (s *Service) ActivePlan(ctx context.Context, deboxUserID string) (plans.Plan, error) {
@@ -441,6 +478,13 @@ func (s *Service) ActivateComplimentaryPlan(
 	if err != nil {
 		return store.ComplimentaryActivation{}, err
 	}
+	permanent, err := s.BindPermanentWallet(ctx, deboxUserID, wallet)
+	if err != nil {
+		return store.ComplimentaryActivation{}, err
+	}
+	if permanent != nil {
+		return store.ComplimentaryActivation{}, errors.New("永久白名单套餐无需开通限时体验")
+	}
 	if _, eligible := s.complimentaryWallets[wallet]; !eligible {
 		return store.ComplimentaryActivation{}, errors.New("当前钱包不在免费开通白名单中。")
 	}
@@ -574,7 +618,7 @@ func summarySettings(
 }
 
 func daysRemaining(subscription *store.Subscription, now time.Time) int {
-	if subscription == nil || subscription.ExpiresAt.IsZero() {
+	if subscription == nil || subscription.IsPermanent == 1 || subscription.ExpiresAt.IsZero() {
 		return 0
 	}
 	days := math.Ceil(subscription.ExpiresAt.UTC().Sub(now.UTC()).Hours() / 24)

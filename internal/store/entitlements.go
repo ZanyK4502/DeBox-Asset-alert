@@ -55,8 +55,10 @@ func effectivePlanCode(ctx context.Context, db DBTX, deboxUserID string) (string
 			FROM subscriptions
 			WHERE debox_user_id = $1
 			  AND status = 'active'
-			  AND expires_at > NOW()
-			ORDER BY expires_at DESC
+			  AND (is_permanent = 1 OR expires_at > NOW())
+			ORDER BY CASE plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
+			         is_permanent DESC,
+			         expires_at DESC
 			LIMIT 1
 		), 'free')
 	`, deboxUserID).Scan(&planCode); err != nil {
@@ -107,7 +109,7 @@ func (s *Store) ApplyPaidExpiryFallback(
 				FROM subscriptions
 				WHERE debox_user_id = $1
 				  AND status = 'active'
-				  AND expires_at > NOW()
+				  AND (is_permanent = 1 OR expires_at > NOW())
 			)
 		`, deboxUserID).Scan(&activeSubscription); err != nil {
 			return false, fmt.Errorf("check active subscription: %w", err)
@@ -120,7 +122,8 @@ func (s *Store) ApplyPaidExpiryFallback(
 			SELECT EXISTS (
 				SELECT 1
 				FROM subscriptions
-				WHERE debox_user_id = $1 AND plan_code <> 'free'
+				WHERE debox_user_id = $1
+				  AND plan_code <> 'free'
 			)
 		`, deboxUserID).Scan(&paidHistory); err != nil {
 			return false, fmt.Errorf("check paid subscription history: %w", err)
@@ -167,7 +170,7 @@ func (s *Store) ApplyExpiredEntitlementFallbacks(ctx context.Context) (int64, er
 				FROM subscriptions active
 				WHERE active.debox_user_id = paid.debox_user_id
 				  AND active.status = 'active'
-				  AND active.expires_at > NOW()
+				  AND (active.is_permanent = 1 OR active.expires_at > NOW())
 				  AND active.plan_code <> 'free'
 			)
 			  AND (

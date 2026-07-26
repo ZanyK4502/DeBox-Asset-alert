@@ -5,7 +5,8 @@ const subscriptionColumns = `
 	daily_summary_enabled, daily_summary_time, daily_summary_timezone,
 	daily_summary_chat_type, daily_summary_chat_id, daily_summary_label,
 	daily_summary_language, daily_summary_last_sent_date,
-	scheduled_push_last_sent_at, daily_summary_last_period_end_at, created_at
+	scheduled_push_last_sent_at, daily_summary_last_period_end_at, created_at,
+	is_permanent, entitlement_source, entitlement_wallet_address
 `
 
 const watchRuleColumns = `

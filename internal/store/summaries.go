@@ -39,7 +39,17 @@ func (s *Store) UpdateDailySummarySettings(
 			    daily_summary_chat_id = $5,
 			    daily_summary_label = $6,
 			    daily_summary_language = $7
-			WHERE debox_user_id = $8 AND status = 'active' AND expires_at > NOW()
+			WHERE id = (
+				SELECT id
+				FROM subscriptions
+				WHERE debox_user_id = $8
+				  AND status = 'active'
+				  AND (is_permanent = 1 OR expires_at > NOW())
+				ORDER BY CASE plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
+				         is_permanent DESC,
+				         expires_at DESC
+				LIMIT 1
+			)
 			RETURNING `+subscriptionColumns,
 			enabled,
 			settings.PushTime,
@@ -158,7 +168,7 @@ func (s *Store) ListDueScheduledSubscriptions(
 		SELECT `+subscriptionColumns+`
 		FROM subscriptions
 		WHERE status = 'active'
-		  AND expires_at > NOW()
+		  AND (is_permanent = 1 OR expires_at > NOW())
 		  AND daily_summary_enabled = 1
 		  AND id > $1
 		ORDER BY id ASC
@@ -179,7 +189,7 @@ func (s *Store) GetScheduledSubscription(
 		FROM subscriptions
 		WHERE id = $1
 		  AND status = 'active'
-		  AND expires_at > NOW()
+		  AND (is_permanent = 1 OR expires_at > NOW())
 		  AND daily_summary_enabled = 1
 		LIMIT 1
 	`, subscriptionID)

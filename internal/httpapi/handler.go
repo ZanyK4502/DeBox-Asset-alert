@@ -36,6 +36,7 @@ type AuthService interface {
 
 type SubscriptionService interface {
 	Entitlement(context.Context, string) (subscription.Entitlement, error)
+	BindPermanentWallet(context.Context, string, string) (*store.Subscription, error)
 	EnableFreePlan(context.Context, string) (*store.Subscription, error)
 	ComplimentaryAccess(context.Context, string) (subscription.ComplimentaryAccess, error)
 	ActivateComplimentaryPlan(context.Context, string, string, string) (store.ComplimentaryActivation, error)

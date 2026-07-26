@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0008_market_rules_notifications.sql" {
-		t.Fatalf("latest migration = %q, want market rules notification migration", got)
+	if got := names[len(names)-1]; got != "0009_permanent_plan_allowlist.sql" {
+		t.Fatalf("latest migration = %q, want permanent plan allowlist migration", got)
 	}
 
 	requiredTables := []string{
@@ -30,6 +30,7 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"auth_challenges",
 		"auth_sessions",
 		"complimentary_grants",
+		"permanent_plan_allowlist",
 		"combination_rules",
 		"combination_rule_members",
 		"aggregation_windows",
@@ -97,5 +98,17 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if strings.Contains(combined, " double precision") ||
 		strings.Contains(combined, " real ") {
 		t.Fatal("financial market data must not use floating-point PostgreSQL types")
+	}
+
+	for _, wallet := range []string{
+		"0xcba3fce9d49ce5d7870443f324a8dd56a5788bfc",
+		"0xe4f1f421d116ed75822c4527bfaf332566043b2d",
+		"0x50d593be2c06d7b13c5deb3b9565b4b54ebda3a1",
+		"0xdd7e931d86c1ae7d38453e2c261e048f323497c4",
+		"0xcd44ffeb623bdc62a821a0301fad91e1c44c3643",
+	} {
+		if !strings.Contains(combined, wallet) {
+			t.Errorf("permanent allowlist is missing wallet %q", wallet)
+		}
 	}
 }

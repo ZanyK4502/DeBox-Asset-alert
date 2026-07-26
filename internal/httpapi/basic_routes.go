@@ -38,6 +38,14 @@ func (h handler) getCurrentSubscription(w http.ResponseWriter, r *http.Request) 
 		serviceUnavailable(w)
 		return
 	}
+	if _, err := h.deps.Subscriptions.BindPermanentWallet(
+		r.Context(),
+		session.DeBoxUserID,
+		session.WalletAddress,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	entitlement, err := h.deps.Subscriptions.Entitlement(r.Context(), session.DeBoxUserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)

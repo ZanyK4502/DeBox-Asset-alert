@@ -115,7 +115,7 @@ func (s *Store) DeleteNotificationGroup(
 			JOIN daily_summary_targets t ON t.subscription_id = s.id
 			WHERE s.debox_user_id = $1
 			  AND s.status = 'active'
-			  AND s.expires_at > NOW()
+			  AND (s.is_permanent = 1 OR s.expires_at > NOW())
 			  AND t.chat_type = 'group'
 			  AND t.chat_id = $2
 			ORDER BY s.id ASC

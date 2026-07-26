@@ -135,6 +135,37 @@ func TestSubscriptionCopyFormatsExpiryAsReadableUTC(t *testing.T) {
 	}
 }
 
+func TestSubscriptionCopyShowsPermanentProfessionalPlan(t *testing.T) {
+	service, _, _, _ := newTestService(t)
+	service.deps.Subscriptions = fakeSubscriptions{value: subscription.Entitlement{
+		Plan:      plans.Plan{Code: plans.Professional, Name: "专业版", RuleLimit: 50, GroupLimit: 10},
+		Permanent: true,
+		Subscription: &store.Subscription{
+			PlanCode:    plans.Professional,
+			IsPermanent: 1,
+		},
+	}}
+
+	chinese, err := service.subscriptionText(context.Background(), "user-id", "zh")
+	if err != nil {
+		t.Fatalf("Chinese subscription text: %v", err)
+	}
+	english, err := service.subscriptionText(context.Background(), "user-id", "en")
+	if err != nil {
+		t.Fatalf("English subscription text: %v", err)
+	}
+	if !strings.Contains(chinese, "有效期：永久有效") ||
+		strings.Contains(chinese, "剩余天数") ||
+		strings.Contains(chinese, "到期时间") {
+		t.Fatalf("Chinese permanent subscription copy = %q", chinese)
+	}
+	if !strings.Contains(english, "Valid through: No expiration") ||
+		strings.Contains(english, "Days remaining") ||
+		strings.Contains(english, "Expires at") {
+		t.Fatalf("English permanent subscription copy = %q", english)
+	}
+}
+
 func TestBotCopyFitsMessageLimitAndHasBalancedBoldTags(t *testing.T) {
 	service, _, _, _ := newTestService(t)
 	messages := map[string]string{

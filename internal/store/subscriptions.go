@@ -23,8 +23,10 @@ func (s *Store) GetActiveSubscription(ctx context.Context, deboxUserID string) (
 		FROM subscriptions
 		WHERE debox_user_id = $1
 		  AND status = 'active'
-		  AND expires_at > NOW()
-		ORDER BY expires_at DESC
+		  AND (is_permanent = 1 OR expires_at > NOW())
+		ORDER BY CASE plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
+		         is_permanent DESC,
+		         expires_at DESC
 		LIMIT 1
 	`, deboxUserID)
 	if err != nil {
@@ -54,7 +56,9 @@ func (s *Store) HasPaidSubscriptionHistory(ctx context.Context, deboxUserID stri
 		SELECT EXISTS (
 			SELECT 1
 			FROM subscriptions
-			WHERE debox_user_id = $1 AND plan_code <> 'free'
+			WHERE debox_user_id = $1
+			  AND plan_code <> 'free'
+			  AND is_permanent = 0
 		)
 	`, deboxUserID).Scan(&exists)
 	if err != nil {
@@ -94,6 +98,7 @@ func activateSubscription(
 		FROM subscriptions
 		WHERE debox_user_id = $1
 		  AND status = 'active'
+		  AND is_permanent = 0
 		  AND expires_at > NOW()
 		ORDER BY expires_at DESC
 		LIMIT 1
@@ -108,7 +113,9 @@ func activateSubscription(
 			SELECT EXISTS (
 				SELECT 1
 				FROM subscriptions
-				WHERE debox_user_id = $1 AND plan_code <> 'free'
+				WHERE debox_user_id = $1
+				  AND plan_code <> 'free'
+				  AND is_permanent = 0
 			)
 		`, deboxUserID).Scan(&paidHistory); err != nil {
 			return Subscription{}, fmt.Errorf("check prior paid subscription: %w", err)
@@ -184,6 +191,7 @@ func expireSubscriptions(ctx context.Context, db DBTX, deboxUserID string) (int6
 		SELECT id
 		FROM subscriptions
 		WHERE status = 'active'
+		  AND is_permanent = 0
 		  AND expires_at < NOW()
 		  AND ($1 = '' OR debox_user_id = $1)
 		ORDER BY id
@@ -230,6 +238,145 @@ func expireSubscriptions(ctx context.Context, db DBTX, deboxUserID string) (int6
 		return 0, fmt.Errorf("expire subscriptions: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+type PermanentPlanBinding struct {
+	Subscription        *Subscription `json:"subscription"`
+	PreviousDeBoxUserID string        `json:"previous_debox_user_id,omitempty"`
+	Changed             bool          `json:"changed"`
+}
+
+func (s *Store) BindPermanentPlan(
+	ctx context.Context,
+	deboxUserID string,
+	walletAddress string,
+) (PermanentPlanBinding, error) {
+	deboxUserID = strings.TrimSpace(deboxUserID)
+	walletAddress = strings.ToLower(strings.TrimSpace(walletAddress))
+	return withTxValue(ctx, s.db, func(tx DBTX) (PermanentPlanBinding, error) {
+		lockKey := "permanent-plan:" + walletAddress
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", lockKey); err != nil {
+			return PermanentPlanBinding{}, fmt.Errorf("lock permanent plan: %w", err)
+		}
+		if err := lockUser(ctx, tx, deboxUserID); err != nil {
+			return PermanentPlanBinding{}, err
+		}
+
+		var planCode string
+		var boundUserID *string
+		var subscriptionID *int64
+		previousDeBoxUserID := ""
+		err := tx.QueryRow(ctx, `
+			SELECT plan_code, debox_user_id, subscription_id
+			FROM permanent_plan_allowlist
+			WHERE wallet_address = $1
+			FOR UPDATE
+		`, walletAddress).Scan(&planCode, &boundUserID, &subscriptionID)
+		if isNoRows(err) {
+			return PermanentPlanBinding{}, nil
+		}
+		if err != nil {
+			return PermanentPlanBinding{}, fmt.Errorf("read permanent plan allowlist: %w", err)
+		}
+
+		if boundUserID != nil && *boundUserID != "" && *boundUserID != deboxUserID {
+			previousDeBoxUserID = *boundUserID
+			if subscriptionID != nil {
+				if _, err := tx.Exec(ctx,
+					"DELETE FROM daily_summary_targets WHERE subscription_id = $1",
+					*subscriptionID,
+				); err != nil {
+					return PermanentPlanBinding{}, fmt.Errorf("remove previous permanent summary targets: %w", err)
+				}
+				if _, err := tx.Exec(ctx, `
+					UPDATE subscriptions
+					SET status = 'revoked', daily_summary_enabled = 0
+					WHERE id = $1 AND is_permanent = 1
+				`, *subscriptionID); err != nil {
+					return PermanentPlanBinding{}, fmt.Errorf("revoke previous permanent subscription: %w", err)
+				}
+			}
+			subscriptionID = nil
+		}
+
+		if boundUserID != nil && *boundUserID == deboxUserID && subscriptionID != nil {
+			existing, err := collectOptional[Subscription](ctx, tx, `
+				SELECT `+subscriptionColumns+`
+				FROM subscriptions
+				WHERE id = $1
+				  AND debox_user_id = $2
+				  AND is_permanent = 1
+				  AND entitlement_wallet_address = $3
+				FOR UPDATE
+			`, *subscriptionID, deboxUserID, walletAddress)
+			if err != nil {
+				return PermanentPlanBinding{}, fmt.Errorf("read permanent subscription: %w", err)
+			}
+			if existing != nil &&
+				existing.Status == "active" &&
+				existing.PlanCode == planCode &&
+				existing.EntitlementSource == "permanent_allowlist" {
+				return PermanentPlanBinding{Subscription: existing}, nil
+			}
+			if existing != nil {
+				updated, err := collectOne[Subscription](ctx, tx, `
+					UPDATE subscriptions
+					SET plan_code = $1,
+					    status = 'active',
+					    is_permanent = 1,
+					    entitlement_source = 'permanent_allowlist',
+					    entitlement_wallet_address = $2
+					WHERE id = $3
+					RETURNING `+subscriptionColumns,
+					planCode,
+					walletAddress,
+					existing.ID,
+				)
+				if err != nil {
+					return PermanentPlanBinding{}, fmt.Errorf("refresh permanent subscription: %w", err)
+				}
+				return PermanentPlanBinding{Subscription: &updated, Changed: true}, nil
+			}
+		}
+
+		now := time.Now().UTC()
+		subscription, err := collectOne[Subscription](ctx, tx, `
+			INSERT INTO subscriptions (
+				debox_user_id, plan_code, status, starts_at, expires_at,
+				daily_summary_enabled, daily_summary_chat_type,
+				daily_summary_chat_id, daily_summary_label,
+				is_permanent, entitlement_source, entitlement_wallet_address
+			)
+			VALUES (
+				$1, $2, 'active', $3, $3,
+				0, 'private', $1, '私聊摘要',
+				1, 'permanent_allowlist', $4
+			)
+			RETURNING `+subscriptionColumns,
+			deboxUserID,
+			planCode,
+			now,
+			walletAddress,
+		)
+		if err != nil {
+			return PermanentPlanBinding{}, fmt.Errorf("create permanent subscription: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE permanent_plan_allowlist
+			SET debox_user_id = $1,
+			    subscription_id = $2,
+			    bound_at = NOW(),
+			    updated_at = NOW()
+			WHERE wallet_address = $3
+		`, deboxUserID, subscription.ID, walletAddress); err != nil {
+			return PermanentPlanBinding{}, fmt.Errorf("bind permanent plan allowlist: %w", err)
+		}
+		return PermanentPlanBinding{
+			Subscription:        &subscription,
+			PreviousDeBoxUserID: previousDeBoxUserID,
+			Changed:             true,
+		}, nil
+	})
 }
 
 func (s *Store) GetComplimentaryGrant(

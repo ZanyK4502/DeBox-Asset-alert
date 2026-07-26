@@ -14,6 +14,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
 
 type fakePaymentService struct {
@@ -156,6 +157,43 @@ func TestPaymentRoutesRequireAuthentication(t *testing.T) {
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s status = %d, body = %s", path, recorder.Code, recorder.Body)
 		}
+	}
+}
+
+func TestPermanentPlanCannotPreparePayment(t *testing.T) {
+	wallet := "0xcba3fce9d49ce5d7870443f324a8dd56a5788bfc"
+	authService := &fakeAuthService{session: &store.AuthSession{
+		DeBoxUserID:   "permanent-user",
+		WalletAddress: wallet,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	}}
+	subscriptions := &fakeSubscriptionService{
+		entitlement: subscription.Entitlement{Permanent: true},
+	}
+	payments := &fakePaymentService{}
+	handler := New(testConfig(t), Dependencies{
+		Auth:          authService,
+		Subscriptions: subscriptions,
+		Payments:      payments,
+	})
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/payment/prepare",
+		strings.NewReader(`{"plan_code":"professional","billing_cycle":"monthly"}`),
+	)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: "session-token"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+	if payments.prepareInput != [4]string{} {
+		t.Fatalf("payment was prepared: %#v", payments.prepareInput)
+	}
+	if subscriptions.bindingInput != [2]string{"permanent-user", wallet} {
+		t.Fatalf("permanent binding input = %#v", subscriptions.bindingInput)
 	}
 }
 

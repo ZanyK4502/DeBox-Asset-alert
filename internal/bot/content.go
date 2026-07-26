@@ -221,6 +221,34 @@ func (s *Service) subscriptionText(
 			current.Plan.GroupLimit,
 		), nil
 	}
+	if current.Permanent {
+		if english {
+			return fmt.Sprintf(
+				"<b>Subscription</b><br/>"+
+					"Current plan: %s<br/>"+
+					"Valid through: No expiration<br/>"+
+					"Monitoring rules: %d / %d<br/>"+
+					"Group alerts: %d / %d",
+				planName,
+				current.RuleCount,
+				current.Plan.RuleLimit,
+				current.GroupCount,
+				current.Plan.GroupLimit,
+			), nil
+		}
+		return fmt.Sprintf(
+			"<b>订阅状态</b><br/>"+
+				"当前方案：%s<br/>"+
+				"有效期：永久有效<br/>"+
+				"监控规则：%d / %d<br/>"+
+				"群通知：%d / %d",
+			planName,
+			current.RuleCount,
+			current.Plan.RuleLimit,
+			current.GroupCount,
+			current.Plan.GroupLimit,
+		), nil
+	}
 
 	expiresAt := "-"
 	if current.Subscription != nil {

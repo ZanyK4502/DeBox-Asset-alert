@@ -41,18 +41,26 @@ func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Orde
 		}
 
 		var activePlan string
+		var activePermanent int32
 		hasActivePlan := true
 		err := tx.QueryRow(ctx, `
-			SELECT plan_code
+			SELECT plan_code, is_permanent
 			FROM subscriptions
-			WHERE debox_user_id = $1 AND status = 'active' AND expires_at > NOW()
-			ORDER BY expires_at DESC
+			WHERE debox_user_id = $1
+			  AND status = 'active'
+			  AND (is_permanent = 1 OR expires_at > NOW())
+			ORDER BY CASE plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
+			         is_permanent DESC,
+			         expires_at DESC
 			LIMIT 1
-		`, params.DeBoxUserID).Scan(&activePlan)
+		`, params.DeBoxUserID).Scan(&activePlan, &activePermanent)
 		if isNoRows(err) {
 			hasActivePlan = false
 		} else if err != nil {
 			return Order{}, fmt.Errorf("get active plan for order: %w", err)
+		}
+		if activePermanent == 1 {
+			return Order{}, ErrPermanentEntitlement
 		}
 		if hasActivePlan && activePlan != "free" && activePlan != params.PlanCode {
 			return Order{}, ErrActiveSubscriptionConflict
@@ -256,7 +264,10 @@ func (s *Store) FinalizePaidOrder(
 			subscription, err := collectOptional[Subscription](ctx, tx, `
 				SELECT `+subscriptionColumns+`
 				FROM subscriptions
-				WHERE debox_user_id = $1 AND status = 'active' AND expires_at > NOW()
+				WHERE debox_user_id = $1
+				  AND status = 'active'
+				  AND is_permanent = 0
+				  AND expires_at > NOW()
 				ORDER BY expires_at DESC LIMIT 1
 			`, order.DeBoxUserID)
 			if err != nil {

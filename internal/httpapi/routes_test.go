@@ -80,6 +80,10 @@ type fakeSubscriptionService struct {
 	entitlementUser string
 	enabledUser     string
 	activationInput [3]string
+	bindingInput    [2]string
+	binding         *store.Subscription
+	bindingErr      error
+	entitlement     subscription.Entitlement
 }
 
 func (f *fakeSubscriptionService) Entitlement(
@@ -87,7 +91,18 @@ func (f *fakeSubscriptionService) Entitlement(
 	deboxUserID string,
 ) (subscription.Entitlement, error) {
 	f.entitlementUser = deboxUserID
-	return subscription.Entitlement{DeBoxUserID: deboxUserID}, nil
+	result := f.entitlement
+	result.DeBoxUserID = deboxUserID
+	return result, nil
+}
+
+func (f *fakeSubscriptionService) BindPermanentWallet(
+	_ context.Context,
+	deboxUserID string,
+	walletAddress string,
+) (*store.Subscription, error) {
+	f.bindingInput = [2]string{deboxUserID, walletAddress}
+	return f.binding, f.bindingErr
 }
 
 func (f *fakeSubscriptionService) EnableFreePlan(
@@ -192,7 +207,12 @@ func TestAuthenticationRoutesSetServerSessionCookie(t *testing.T) {
 		},
 	}
 	deboxService := &fakeDeBoxService{}
-	handler := New(testConfig(t), Dependencies{Auth: authService, DeBox: deboxService})
+	subscriptions := &fakeSubscriptionService{}
+	handler := New(testConfig(t), Dependencies{
+		Auth:          authService,
+		DeBox:         deboxService,
+		Subscriptions: subscriptions,
+	})
 
 	challengeRecorder := performJSON(
 		t,
@@ -235,6 +255,12 @@ func TestAuthenticationRoutesSetServerSessionCookie(t *testing.T) {
 	}
 	if bytes.Contains(verifyRecorder.Body.Bytes(), []byte("session-token")) {
 		t.Fatal("session token leaked into the JSON response")
+	}
+	if subscriptions.bindingInput != [2]string{
+		"user-1",
+		"0x1111111111111111111111111111111111111111",
+	} {
+		t.Fatalf("permanent binding input = %#v", subscriptions.bindingInput)
 	}
 
 	sessionRequest := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
