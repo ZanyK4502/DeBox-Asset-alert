@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -199,5 +200,38 @@ func TestNoditRejectsHTTPAndResponseErrors(t *testing.T) {
 	httpClient, ok := defaultClient.httpClient.(*http.Client)
 	if !ok || httpClient.Timeout != defaultHTTPTimeout || defaultClient.baseURL != defaultNoditBaseURL {
 		t.Fatalf("unexpected Nodit defaults: %#v", defaultClient)
+	}
+}
+
+func TestNoditRetriesTemporaryHTTPFailures(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if attempts.Add(1) < 3 {
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(writer, `{"error":"rate limited"}`)
+			return
+		}
+		_, _ = io.WriteString(
+			writer,
+			`{"jsonrpc":"2.0","id":1,"result":"0x2a"}`,
+		)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(
+		"nodit-key",
+		server.URL,
+		WithHTTPClient(server.Client()),
+		WithRPCBaseURL(server.URL),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	block, err := client.LatestBlockNumber(context.Background(), "bsc", "")
+	if err != nil || block != 42 {
+		t.Fatalf("LatestBlockNumber() = %d, %v", block, err)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts.Load())
 	}
 }

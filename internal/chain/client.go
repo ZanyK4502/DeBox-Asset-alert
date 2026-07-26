@@ -16,6 +16,8 @@ const (
 	defaultNoditBaseURL = "https://web3.nodit.io/v1"
 	defaultHTTPTimeout  = 20 * time.Second
 	maxErrorBodyLength  = 300
+	maxHTTPAttempts     = 3
+	initialRetryDelay   = 250 * time.Millisecond
 )
 
 type HTTPDoer interface {
@@ -193,33 +195,76 @@ func (c *Client) postObject(
 	if err != nil {
 		return nil, fmt.Errorf("encode %s request: %w", serviceName, err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create %s request: %w", serviceName, err)
-	}
-	request.Header.Set("X-API-KEY", c.apiKey)
-	request.Header.Set("Content-Type", "application/json")
+	for attempt := 0; attempt < maxHTTPAttempts; attempt++ {
+		request, requestErr := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			endpoint,
+			bytes.NewReader(body),
+		)
+		if requestErr != nil {
+			return nil, fmt.Errorf("create %s request: %w", serviceName, requestErr)
+		}
+		request.Header.Set("X-API-KEY", c.apiKey)
+		request.Header.Set("Content-Type", "application/json")
 
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("%s request: %w", serviceName, err)
+		response, requestErr := c.httpClient.Do(request)
+		if requestErr != nil {
+			return nil, fmt.Errorf("%s request: %w", serviceName, requestErr)
+		}
+		if response.StatusCode >= http.StatusBadRequest {
+			detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyLength))
+			_ = response.Body.Close()
+			responseErr := fmt.Errorf(
+				"%s error %d: %s",
+				serviceName,
+				response.StatusCode,
+				string(detail),
+			)
+			if attempt+1 >= maxHTTPAttempts || !retryableHTTPStatus(response.StatusCode) {
+				return nil, responseErr
+			}
+			if err := waitRetry(ctx, response.Header.Get("Retry-After"), attempt); err != nil {
+				return nil, fmt.Errorf("%s retry: %w", serviceName, err)
+			}
+			continue
+		}
+		var data map[string]any
+		decoder := json.NewDecoder(response.Body)
+		decoder.UseNumber()
+		decodeErr := decoder.Decode(&data)
+		_ = response.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("unexpected %s response: %w", serviceName, decodeErr)
+		}
+		if data == nil {
+			return nil, fmt.Errorf("unexpected %s response", serviceName)
+		}
+		return data, nil
 	}
-	defer response.Body.Close()
+	return nil, fmt.Errorf("%s request attempts exhausted", serviceName)
+}
 
-	if response.StatusCode >= http.StatusBadRequest {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyLength))
-		return nil, fmt.Errorf("%s error %d: %s", serviceName, response.StatusCode, string(detail))
+func retryableHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
+}
+
+func waitRetry(ctx context.Context, retryAfter string, attempt int) error {
+	delay := initialRetryDelay << attempt
+	if seconds, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && seconds > 0 {
+		delay = time.Duration(seconds) * time.Second
 	}
-	var data map[string]any
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&data); err != nil {
-		return nil, fmt.Errorf("unexpected %s response: %w", serviceName, err)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
-	if data == nil {
-		return nil, fmt.Errorf("unexpected %s response", serviceName)
-	}
-	return data, nil
 }
 
 type BalanceResult struct {
