@@ -13,20 +13,21 @@ import (
 )
 
 const (
-	defaultAppName        = "DeBox Asset Alert"
-	defaultEnvironment    = "development"
-	defaultHost           = "0.0.0.0"
-	defaultPort           = 8000
-	defaultReceiveMode    = "polling"
-	defaultDeBoxAPI       = "https://open.debox.pro"
-	defaultChainKey       = "bsc"
-	defaultNoditAPI       = "https://web3.nodit.io/v1"
-	defaultTokenSymbol    = "USDT"
-	defaultTokenDecimals  = 18
-	defaultPlanPrice      = "5"
-	defaultPlanDays       = 30
-	defaultPaymentMode    = "preview"
-	defaultDexScreenerAPI = "https://api.dexscreener.com"
+	defaultAppName                = "DeBox Asset Alert"
+	defaultEnvironment            = "development"
+	defaultHost                   = "0.0.0.0"
+	defaultPort                   = 8000
+	defaultReceiveMode            = "polling"
+	defaultDeBoxAPI               = "https://open.debox.pro"
+	defaultChainKey               = "bsc"
+	defaultNoditAPI               = "https://web3.nodit.io/v1"
+	defaultTokenSymbol            = "USDT"
+	defaultTokenDecimals          = 18
+	defaultPlanPrice              = "5"
+	defaultPlanDays               = 30
+	defaultPaymentMode            = "preview"
+	defaultDexScreenerAPI         = "https://api.dexscreener.com"
+	defaultNoditCUPerSecond int64 = 400
 )
 
 type Config struct {
@@ -48,6 +49,7 @@ type Config struct {
 	ChainKey                     string
 	NoditAPIKey                  string
 	NoditBaseURL                 string
+	NoditCUPerSecond             int64
 	SubscriptionTokenAddress     string
 	SubscriptionTokenSymbol      string
 	SubscriptionTokenDecimals    int
@@ -138,6 +140,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cuPerSecond, err := parseInt64Env("NODIT_CU_PER_SECOND", defaultNoditCUPerSecond)
+	if err != nil {
+		return Config{}, err
+	}
 	inboxInterval, err := parseDurationEnv("MARKET_INBOX_INTERVAL", 2*time.Second)
 	if err != nil {
 		return Config{}, err
@@ -190,6 +196,7 @@ func Load() (Config, error) {
 		ChainKey:                     strings.ToLower(firstNonEmpty(os.Getenv("CHAIN_KEY"), defaultChainKey)),
 		NoditAPIKey:                  strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
 		NoditBaseURL:                 firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
+		NoditCUPerSecond:             cuPerSecond,
 		SubscriptionTokenAddress:     strings.TrimSpace(os.Getenv("SUBSCRIPTION_TOKEN_ADDRESS")),
 		SubscriptionTokenSymbol:      firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
 		SubscriptionTokenDecimals:    decimals,
@@ -227,6 +234,9 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("APP_PORT/PORT must be between 1 and 65535: %d", c.Port)
+	}
+	if c.NoditCUPerSecond <= 0 {
+		return fmt.Errorf("NODIT_CU_PER_SECOND must be greater than zero")
 	}
 	if strings.TrimSpace(c.Host) == "" {
 		return fmt.Errorf("APP_HOST must not be empty")

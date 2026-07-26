@@ -28,6 +28,7 @@ type Client struct {
 	rpcBaseURL string
 	httpClient HTTPDoer
 	usage      func(NoditUsage)
+	cuLimiter  *cuRateLimiter
 }
 
 type ClientOption func(*Client)
@@ -58,6 +59,12 @@ func WithUsageObserver(observer func(NoditUsage)) ClientOption {
 	}
 }
 
+func WithCURateLimit(unitsPerSecond int64) ClientOption {
+	return func(target *Client) {
+		target.cuLimiter = newCURateLimiter(unitsPerSecond)
+	}
+}
+
 func NewClient(apiKey, baseURL string, options ...ClientOption) (*Client, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("NODIT_API_KEY is required")
@@ -84,7 +91,11 @@ func (c *Client) post(ctx context.Context, profile Profile, path string, payload
 		profile.Network,
 		strings.TrimLeft(path, "/"),
 	)
-	c.observeUsage("web3_data", path, web3DataCU(path))
+	units := web3DataCU(path)
+	if err := c.waitForCU(ctx, units); err != nil {
+		return nil, err
+	}
+	c.observeUsage("web3_data", path, units)
 	return c.postObject(ctx, endpoint, payload, "Nodit API")
 }
 
@@ -99,7 +110,11 @@ func (c *Client) rpc(ctx context.Context, profile Profile, method string, params
 		"method":  method,
 		"params":  params,
 	}
-	c.observeUsage("evm_node", method, evmNodeCU(method))
+	units := evmNodeCU(method)
+	if err := c.waitForCU(ctx, units); err != nil {
+		return nil, err
+	}
+	c.observeUsage("evm_node", method, units)
 	data, err := c.postObject(ctx, endpoint, payload, "Nodit Node API")
 	if err != nil {
 		return nil, err

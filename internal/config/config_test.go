@@ -26,6 +26,7 @@ func TestLoadDefaults(t *testing.T) {
 		"CHAIN_KEY",
 		"NODIT_API_KEY",
 		"NODIT_BASE_URL",
+		"NODIT_CU_PER_SECOND",
 		"SUBSCRIPTION_TOKEN_ADDRESS",
 		"SUBSCRIPTION_TOKEN_SYMBOL",
 		"SUBSCRIPTION_TOKEN_DECIMALS",
@@ -88,6 +89,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DeBoxOpenAPIBase != defaultDeBoxAPI || cfg.ChainKey != defaultChainKey || cfg.NoditBaseURL != defaultNoditAPI {
 		t.Fatalf("external API defaults = %q/%q/%q", cfg.DeBoxOpenAPIBase, cfg.ChainKey, cfg.NoditBaseURL)
 	}
+	if cfg.NoditCUPerSecond != defaultNoditCUPerSecond {
+		t.Fatalf("NoditCUPerSecond = %d, want %d", cfg.NoditCUPerSecond, defaultNoditCUPerSecond)
+	}
 	if cfg.SubscriptionTokenSymbol != defaultTokenSymbol {
 		t.Fatalf("SubscriptionTokenSymbol = %q, want %q", cfg.SubscriptionTokenSymbol, defaultTokenSymbol)
 	}
@@ -132,6 +136,7 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	t.Setenv("CHAIN_KEY", "ETHEREUM")
 	t.Setenv("NODIT_API_KEY", " nodit-key ")
 	t.Setenv("NODIT_BASE_URL", " https://nodit.example/v1 ")
+	t.Setenv("NODIT_CU_PER_SECOND", "321")
 	t.Setenv("STATIC_DIR", testStaticDir(t))
 
 	cfg, err := Load()
@@ -154,6 +159,9 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	}
 	if cfg.ChainKey != "ethereum" || cfg.NoditAPIKey != "nodit-key" || cfg.NoditBaseURL != "https://nodit.example/v1" {
 		t.Fatalf("unexpected Nodit settings")
+	}
+	if cfg.NoditCUPerSecond != 321 {
+		t.Fatalf("NoditCUPerSecond = %d", cfg.NoditCUPerSecond)
 	}
 }
 

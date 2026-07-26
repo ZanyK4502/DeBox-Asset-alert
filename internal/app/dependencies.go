@@ -70,6 +70,7 @@ func buildDependencies(
 	chainClient, err := chain.NewClient(
 		cfg.NoditAPIKey,
 		cfg.NoditBaseURL,
+		chain.WithCURateLimit(cfg.NoditCUPerSecond),
 		chain.WithUsageObserver(func(usage chain.NoditUsage) {
 			noditCUMeter.Add(usage.CU * 1000)
 		}),
