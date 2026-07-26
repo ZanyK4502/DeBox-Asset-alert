@@ -10,6 +10,7 @@ var (
 
 	topicV3Initialize  = Topic("Initialize(uint160,int24)")
 	topicV3Swap        = Topic("Swap(address,address,int256,int256,uint160,uint128,int24)")
+	topicPancakeV3Swap = Topic("Swap(address,address,int256,int256,uint160,uint128,int24,uint128,uint128)")
 	topicV3Mint        = Topic("Mint(address,address,int24,int24,uint128,uint256,uint256)")
 	topicV3Burn        = Topic("Burn(address,int24,int24,uint128,uint256,uint256)")
 	topicV3PoolCreated = Topic("PoolCreated(address,address,uint24,int24,address)")

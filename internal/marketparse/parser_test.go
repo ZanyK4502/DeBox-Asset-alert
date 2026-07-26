@@ -29,6 +29,9 @@ func TestCanonicalEventTopics(t *testing.T) {
 	if topicV3Swap != "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67" {
 		t.Fatalf("V3 Swap topic = %s", topicV3Swap)
 	}
+	if topicPancakeV3Swap != "0x19b47279256b2a23a1665c810c8d55a1758940ee09377d4f8d26497a3577dc83" {
+		t.Fatalf("PancakeSwap V3 Swap topic = %s", topicPancakeV3Swap)
+	}
 	if topicInfinityCLSwap == topicInfinityBinSwap {
 		t.Fatal("Infinity CL and Bin topics must differ")
 	}
@@ -82,6 +85,62 @@ func TestV2AndV3ExactSwapParsing(t *testing.T) {
 	}
 	if v2Events[0].WalletAddress != testWallet || v3Events[0].WalletAddress != testWallet {
 		t.Fatalf("wallet must use transaction origin: V2=%#v V3=%#v", v2Events, v3Events)
+	}
+}
+
+func TestPancakeV3RealSwapParsing(t *testing.T) {
+	t.Parallel()
+
+	const (
+		poolAddress = "0x7f51c8aaa6b0599abd16674e2b17fec7a9f674a1"
+		txHash      = "0xd1473850232afd328e89ab63cd330fece11dddc58b7b3421af7a6d585ac51de6"
+		blockHash   = "0xb34238c1a5633abbcc1d68d6692908dcd7413649f5f37e102c4f4738197085e7"
+		sender      = "0x000b102d41da3abe03001a541da1cacc77c26214"
+		recipient   = "0x982385d229082d390d4fb942d28eb728e8f42c33"
+	)
+	parser, err := NewParser([]Pool{
+		testPool(AdapterV3, poolAddress, poolAddress, testToken, testQuote),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := parser.Parse(Receipt{
+		ChainID:          56,
+		TransactionHash:  txHash,
+		From:             testWallet,
+		To:               testRouter,
+		BlockNumber:      112286766,
+		BlockHash:        blockHash,
+		TransactionIndex: 2,
+		Logs: []Log{{
+			Address: poolAddress,
+			Topics: []string{
+				topicPancakeV3Swap,
+				topicAddressWord(sender),
+				topicAddressWord(recipient),
+			},
+			Data:             "0x0000000000000000000000000000000000000000000000062030a54ce3240000fffffffffffffffffffffffffffffffffffffffffffffff761f88806b2554b4400000000000000000000000000000000000000013001f0e3d329c945d52ec5e60000000000000000000000000000000000000000000477e9348fa21a00e9c3bd0000000000000000000000000000000000000000000000000000000000000d6d00000000000000000000000000000000000000000000000001412a522fb200000000000000000000000000000000000000000000000000000000000000000000",
+			TransactionHash:  txHash,
+			TransactionIndex: 2,
+			BlockNumber:      112286766,
+			BlockHash:        blockHash,
+			LogIndex:         12,
+		}},
+	}, []string{testToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	event := events[0]
+	if event.Type != EventSell ||
+		event.TokenAmountRaw != "113000000000000000000" ||
+		event.QuoteAmountRaw != "158961154685139596476" {
+		t.Fatalf("PancakeSwap V3 event = %#v", event)
+	}
+	if event.TransactionHash != txHash || event.LogIndex != 12 {
+		t.Fatalf("PancakeSwap V3 provenance = %#v", event)
 	}
 }
 

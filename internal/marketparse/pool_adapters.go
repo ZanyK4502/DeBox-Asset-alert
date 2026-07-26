@@ -84,11 +84,15 @@ func parseV2(pool Pool, log Log, topic string) (*swapLeg, []Event, bool, error) 
 
 func parseV3(pool Pool, log Log, topic string) (*swapLeg, []Event, bool, error) {
 	switch topic {
-	case topicV3Swap:
+	case topicV3Swap, topicPancakeV3Swap:
 		if len(log.Topics) != 3 {
 			return nil, nil, true, fmt.Errorf("V3 Swap requires 3 topics")
 		}
-		values, err := exactWords(log.Data, 5)
+		wordCount := 5
+		if topic == topicPancakeV3Swap {
+			wordCount = 7
+		}
+		values, err := exactWords(log.Data, wordCount)
 		if err != nil {
 			return nil, nil, true, fmt.Errorf("V3 Swap: %w", err)
 		}
