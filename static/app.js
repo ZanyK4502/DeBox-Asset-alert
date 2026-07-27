@@ -2388,7 +2388,6 @@ function renderMarketSelectedAsset() {
     </span>
     <span>
       <strong>${escapeHtml(asset.name || asset.symbol || "-")} (${escapeHtml(asset.symbol || "-")})</strong>
-      <small>${escapeHtml(t("marketIdentitySource"))}: ${escapeHtml(asset.identity_source || "-")} · ${escapeHtml(asset.canonical_asset_id || "-")}</small>
     </span>
   `;
   deployments.innerHTML = (asset.deployments || []).map((deployment) => {
