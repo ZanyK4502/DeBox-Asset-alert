@@ -2312,7 +2312,6 @@ function renderMarketAssetCandidates() {
             ${escapeHtml(candidate.name || candidate.symbol || "-")}
             <span class="market-candidate-symbol" data-symbol-tooltip="${escapeHtml(t("marketTokenSymbol"))}">${escapeHtml(candidate.symbol || "-")}</span>
           </strong>
-          <span>${escapeHtml(t(candidate.identity_source === "coingecko" ? "marketVerifiedByCoinGecko" : "marketSingleChainSource"))}</span>
           <span class="market-candidate-deployments">
             ${(candidate.deployments || []).map((deployment) => `
               <small><b>${escapeHtml(deployment.chain_name || marketChainName(deployment.chain_key))}</b> ${escapeHtml(deployment.contract_address)}</small>
