@@ -55,7 +55,7 @@ window.H5_I18N = Object.freeze({
     marketManualIntro: "找不到项目币时，可逐条添加“链 + 合约”。每条链只能添加一次，最多添加六条链。",
     marketAddChainContract: "添加一条链 + 合约",
     marketCheckContracts: "读取并校验",
-    marketManualHint: "系统会读取链上名称、简称，并检查这些合约能否证明是同一个币。",
+    marketManualHint: "系统会读取链上信息，并检查这些合约是否为同一代币",
     marketInvalidContract: "请填写有效的 EVM 代币合约地址。",
     marketDuplicateChain: "同一条链只能填写一个合约。",
     marketCheckingContracts: "正在读取链上信息并核对项目币身份…",
