@@ -9,6 +9,7 @@ import (
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -24,8 +25,8 @@ func (service *Service) ScanLogs(ctx context.Context) error {
 }
 
 func (service *Service) scanLogsOnce(ctx context.Context) error {
-	if service.settings.ChainID != DefaultChainID ||
-		!strings.EqualFold(service.settings.ChainKey, "bsc") {
+	profile, err := chain.ChainProfile(service.settings.ChainKey, "")
+	if err != nil || service.settings.ChainID != profile.ChainID {
 		return ErrUnsupportedChain
 	}
 	parserContext, err := service.loadParserContext(ctx)
@@ -393,18 +394,56 @@ func (service *Service) fetchCollectionLogs(
 	if err := appendLogs(poolAddresses, nil); err != nil {
 		return nil, err
 	}
-	if err := appendLogs(
-		[]string{marketparse.BSCPancakeV2Factory},
-		[]chain.LogTopic{{marketparse.V2FactoryEventTopic()}},
-	); err != nil {
-		return nil, err
+	targetTopics := make([]string, 0, len(parserContext.targetTokens))
+	for _, token := range parserContext.targetTokens {
+		targetTopics = append(targetTopics, addressTopic(token))
 	}
-	if err := appendLogs(
-		[]string{marketparse.BSCPancakeV3Factory},
-		[]chain.LogTopic{{marketparse.V3FactoryEventTopic()}},
-	); err != nil {
-		return nil, err
+	factoriesByTopic := make(map[string][]string)
+	for _, deployment := range marketprotocol.Deployments(service.settings.ChainKey) {
+		topic := ""
+		switch deployment.Adapter {
+		case marketparse.AdapterV2:
+			topic = marketparse.V2FactoryEventTopic()
+		case marketparse.AdapterV3:
+			topic = marketparse.V3FactoryEventTopic()
+		case marketparse.AdapterAlgebra:
+			topic = marketparse.AlgebraFactoryEventTopic()
+		case marketparse.AdapterSolidly:
+			topic = marketparse.SolidlyFactoryEventTopic()
+		}
+		if topic != "" {
+			factoriesByTopic[topic] = append(
+				factoriesByTopic[topic],
+				deployment.Factory,
+			)
+		}
 	}
+	factoryTopics := make([]string, 0, len(factoriesByTopic))
+	for topic := range factoriesByTopic {
+		factoryTopics = append(factoryTopics, topic)
+	}
+	sort.Strings(factoryTopics)
+	for _, topic := range factoryTopics {
+		factories := factoriesByTopic[topic]
+		for _, batch := range stringBatches(
+			targetTopics,
+			logAddressBatchSize,
+		) {
+			if err := appendLogs(
+				uniqueStrings(factories),
+				[]chain.LogTopic{{topic}, chain.LogTopic(batch)},
+			); err != nil {
+				return nil, err
+			}
+			if err := appendLogs(
+				uniqueStrings(factories),
+				[]chain.LogTopic{{topic}, nil, chain.LogTopic(batch)},
+			); err != nil {
+				return nil, err
+			}
+		}
+	}
+	isBSC := strings.EqualFold(service.settings.ChainKey, "bsc")
 	for _, batch := range stringBatches(uniqueStrings(infinityCLPools), logAddressBatchSize) {
 		if err := appendLogs(
 			[]string{marketparse.BSCInfinityCLManager},
@@ -421,11 +460,10 @@ func (service *Service) fetchCollectionLogs(
 			return nil, err
 		}
 	}
-	targetTopics := make([]string, 0, len(parserContext.targetTokens))
-	for _, token := range parserContext.targetTokens {
-		targetTopics = append(targetTopics, addressTopic(token))
-	}
 	for _, batch := range stringBatches(targetTopics, logAddressBatchSize) {
+		if !isBSC {
+			break
+		}
 		for _, initializer := range []struct {
 			address string
 			topic   string
@@ -447,21 +485,27 @@ func (service *Service) fetchCollectionLogs(
 			}
 		}
 	}
-	fourLogs, err := service.fetchLogsByAddressBatches(
-		ctx,
-		fromBlock,
-		toBlock,
-		[]string{marketparse.BSCFourMemeTokenManager},
-		[]chain.LogTopic{chain.LogTopic(marketparse.FourMemeEventTopics())},
-	)
-	if err != nil {
-		return nil, err
+	if isBSC {
+		fourLogs, err := service.fetchLogsByAddressBatches(
+			ctx,
+			fromBlock,
+			toBlock,
+			[]string{marketparse.BSCFourMemeTokenManager},
+			[]chain.LogTopic{chain.LogTopic(marketparse.FourMemeEventTopics())},
+		)
+		if err != nil {
+			return nil, err
+		}
+		relevantFourLogs, err := relevantEmitterLogs(
+			fourLogs,
+			parserContext,
+			service.settings.ChainID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, relevantFourLogs...)
 	}
-	relevantFourLogs, err := relevantEmitterLogs(fourLogs, parserContext)
-	if err != nil {
-		return nil, err
-	}
-	result = append(result, relevantFourLogs...)
 	if err := appendLogs(
 		parserContext.targetTokens,
 		[]chain.LogTopic{{marketparse.ERC20TransferTopic()}},
@@ -568,6 +612,7 @@ func addressTopic(address string) string {
 func relevantEmitterLogs(
 	logs []chain.RPCLog,
 	parserContext parserContext,
+	chainID int64,
 ) ([]chain.RPCLog, error) {
 	result := make([]chain.RPCLog, 0, len(logs))
 	for _, rawLog := range logs {
@@ -577,7 +622,7 @@ func relevantEmitterLogs(
 		}
 		events, err := parserContext.parser.Parse(
 			marketparse.Receipt{
-				ChainID:          uint64(DefaultChainID),
+				ChainID:          uint64(chainID),
 				TransactionHash:  log.TransactionHash,
 				BlockNumber:      log.BlockNumber,
 				BlockHash:        log.BlockHash,

@@ -76,7 +76,11 @@ func (settings Settings) normalized() Settings {
 		settings.ChainKey = "bsc"
 	}
 	if settings.ChainID == 0 {
-		settings.ChainID = DefaultChainID
+		if profile, err := chain.ChainProfile(settings.ChainKey, ""); err == nil {
+			settings.ChainID = profile.ChainID
+		} else {
+			settings.ChainID = DefaultChainID
+		}
 	}
 	if settings.CursorKey == "" {
 		settings.CursorKey = DefaultCursorKey
@@ -189,6 +193,7 @@ type ChainClient interface {
 	RPCTransactionByHash(context.Context, string, string, string) (map[string]any, error)
 	TransactionReceipt(context.Context, string, string, string) (map[string]any, error)
 	PoolTokens(context.Context, string, string, string) (string, string, error)
+	PoolFactory(context.Context, string, string, string) (string, error)
 	ListWebhooks(context.Context, string, string, chain.WebhookListOptions) (chain.WebhookList, error)
 	UpdateWebhook(context.Context, string, string, string, chain.WebhookUpdateRequest) error
 }

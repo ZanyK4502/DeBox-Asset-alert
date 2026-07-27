@@ -222,7 +222,7 @@ func (p *Parser) parseEmitterLog(log Log) ([]Event, error) {
 		var recognized bool
 		var err error
 		switch emitter.Adapter {
-		case AdapterV2, AdapterV3:
+		case AdapterV2, AdapterV3, AdapterAlgebra, AdapterSolidly:
 			events, recognized, err = parseFactory(emitter, log)
 		case AdapterInfinityCL, AdapterInfinityBin:
 			events, recognized, err = parseInfinityManager(emitter, log)

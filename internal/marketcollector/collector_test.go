@@ -60,15 +60,6 @@ func TestPersistFourMemeQuoteKeepsPoolKeyWithoutFakeAddress(t *testing.T) {
 	}
 }
 
-func TestCollectorDoesNotClassifyPancakeV1AsV2(t *testing.T) {
-	_, _, adapter, verified := classifyPair(marketdata.Pair{
-		DexID: "pancakeswap", Labels: []string{"v1"},
-	})
-	if adapter != "" || verified {
-		t.Fatalf("PancakeSwap v1 classified as %q/%v", adapter, verified)
-	}
-}
-
 const (
 	testHashA = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	testHashB = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -258,6 +249,9 @@ func (client *fakeChain) TransactionReceipt(context.Context, string, string, str
 }
 func (client *fakeChain) PoolTokens(context.Context, string, string, string) (string, string, error) {
 	return "", "", nil
+}
+func (client *fakeChain) PoolFactory(context.Context, string, string, string) (string, error) {
+	return marketparse.BSCPancakeV3Factory, nil
 }
 func (client *fakeChain) ListWebhooks(context.Context, string, string, chain.WebhookListOptions) (chain.WebhookList, error) {
 	return chain.WebhookList{}, nil

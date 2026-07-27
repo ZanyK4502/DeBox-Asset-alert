@@ -15,6 +15,15 @@ var (
 	topicV3Burn        = Topic("Burn(address,int24,int24,uint128,uint256,uint256)")
 	topicV3PoolCreated = Topic("PoolCreated(address,address,uint24,int24,address)")
 
+	topicAlgebraSwapIntegral = Topic("Swap(address,address,int256,int256,uint160,uint128,int24,uint24,uint24)")
+	topicAlgebraBurnIntegral = Topic("Burn(address,int24,int24,uint128,uint256,uint256,uint24)")
+	topicAlgebraPoolCreated  = Topic("Pool(address,address,address)")
+
+	topicSolidlySwap        = Topic("Swap(address,address,uint256,uint256,uint256,uint256)")
+	topicSolidlyMint        = topicV2Mint
+	topicSolidlyBurn        = Topic("Burn(address,address,uint256,uint256)")
+	topicSolidlyPoolCreated = Topic("PoolCreated(address,address,bool,address,uint256)")
+
 	topicInfinityCLInitialize  = Topic("Initialize(bytes32,address,address,address,uint24,bytes32,uint160,int24)")
 	topicInfinityCLSwap        = Topic("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24,uint16)")
 	topicInfinityCLModify      = Topic("ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)")
@@ -41,6 +50,14 @@ func V2FactoryEventTopic() string {
 
 func V3FactoryEventTopic() string {
 	return topicV3PoolCreated
+}
+
+func AlgebraFactoryEventTopic() string {
+	return topicAlgebraPoolCreated
+}
+
+func SolidlyFactoryEventTopic() string {
+	return topicSolidlyPoolCreated
 }
 
 func InfinityCLInitializeTopic() string {

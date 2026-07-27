@@ -8,21 +8,19 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketdata"
-	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
 
-const (
-	defaultChainKey = "bsc"
-	defaultChainID  = int64(56)
-)
+const defaultChainKey = "bsc"
 
 var ErrMarketDataUnavailable = errors.New("行情数据服务暂时繁忙，请稍后重试。")
 
@@ -59,6 +57,7 @@ type Entitlements interface {
 type ChainService interface {
 	TokenMetadata(context.Context, string, string, string) (chain.TokenMetadata, error)
 	PoolTokens(context.Context, string, string, string) (string, string, error)
+	PoolFactory(context.Context, string, string, string) (string, error)
 }
 
 type Dependencies struct {
@@ -84,9 +83,17 @@ type TokenQueryInput struct {
 
 type PoolPreview struct {
 	Pair              marketdata.Pair `json:"pair"`
+	ChainKey          string          `json:"chain_key"`
+	ChainID           int64           `json:"chain_id"`
 	Protocol          string          `json:"protocol"`
 	ProtocolVersion   string          `json:"protocol_version"`
 	ParserAdapter     string          `json:"parser_adapter"`
+	FactoryAddress    string          `json:"factory_address,omitempty"`
+	FactoryVerified   bool            `json:"factory_verified"`
+	Token0Address     string          `json:"token0_address,omitempty"`
+	Token1Address     string          `json:"token1_address,omitempty"`
+	MonitoringLevel   string          `json:"monitoring_level"`
+	SupportedFeatures []string        `json:"supported_features,omitempty"`
 	Supported         bool            `json:"supported"`
 	UnsupportedReason string          `json:"unsupported_reason"`
 }
@@ -96,6 +103,24 @@ type TokenQueryResult struct {
 	ChainID  int64               `json:"chain_id"`
 	Token    chain.TokenMetadata `json:"token"`
 	Pools    []PoolPreview       `json:"pools"`
+}
+
+type MultiTokenQueryInput struct {
+	Deployments []TokenQueryInput `json:"deployments"`
+}
+
+type ChainPoolGroup struct {
+	ChainKey       string              `json:"chain_key"`
+	ChainID        int64               `json:"chain_id"`
+	ChainName      string              `json:"chain_name"`
+	Token          chain.TokenMetadata `json:"token"`
+	FullMonitoring []PoolPreview       `json:"full_monitoring_pools"`
+	QuoteOnly      []PoolPreview       `json:"quote_only_pools"`
+	Error          string              `json:"error,omitempty"`
+}
+
+type MultiTokenQueryResult struct {
+	Groups []ChainPoolGroup `json:"groups"`
 }
 
 type CreateProjectInput struct {
@@ -153,7 +178,95 @@ func (s *Service) QueryToken(
 	if err := s.requireMarketQuery(ctx, deboxUserID); err != nil {
 		return TokenQueryResult{}, err
 	}
+	return s.queryToken(ctx, input)
+}
+
+func (s *Service) QueryTokens(
+	ctx context.Context,
+	deboxUserID string,
+	input MultiTokenQueryInput,
+) (MultiTokenQueryResult, error) {
+	if err := s.requireMarketQuery(ctx, deboxUserID); err != nil {
+		return MultiTokenQueryResult{}, err
+	}
+	if len(input.Deployments) == 0 || len(input.Deployments) > len(chain.SupportedChains()) {
+		return MultiTokenQueryResult{}, errors.New("请选择 1 到 6 条链上的代币合约。")
+	}
+
+	seenChains := make(map[string]struct{}, len(input.Deployments))
+	normalized := make([]TokenQueryInput, 0, len(input.Deployments))
+	for _, deployment := range input.Deployments {
+		profile, err := chain.ChainProfile(deployment.ChainKey, "")
+		if err != nil {
+			return MultiTokenQueryResult{}, err
+		}
+		if _, exists := seenChains[profile.Key]; exists {
+			return MultiTokenQueryResult{}, fmt.Errorf("同一条链不能重复提交：%s", profile.Name)
+		}
+		seenChains[profile.Key] = struct{}{}
+		tokenAddress, err := chain.ValidateAddress(deployment.TokenAddress)
+		if err != nil {
+			return MultiTokenQueryResult{}, fmt.Errorf(
+				"%s 的代币合约地址无效",
+				profile.Name,
+			)
+		}
+		normalized = append(normalized, TokenQueryInput{
+			ChainKey:     profile.Key,
+			TokenAddress: tokenAddress,
+		})
+	}
+
+	groups := make([]ChainPoolGroup, 0, len(input.Deployments))
+	for _, deployment := range normalized {
+		profile, err := chain.ChainProfile(deployment.ChainKey, "")
+		if err != nil {
+			return MultiTokenQueryResult{}, err
+		}
+
+		group := ChainPoolGroup{
+			ChainKey:  profile.Key,
+			ChainID:   profile.ChainID,
+			ChainName: profile.Name,
+		}
+		query, queryErr := s.queryToken(ctx, TokenQueryInput{
+			ChainKey:     profile.Key,
+			TokenAddress: deployment.TokenAddress,
+		})
+		if queryErr != nil {
+			if errors.Is(queryErr, ErrMarketDataUnavailable) {
+				group.Error = "该链行情数据暂时不可用，请稍后重试。"
+				groups = append(groups, group)
+				continue
+			}
+			return MultiTokenQueryResult{}, queryErr
+		}
+		group.Token = query.Token
+		for _, pool := range query.Pools {
+			if pool.Supported {
+				group.FullMonitoring = append(group.FullMonitoring, pool)
+			} else {
+				group.QuoteOnly = append(group.QuoteOnly, pool)
+			}
+		}
+		groups = append(groups, group)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		return supportedChainOrder(groups[i].ChainKey) <
+			supportedChainOrder(groups[j].ChainKey)
+	})
+	return MultiTokenQueryResult{Groups: groups}, nil
+}
+
+func (s *Service) queryToken(
+	ctx context.Context,
+	input TokenQueryInput,
+) (TokenQueryResult, error) {
 	chainKey, err := normalizeChain(input.ChainKey)
+	if err != nil {
+		return TokenQueryResult{}, err
+	}
+	profile, err := chain.ChainProfile(chainKey, "")
 	if err != nil {
 		return TokenQueryResult{}, err
 	}
@@ -172,18 +285,42 @@ func (s *Service) QueryToken(
 		}
 		return TokenQueryResult{}, fmt.Errorf("查询交易池失败：%w", err)
 	}
-	previews := make([]PoolPreview, 0, len(pairs))
-	for _, pair := range pairs {
-		protocol, version, adapter, supported := classifyPair(pair)
-		reason := ""
-		if !supported {
-			reason = "当前交易池可查询，但尚不能用于链上事件解析。"
-		}
-		previews = append(previews, PoolPreview{
-			Pair: pair, Protocol: protocol, ProtocolVersion: version,
-			ParserAdapter: adapter, Supported: supported, UnsupportedReason: reason,
-		})
+	previews := make([]PoolPreview, len(pairs))
+	verificationSlots := make(chan struct{}, 6)
+	var verificationWait sync.WaitGroup
+	for index, pair := range pairs {
+		index, pair := index, pair
+		verificationWait.Add(1)
+		go func() {
+			defer verificationWait.Done()
+			verificationSlots <- struct{}{}
+			classification := marketprotocol.VerifyPair(
+				ctx,
+				s.deps.Chain,
+				chainKey,
+				tokenAddress,
+				pair,
+			)
+			<-verificationSlots
+			previews[index] = PoolPreview{
+				Pair:              pair,
+				ChainKey:          classification.ChainKey,
+				ChainID:           classification.ChainID,
+				Protocol:          classification.Protocol,
+				ProtocolVersion:   classification.ProtocolVersion,
+				ParserAdapter:     classification.ParserAdapter,
+				FactoryAddress:    classification.FactoryAddress,
+				FactoryVerified:   classification.FactoryVerified,
+				Token0Address:     classification.Token0Address,
+				Token1Address:     classification.Token1Address,
+				MonitoringLevel:   classification.MonitoringLevel,
+				SupportedFeatures: classification.SupportedFeature,
+				Supported:         classification.Supported,
+				UnsupportedReason: classification.UnsupportedReason,
+			}
+		}()
 	}
+	verificationWait.Wait()
 	sort.SliceStable(previews, func(i, j int) bool {
 		if previews[i].Supported != previews[j].Supported {
 			return previews[i].Supported
@@ -195,10 +332,19 @@ func (s *Service) QueryToken(
 	})
 	return TokenQueryResult{
 		ChainKey: chainKey,
-		ChainID:  defaultChainID,
+		ChainID:  profile.ChainID,
 		Token:    token,
 		Pools:    previews,
 	}, nil
+}
+
+func supportedChainOrder(chainKey string) int {
+	for index, profile := range chain.SupportedChains() {
+		if profile.Key == chainKey {
+			return index
+		}
+	}
+	return len(chain.SupportedChains())
 }
 
 func (s *Service) CreateProject(
@@ -567,10 +713,9 @@ func (s *Service) persistPool(
 	pair := preview.Pair
 	token0Address := pair.BaseToken.Address
 	token1Address := pair.QuoteToken.Address
-	if preview.ParserAdapter == marketparse.AdapterV2 ||
-		preview.ParserAdapter == marketparse.AdapterV3 {
+	if preview.Supported {
 		first, second, err := s.deps.Chain.PoolTokens(
-			ctx, pair.PairAddress, defaultChainKey, defaultChainKey,
+			ctx, pair.PairAddress, preview.ChainKey, preview.ChainKey,
 		)
 		if err != nil {
 			return store.MarketPool{}, fmt.Errorf("验证交易池代币顺序失败：%w", err)
@@ -588,7 +733,7 @@ func (s *Service) persistPool(
 	if preview.Supported {
 		if token0Address != token.Address {
 			metadata, err := s.deps.Chain.TokenMetadata(
-				ctx, token0Address, defaultChainKey, defaultChainKey,
+				ctx, token0Address, preview.ChainKey, preview.ChainKey,
 			)
 			if err != nil {
 				return store.MarketPool{}, fmt.Errorf("读取交易池 token0 信息失败：%w", err)
@@ -597,7 +742,7 @@ func (s *Service) persistPool(
 		}
 		if token1Address != token.Address {
 			metadata, err := s.deps.Chain.TokenMetadata(
-				ctx, token1Address, defaultChainKey, defaultChainKey,
+				ctx, token1Address, preview.ChainKey, preview.ChainKey,
 			)
 			if err != nil {
 				return store.MarketPool{}, fmt.Errorf("读取交易池 token1 信息失败：%w", err)
@@ -610,22 +755,27 @@ func (s *Service) persistPool(
 		poolAddress = &value
 	}
 	var factoryAddress *string
-	switch preview.ParserAdapter {
-	case marketparse.AdapterV2:
-		value := marketparse.BSCPancakeV2Factory
-		factoryAddress = &value
-	case marketparse.AdapterV3:
-		value := marketparse.BSCPancakeV3Factory
+	if preview.FactoryVerified && preview.FactoryAddress != "" {
+		value := preview.FactoryAddress
 		factoryAddress = &value
 	}
-	raw, _ := json.Marshal(pair)
+	raw, err := marketprotocol.EncodePairMetadata(
+		pair,
+		preview.MonitoringLevel,
+		preview.UnsupportedReason,
+		preview.SupportedFeatures,
+		preview.FactoryAddress,
+	)
+	if err != nil {
+		return store.MarketPool{}, fmt.Errorf("编码交易池验证信息失败：%w", err)
+	}
 	verification := "unsupported"
 	if preview.Supported {
 		verification = "verified"
 	}
 	return s.deps.Repository.UpsertMarketPool(ctx, store.UpsertMarketPoolParams{
-		ChainKey:             defaultChainKey,
-		ChainID:              defaultChainID,
+		ChainKey:             preview.ChainKey,
+		ChainID:              preview.ChainID,
 		Protocol:             preview.Protocol,
 		ProtocolVersion:      preview.ProtocolVersion,
 		PoolKey:              pair.PairAddress,
@@ -651,32 +801,13 @@ func normalizeChain(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "bsc", "bnb", "bnbchain", "bnb_chain":
 		return defaultChainKey, nil
+	case "ethereum", "base", "polygon", "arbitrum", "optimism":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "", errors.New("项目币市场监控当前仅支持 BNB Chain。")
+		return "", errors.New(
+			"项目币市场监控仅支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum 和 Optimism。",
+		)
 	}
-}
-
-func classifyPair(pair marketdata.Pair) (string, string, string, bool) {
-	protocol := strings.ToLower(strings.TrimSpace(pair.DexID))
-	labels := strings.ToLower(strings.Join(pair.Labels, " "))
-	fingerprint := protocol + " " + labels
-	if strings.Contains(protocol, "pancake") {
-		switch {
-		case strings.Contains(fingerprint, "infinity"), strings.Contains(fingerprint, "v4"):
-			return "pancakeswap_infinity", labels, "", false
-		case strings.Contains(fingerprint, "v3"):
-			return "pancakeswap", "v3", marketparse.AdapterV3, true
-		case strings.Contains(fingerprint, "v2"),
-			protocol == "pancakeswap" && strings.TrimSpace(labels) == "":
-			return "pancakeswap", "v2", marketparse.AdapterV2, true
-		default:
-			return protocol, labels, "", false
-		}
-	}
-	if protocol == "" {
-		protocol = "unknown"
-	}
-	return protocol, labels, "", false
 }
 
 func normalizedAddressSet(values []string) map[string]struct{} {

@@ -301,6 +301,46 @@ func (c *Client) PoolTokens(
 	return token0, token1, nil
 }
 
+// PoolFactory returns the immutable factory recorded by a V2/V3/Algebra/
+// Solidly-style pool. Discovery providers are intentionally not trusted for
+// protocol identity: callers must compare this value with a chain-scoped
+// allow-list before enabling event parsing.
+func (c *Client) PoolFactory(
+	ctx context.Context,
+	poolAddress string,
+	chainKey, fallback string,
+) (string, error) {
+	profile, err := ChainProfile(chainKey, fallback)
+	if err != nil {
+		return "", err
+	}
+	pool, err := ValidateAddress(poolAddress)
+	if err != nil {
+		return "", err
+	}
+	// factory()
+	result, err := c.rpc(ctx, profile, "eth_call", []any{
+		map[string]any{"to": pool, "data": "0xc45a0155"},
+		"latest",
+	})
+	if err != nil {
+		return "", fmt.Errorf("read pool factory: %w", err)
+	}
+	encoded, ok := result.(string)
+	encoded = strings.ToLower(strings.TrimSpace(encoded))
+	if !ok || len(encoded) != 66 || !strings.HasPrefix(encoded, "0x") {
+		return "", fmt.Errorf("unexpected pool factory response")
+	}
+	factory, err := ValidateAddress("0x" + encoded[len(encoded)-40:])
+	if err != nil {
+		return "", fmt.Errorf("invalid pool factory response")
+	}
+	if factory == "0x0000000000000000000000000000000000000000" {
+		return "", fmt.Errorf("pool factory must not be the zero address")
+	}
+	return factory, nil
+}
+
 func (c *Client) block(
 	ctx context.Context,
 	blockReference string,

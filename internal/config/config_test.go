@@ -189,6 +189,35 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	}
 }
 
+func TestMarketCollectorAcceptsAllSupportedChains(t *testing.T) {
+	for _, chainKey := range []string{
+		"bsc",
+		"ethereum",
+		"base",
+		"polygon",
+		"arbitrum",
+		"optimism",
+	} {
+		t.Run(chainKey, func(t *testing.T) {
+			t.Setenv("STATIC_DIR", testStaticDir(t))
+			t.Setenv("MARKET_COLLECTOR_ENABLED", "true")
+			t.Setenv("CHAIN_KEY", chainKey)
+			if _, err := Load(); err != nil {
+				t.Fatalf("Load() rejected %s collector: %v", chainKey, err)
+			}
+		})
+	}
+}
+
+func TestMarketCollectorRejectsChainOutsideSupportedSix(t *testing.T) {
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+	t.Setenv("MARKET_COLLECTOR_ENABLED", "true")
+	t.Setenv("CHAIN_KEY", "avalanche")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted unsupported market collector chain")
+	}
+}
+
 func TestLoadValidatesCoinGeckoTierAndPaidKey(t *testing.T) {
 	t.Setenv("STATIC_DIR", testStaticDir(t))
 	t.Setenv("COINGECKO_API_TIER", "unknown")

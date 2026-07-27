@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 )
 
 const (
@@ -275,8 +277,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("COINGECKO_API_KEY is required when COINGECKO_API_TIER=pro")
 	}
 	if c.MarketCollectorEnabled {
-		if c.ChainKey != "bsc" {
-			return fmt.Errorf("market collector currently requires CHAIN_KEY=bsc")
+		if _, err := chain.ChainProfile(c.ChainKey, ""); err != nil {
+			return fmt.Errorf("market collector chain: %w", err)
 		}
 		if c.MarketConfirmationDepth < 1 || c.MarketScanBatchSize < 1 ||
 			c.MarketInitialLookback < 1 || c.MarketReorgLookback < 1 {

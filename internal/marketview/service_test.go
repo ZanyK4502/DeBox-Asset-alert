@@ -52,23 +52,47 @@ func (fakeEntitlements) CreateMarketCombination(context.Context, store.CreateMar
 }
 
 type fakeChain struct {
-	metadata chain.TokenMetadata
-	err      error
+	metadata  chain.TokenMetadata
+	err       error
+	token0    string
+	token1    string
+	factory   string
+	factories map[string]string
 }
 
 func (f fakeChain) TokenMetadata(context.Context, string, string, string) (chain.TokenMetadata, error) {
 	return f.metadata, f.err
 }
-func (fakeChain) PoolTokens(context.Context, string, string, string) (string, string, error) {
-	return "", "", errors.New("not used")
+func (f fakeChain) PoolTokens(context.Context, string, string, string) (string, string, error) {
+	token0, token1 := f.token0, f.token1
+	if token0 == "" {
+		token0 = testToken
+	}
+	if token1 == "" {
+		token1 = testQuote
+	}
+	return token0, token1, nil
+}
+func (f fakeChain) PoolFactory(_ context.Context, pool, _, _ string) (string, error) {
+	if factory := f.factories[pool]; factory != "" {
+		return factory, nil
+	}
+	if f.factory != "" {
+		return f.factory, nil
+	}
+	return marketparse.BSCPancakeV3Factory, nil
 }
 
 type fakeMarket struct {
-	pairs []marketdata.Pair
-	err   error
+	pairs        []marketdata.Pair
+	pairsByChain map[string][]marketdata.Pair
+	err          error
 }
 
-func (f fakeMarket) DiscoverPools(context.Context, string, string) ([]marketdata.Pair, error) {
+func (f fakeMarket) DiscoverPools(_ context.Context, chainKey, _ string) ([]marketdata.Pair, error) {
+	if f.pairsByChain != nil {
+		return f.pairsByChain[chainKey], f.err
+	}
 	return f.pairs, f.err
 }
 func (fakeMarket) PairsByTokens(context.Context, string, []string) ([]marketdata.Pair, error) {
@@ -86,9 +110,14 @@ func TestQueryTokenSortsSupportedPancakePoolsFirst(t *testing.T) {
 	free, _ := catalog.Get(plans.Free)
 	service := New(Dependencies{
 		Entitlements: fakeEntitlements{plan: free},
-		Chain: fakeChain{metadata: chain.TokenMetadata{
-			Address: testToken, Name: "Project", Symbol: "PRJ", Decimals: 18,
-		}},
+		Chain: fakeChain{
+			metadata: chain.TokenMetadata{
+				Address: testToken, Name: "Project", Symbol: "PRJ", Decimals: 18,
+			},
+			factories: map[string]string{
+				testPairA: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
+		},
 		Market: fakeMarket{pairs: []marketdata.Pair{
 			pair(testPairA, "otherdex", nil, "100000"),
 			pair(testPairB, "pancakeswap", []string{"v3"}, "50000"),
@@ -107,14 +136,14 @@ func TestQueryTokenSortsSupportedPancakePoolsFirst(t *testing.T) {
 	}
 }
 
-func TestQueryTokenRejectsUnsupportedChain(t *testing.T) {
+func TestQueryTokenRejectsChainOutsideSupportedSix(t *testing.T) {
 	service := New(Dependencies{
 		Entitlements: fakeEntitlements{plan: plans.Plan{MarketQuery: true}},
 		Chain:        fakeChain{},
 		Market:       fakeMarket{},
 	})
 	_, err := service.QueryToken(context.Background(), "user", TokenQueryInput{
-		ChainKey: "ethereum", TokenAddress: testToken,
+		ChainKey: "avalanche", TokenAddress: testToken,
 	})
 	if err == nil {
 		t.Fatal("QueryToken() accepted unsupported chain")
@@ -143,46 +172,68 @@ func TestQueryTokenMapsTemporaryProviderFailure(t *testing.T) {
 	}
 }
 
-func TestClassifyPairUsesDexIDAndDoesNotTreatInfinityAsV2(t *testing.T) {
-	tests := []struct {
-		name      string
-		dexID     string
-		labels    []string
-		want      string
-		supported bool
-	}{
-		{
-			name: "v3 in dex id", dexID: "pancakeswap-v3",
-			want: marketparse.AdapterV3, supported: true,
+func TestQueryTokensGroupsSixChainResultsAndSeparatesQuoteOnly(t *testing.T) {
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{
+			plan: plans.Plan{MarketQuery: true},
 		},
-		{
-			name: "infinity in dex id", dexID: "pancakeswap-infinity-clmm",
-			want: "", supported: false,
+		Chain: fakeChain{
+			metadata: chain.TokenMetadata{
+				Address:  testToken,
+				Name:     "Project",
+				Symbol:   "PRJ",
+				Decimals: 18,
+			},
+			factories: map[string]string{
+				testPairA: marketparse.BSCPancakeV3Factory,
+				testPairB: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			},
 		},
-		{
-			name: "classic v2", dexID: "pancakeswap",
-			want: marketparse.AdapterV2, supported: true,
-		},
-		{
-			name: "legacy v1 label is not v2", dexID: "pancakeswap",
-			labels: []string{"v1"}, want: "", supported: false,
-		},
+		Market: fakeMarket{pairsByChain: map[string][]marketdata.Pair{
+			"bsc": {
+				pair(testPairA, "wrong-provider-label", nil, "100000"),
+				pair(testPairB, "pancakeswap", []string{"v3"}, "50000"),
+			},
+			"base": {},
+		}},
+	})
+	result, err := service.QueryTokens(
+		context.Background(),
+		"user",
+		MultiTokenQueryInput{Deployments: []TokenQueryInput{
+			{ChainKey: "base", TokenAddress: testToken},
+			{ChainKey: "bsc", TokenAddress: testToken},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, _, adapter, supported := classifyPair(marketdata.Pair{
-				DexID: test.dexID, Labels: test.labels,
-			})
-			if adapter != test.want || supported != test.supported {
-				t.Fatalf(
-					"classifyPair() = %q/%v, want %q/%v",
-					adapter,
-					supported,
-					test.want,
-					test.supported,
-				)
-			}
-		})
+	if len(result.Groups) != 2 ||
+		result.Groups[0].ChainKey != "bsc" ||
+		len(result.Groups[0].FullMonitoring) != 1 ||
+		len(result.Groups[0].QuoteOnly) != 1 ||
+		result.Groups[0].FullMonitoring[0].Protocol != "pancakeswap" ||
+		result.Groups[1].ChainKey != "base" {
+		t.Fatalf("groups = %#v", result.Groups)
+	}
+}
+
+func TestQueryTokensRejectsDuplicateChain(t *testing.T) {
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{
+			plan: plans.Plan{MarketQuery: true},
+		},
+	})
+	_, err := service.QueryTokens(
+		context.Background(),
+		"user",
+		MultiTokenQueryInput{Deployments: []TokenQueryInput{
+			{ChainKey: "bnb", TokenAddress: testToken},
+			{ChainKey: "bsc", TokenAddress: testToken},
+		}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "不能重复") {
+		t.Fatalf("QueryTokens() error = %v", err)
 	}
 }
 

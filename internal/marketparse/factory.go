@@ -62,6 +62,60 @@ func parseFactory(emitter Emitter, log Log) ([]Event, bool, error) {
 			events[index].Metadata["tick_spacing"] = signed(values[0]).String()
 		}
 		return events, true, nil
+	case AdapterAlgebra:
+		if log.Topics[0] != topicAlgebraPoolCreated {
+			return nil, false, nil
+		}
+		if len(log.Topics) != 3 {
+			return nil, true, fmt.Errorf("Algebra Pool requires 3 topics")
+		}
+		values, err := exactWords(log.Data, 1)
+		if err != nil {
+			return nil, true, fmt.Errorf("Algebra Pool: %w", err)
+		}
+		token0, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, true, err
+		}
+		token1, err := topicAddress(log.Topics[2])
+		if err != nil {
+			return nil, true, err
+		}
+		pool, err := wordAddress(values[0])
+		if err != nil {
+			return nil, true, err
+		}
+		return factoryEvents(emitter, log, token0, token1, pool), true, nil
+	case AdapterSolidly:
+		if log.Topics[0] != topicSolidlyPoolCreated {
+			return nil, false, nil
+		}
+		if len(log.Topics) != 4 {
+			return nil, true, fmt.Errorf("Solidly PoolCreated requires 4 topics")
+		}
+		values, err := exactWords(log.Data, 2)
+		if err != nil {
+			return nil, true, fmt.Errorf("Solidly PoolCreated: %w", err)
+		}
+		token0, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, true, err
+		}
+		token1, err := topicAddress(log.Topics[2])
+		if err != nil {
+			return nil, true, err
+		}
+		pool, err := wordAddress(values[0])
+		if err != nil {
+			return nil, true, err
+		}
+		events := factoryEvents(emitter, log, token0, token1, pool)
+		stable := unsignedTopic(log.Topics[3]) != "0"
+		for index := range events {
+			events[index].Metadata["stable"] = fmt.Sprint(stable)
+			events[index].Metadata["pool_count"] = unsigned(values[1]).String()
+		}
+		return events, true, nil
 	default:
 		return nil, false, nil
 	}

@@ -106,6 +106,11 @@ func buildDependencies(
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create asset catalog: %w", err)
 	}
+	marketChain, err := chain.ChainProfile(cfg.ChainKey, "")
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create market chain profile: %w", err)
+	}
 	marketService := marketcollector.New(
 		marketcollector.Dependencies{
 			Repository:       repository,
@@ -125,8 +130,8 @@ func buildDependencies(
 		},
 		marketcollector.Settings{
 			Enabled:            cfg.MarketCollectorEnabled,
-			ChainKey:           cfg.ChainKey,
-			ChainID:            marketcollector.DefaultChainID,
+			ChainKey:           marketChain.Key,
+			ChainID:            marketChain.ChainID,
 			WebhookSigningKey:  cfg.NoditWebhookSigningKey,
 			WebhookSigningKeys: cfg.NoditWebhookSigningKeys,
 			WebhookAutoRepair:  cfg.MarketWebhookAutoRepair,

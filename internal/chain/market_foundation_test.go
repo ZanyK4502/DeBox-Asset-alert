@@ -130,6 +130,8 @@ func TestMarketRPCLogsAndBlocks(t *testing.T) {
 				address = testWallet
 			case "0xd21220a7":
 				address = testTarget
+			case "0xc45a0155":
+				address = "0x3333333333333333333333333333333333333333"
 			default:
 				t.Errorf("selector = %v", call["data"])
 			}
@@ -183,6 +185,16 @@ func TestMarketRPCLogsAndBlocks(t *testing.T) {
 	)
 	if err != nil || token0 != testWallet || token1 != testTarget {
 		t.Fatalf("PoolTokens() = %s/%s, %v", token0, token1, err)
+	}
+	factory, err := client.PoolFactory(
+		context.Background(),
+		testToken,
+		"bsc",
+		"",
+	)
+	if err != nil ||
+		factory != "0x3333333333333333333333333333333333333333" {
+		t.Fatalf("PoolFactory() = %s, %v", factory, err)
 	}
 	if _, err := client.Logs(context.Background(), "bsc", "", LogFilter{
 		FromBlock: &to,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -67,7 +68,8 @@ func (service *Service) loadParserContext(ctx context.Context) (parserContext, e
 			logAddress = marketparse.BSCInfinityCLManager
 		case marketparse.AdapterInfinityBin:
 			logAddress = marketparse.BSCInfinityBinManager
-		case marketparse.AdapterV2, marketparse.AdapterV3:
+		case marketparse.AdapterV2, marketparse.AdapterV3,
+			marketparse.AdapterAlgebra, marketparse.AdapterSolidly:
 			if target.PoolAddress == nil {
 				continue
 			}
@@ -95,9 +97,16 @@ func (service *Service) loadParserContext(ctx context.Context) (parserContext, e
 			},
 		})
 	}
-	parser, err := marketparse.NewBSCParser(pools)
+	parser, err := marketparse.NewParser(
+		pools,
+		marketprotocol.FactoryEmitters(service.settings.ChainKey),
+	)
 	if err != nil {
-		return parserContext{}, fmt.Errorf("create BSC market parser: %w", err)
+		return parserContext{}, fmt.Errorf(
+			"create %s market parser: %w",
+			service.settings.ChainKey,
+			err,
+		)
 	}
 	targetTokens := make([]string, 0, len(targetSet))
 	for token := range targetSet {
@@ -138,7 +147,11 @@ func (service *Service) hydrateParseAndPersist(
 	if err != nil {
 		return fmt.Errorf("get market receipt %s: %w", transactionHash, err)
 	}
-	receipt, err := decodeReceipt(transaction, receiptObject)
+	receipt, err := decodeReceipt(
+		transaction,
+		receiptObject,
+		service.settings.ChainID,
+	)
 	if err != nil {
 		return fmt.Errorf("decode market receipt %s: %w", transactionHash, err)
 	}
@@ -204,7 +217,8 @@ func (service *Service) ensureInitializedPool(
 		token1Address = event.QuoteAddress
 	}
 	switch event.Adapter {
-	case marketparse.AdapterV2, marketparse.AdapterV3:
+	case marketparse.AdapterV2, marketparse.AdapterV3,
+		marketparse.AdapterAlgebra, marketparse.AdapterSolidly:
 		value := event.PoolKey
 		poolAddress = &value
 		if factory := event.Metadata["factory_address"]; factory != "" {
@@ -442,6 +456,7 @@ func fourMemeProjectStatus(event marketparse.Event) string {
 func decodeReceipt(
 	transaction map[string]any,
 	receiptObject map[string]any,
+	chainID int64,
 ) (marketparse.Receipt, error) {
 	if receiptObject == nil {
 		return marketparse.Receipt{}, fmt.Errorf("transaction receipt is not available")
@@ -487,7 +502,7 @@ func decodeReceipt(
 		logs = append(logs, log)
 	}
 	return marketparse.Receipt{
-		ChainID:          uint64(DefaultChainID),
+		ChainID:          uint64(chainID),
 		TransactionHash:  strings.ToLower(raw.TransactionHash),
 		From:             from,
 		To:               to,

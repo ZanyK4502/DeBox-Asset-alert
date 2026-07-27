@@ -41,6 +41,28 @@ func (h handler) postMarketQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h handler) postMarketPoolsDiscover(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireMarketSession(w, r)
+	if !ok {
+		return
+	}
+	var input marketview.MultiTokenQueryInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := h.deps.Market.QueryTokens(
+		r.Context(),
+		session.DeBoxUserID,
+		input,
+	)
+	if err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h handler) getMarketProjects(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.requireMarketSession(w, r)
 	if !ok {

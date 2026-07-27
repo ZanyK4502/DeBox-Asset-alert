@@ -11,7 +11,7 @@ import (
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketdata"
-	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -58,11 +58,6 @@ func (service *Service) discoverPools(ctx context.Context) error {
 			return fmt.Errorf("discover pools for %s: %w", project.TokenAddress, requestErr)
 		}
 		sort.SliceStable(pairs, func(left, right int) bool {
-			_, _, leftAdapter, _ := classifyPair(pairs[left])
-			_, _, rightAdapter, _ := classifyPair(pairs[right])
-			if (leftAdapter != "") != (rightAdapter != "") {
-				return leftAdapter != ""
-			}
 			return decimalGreater(pairs[left].Liquidity.USD.String(), pairs[right].Liquidity.USD.String())
 		})
 		for _, pair := range pairs {
@@ -80,31 +75,26 @@ func (service *Service) persistDiscoveredPair(
 	pair marketdata.Pair,
 	tokenOrder map[string][2]string,
 ) error {
-	protocol, version, adapter, verified := classifyPair(pair)
+	classification := marketprotocol.VerifyPair(
+		ctx,
+		service.chain,
+		service.settings.ChainKey,
+		project.TokenAddress,
+		pair,
+	)
+	protocol := classification.Protocol
+	version := classification.ProtocolVersion
+	adapter := classification.ParserAdapter
+	verified := classification.FactoryVerified
 	token0Address := pair.BaseToken.Address
 	token1Address := pair.QuoteToken.Address
-	if adapter == marketparse.AdapterV2 || adapter == marketparse.AdapterV3 {
+	if classification.Supported {
 		order, exists := tokenOrder[pair.PairAddress]
 		if !exists {
-			started := time.Now()
-			token0, token1, tokenErr := service.chain.PoolTokens(
-				ctx,
-				pair.PairAddress,
-				service.settings.ChainKey,
-				service.settings.ChainFallback,
-			)
-			_ = service.recordHealth(
-				ctx,
-				"nodit",
-				"pool_metadata",
-				started,
-				tokenErr,
-				nil,
-			)
-			if tokenErr != nil {
-				return fmt.Errorf("verify market pool %s tokens: %w", pair.PairAddress, tokenErr)
+			order = [2]string{
+				classification.Token0Address,
+				classification.Token1Address,
 			}
-			order = [2]string{token0, token1}
 			tokenOrder[pair.PairAddress] = order
 		}
 		token0Address, token1Address = order[0], order[1]
@@ -120,15 +110,17 @@ func (service *Service) persistDiscoveredPair(
 	token0Symbol := pairTokenSymbol(pair, token0Address)
 	token1Symbol := pairTokenSymbol(pair, token1Address)
 	var factoryAddress *string
-	switch adapter {
-	case marketparse.AdapterV2:
-		value := marketparse.BSCPancakeV2Factory
-		factoryAddress = &value
-	case marketparse.AdapterV3:
-		value := marketparse.BSCPancakeV3Factory
+	if classification.FactoryVerified {
+		value := classification.FactoryAddress
 		factoryAddress = &value
 	}
-	rawPair, err := json.Marshal(pair)
+	rawPair, err := marketprotocol.EncodePairMetadata(
+		pair,
+		classification.MonitoringLevel,
+		classification.UnsupportedReason,
+		classification.SupportedFeature,
+		classification.FactoryAddress,
+	)
 	if err != nil {
 		return fmt.Errorf("encode discovered market pair: %w", err)
 	}
@@ -137,7 +129,7 @@ func (service *Service) persistDiscoveredPair(
 		pairAddress = &value
 	}
 	verificationStatus := "unsupported"
-	if adapter != "" {
+	if classification.Supported {
 		verificationStatus = "verified"
 	}
 	pool, err := service.repository.UpsertMarketPool(ctx, store.UpsertMarketPoolParams{
@@ -156,7 +148,7 @@ func (service *Service) persistDiscoveredPair(
 		Token1Symbol:         token1Symbol,
 		Token1Decimals:       quoteDecimals,
 		LiquidityUSD:         decimalOrZero(pair.Liquidity.USD),
-		SupportsEventParsing: adapter != "",
+		SupportsEventParsing: classification.Supported,
 		ParserAdapter:        adapter,
 		VerificationStatus:   verificationStatus,
 		Metadata:             rawPair,
@@ -171,7 +163,7 @@ func (service *Service) persistDiscoveredPair(
 			DeBoxUserID:     project.DeBoxUserID,
 			MarketProjectID: project.ID,
 			MarketPoolID:    pool.ID,
-			SelectIfNone:    true,
+			SelectIfNone:    classification.Supported,
 			DiscoverySource: marketdata.SourceDexScreener,
 		},
 	)
@@ -304,37 +296,6 @@ func (service *Service) createPairSnapshot(
 		RawPayload:      rawPair,
 	})
 	return err
-}
-
-func classifyPair(pair marketdata.Pair) (
-	protocol string,
-	version string,
-	adapter string,
-	factoryVerified bool,
-) {
-	protocol = strings.ToLower(strings.TrimSpace(pair.DexID))
-	if protocol == "" {
-		protocol = "unknown"
-	}
-	labels := strings.ToLower(strings.Join(pair.Labels, " "))
-	fingerprint := protocol + " " + labels
-	if protocol == "pancakeswap" || strings.Contains(protocol, "pancake") {
-		protocol = "pancakeswap"
-		switch {
-		case strings.Contains(fingerprint, "v3"):
-			return protocol, "v3", marketparse.AdapterV3, true
-		case strings.Contains(fingerprint, "v4"),
-			strings.Contains(fingerprint, "infinity"),
-			strings.Contains(fingerprint, "stable"):
-			return protocol, labels, "", false
-		case strings.Contains(fingerprint, "v2"),
-			protocol == "pancakeswap" && strings.TrimSpace(labels) == "":
-			return protocol, "v2", marketparse.AdapterV2, true
-		default:
-			return protocol, labels, "", false
-		}
-	}
-	return protocol, labels, "", false
 }
 
 func pairPriceForToken(pair marketdata.Pair, tokenAddress string) *string {

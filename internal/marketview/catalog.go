@@ -3,6 +3,8 @@ package marketview
 import (
 	"context"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 )
 
@@ -26,6 +28,7 @@ type CatalogResult struct {
 	Rules              []RuleDefinition `json:"rules"`
 	MonitoringGoals    []string         `json:"monitoring_goals"`
 	SupportedChain     string           `json:"supported_chain"`
+	SupportedChains    []chain.Profile  `json:"supported_chains"`
 	SupportedProtocols []string         `json:"supported_protocols"`
 }
 
@@ -53,11 +56,9 @@ func (s *Service) Catalog(
 		MonitoringGoals: []string{
 			"price", "liquidity", "volume", "large_trade", "holder", "four_meme",
 		},
-		SupportedChain: "bsc",
-		SupportedProtocols: []string{
-			"PancakeSwap V2", "PancakeSwap V3", "PancakeSwap Infinity CL",
-			"PancakeSwap Infinity Bin", "Four.meme",
-		},
+		SupportedChain:     "bsc",
+		SupportedChains:    chain.SupportedChains(),
+		SupportedProtocols: marketprotocol.ProtocolNames(),
 	}, nil
 }
 

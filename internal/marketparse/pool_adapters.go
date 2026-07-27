@@ -12,12 +12,129 @@ func parsePoolAdapter(pool Pool, log Log) (*swapLeg, []Event, bool, error) {
 		return parseV2(pool, log, topic)
 	case AdapterV3:
 		return parseV3(pool, log, topic)
+	case AdapterAlgebra:
+		return parseAlgebra(pool, log, topic)
+	case AdapterSolidly:
+		return parseSolidly(pool, log, topic)
 	case AdapterInfinityCL:
 		return parseInfinityCL(pool, log, topic)
 	case AdapterInfinityBin:
 		return parseInfinityBin(pool, log, topic)
 	default:
 		return nil, nil, false, fmt.Errorf("unsupported pool adapter %s", pool.Adapter)
+	}
+}
+
+func parseAlgebra(pool Pool, log Log, topic string) (*swapLeg, []Event, bool, error) {
+	// Algebra legacy pools deliberately retain the Uniswap V3 event ABI.
+	switch topic {
+	case topicV3Initialize, topicV3Swap, topicV3Mint, topicV3Burn:
+		return parseV3(pool, log, topic)
+	case topicAlgebraSwapIntegral:
+		if len(log.Topics) != 3 {
+			return nil, nil, true, fmt.Errorf("Algebra Swap requires 3 topics")
+		}
+		values, err := exactWords(log.Data, 7)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("Algebra Swap: %w", err)
+		}
+		sender, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		recipient, err := topicAddress(log.Topics[2])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		leg, err := makeSwapLeg(
+			pool, log, sender, recipient, signed(values[0]), signed(values[1]),
+		)
+		return leg, nil, true, err
+	case topicAlgebraBurnIntegral:
+		if len(log.Topics) != 4 {
+			return nil, nil, true, fmt.Errorf("Algebra Burn requires 4 topics")
+		}
+		values, err := exactWords(log.Data, 4)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("Algebra Burn: %w", err)
+		}
+		owner, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		return nil, poolAmountEvents(
+			pool, log, EventLiquidityRemoved, owner,
+			unsigned(values[1]), unsigned(values[2]),
+		), true, nil
+	default:
+		return nil, nil, false, nil
+	}
+}
+
+func parseSolidly(pool Pool, log Log, topic string) (*swapLeg, []Event, bool, error) {
+	switch topic {
+	case topicSolidlySwap:
+		if len(log.Topics) != 3 {
+			return nil, nil, true, fmt.Errorf("Solidly Swap requires 3 topics")
+		}
+		values, err := exactWords(log.Data, 4)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("Solidly Swap: %w", err)
+		}
+		sender, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		recipient, err := topicAddress(log.Topics[2])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		amount0 := new(big.Int).Sub(unsigned(values[0]), unsigned(values[2]))
+		amount1 := new(big.Int).Sub(unsigned(values[1]), unsigned(values[3]))
+		leg, err := makeSwapLeg(pool, log, sender, recipient, amount0, amount1)
+		return leg, nil, true, err
+	case topicSolidlyMint:
+		if len(log.Topics) != 2 {
+			return nil, nil, true, fmt.Errorf("Solidly Mint requires 2 topics")
+		}
+		values, err := exactWords(log.Data, 2)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("Solidly Mint: %w", err)
+		}
+		sender, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		return nil, poolAmountEvents(
+			pool, log, EventLiquidityAdded, sender,
+			unsigned(values[0]), unsigned(values[1]),
+		), true, nil
+	case topicSolidlyBurn:
+		if len(log.Topics) != 3 {
+			return nil, nil, true, fmt.Errorf("Solidly Burn requires 3 topics")
+		}
+		values, err := exactWords(log.Data, 2)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("Solidly Burn: %w", err)
+		}
+		sender, err := topicAddress(log.Topics[1])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		recipient, err := topicAddress(log.Topics[2])
+		if err != nil {
+			return nil, nil, true, err
+		}
+		events := poolAmountEvents(
+			pool, log, EventLiquidityRemoved, sender,
+			unsigned(values[0]), unsigned(values[1]),
+		)
+		for index := range events {
+			events[index].RecipientAddress = recipient
+		}
+		return nil, events, true, nil
+	default:
+		return nil, nil, false, nil
 	}
 }
 

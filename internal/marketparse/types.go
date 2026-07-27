@@ -14,6 +14,8 @@ import (
 const (
 	AdapterV2          = "evm_v2"
 	AdapterV3          = "evm_v3"
+	AdapterAlgebra     = "algebra"
+	AdapterSolidly     = "solidly"
 	AdapterInfinityCL  = "pancakeswap_infinity_cl"
 	AdapterInfinityBin = "pancakeswap_infinity_bin"
 	AdapterFourMemeV1  = "four_meme_v1"
@@ -226,6 +228,7 @@ func normalizeEmitter(value Emitter) (Emitter, error) {
 	}
 	if value.Adapter != AdapterFourMemeV1 && value.Adapter != AdapterFourMemeV2 &&
 		value.Adapter != AdapterV2 && value.Adapter != AdapterV3 &&
+		value.Adapter != AdapterAlgebra && value.Adapter != AdapterSolidly &&
 		value.Adapter != AdapterInfinityCL && value.Adapter != AdapterInfinityBin {
 		return Emitter{}, fmt.Errorf("unsupported emitter adapter")
 	}
@@ -241,6 +244,10 @@ func normalizeAdapter(value string) (string, error) {
 		return AdapterV2, nil
 	case AdapterV3, "v3", "uniswap_v3", "pancakeswap_v3", "pancake_v3":
 		return AdapterV3, nil
+	case AdapterAlgebra, "algebra_v3", "algebra_integral":
+		return AdapterAlgebra, nil
+	case AdapterSolidly, "solidly_v2", "aerodrome", "velodrome":
+		return AdapterSolidly, nil
 	case AdapterInfinityCL, "infinity_cl", "pancake_infinity_cl":
 		return AdapterInfinityCL, nil
 	case AdapterInfinityBin, "infinity_bin", "pancake_infinity_bin":
@@ -260,6 +267,10 @@ func defaultProtocol(adapter string) string {
 		return "pancakeswap_infinity"
 	case AdapterFourMemeV1, AdapterFourMemeV2:
 		return "four_meme"
+	case AdapterAlgebra:
+		return "algebra"
+	case AdapterSolidly:
+		return "solidly"
 	default:
 		return adapter
 	}

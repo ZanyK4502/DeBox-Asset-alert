@@ -97,6 +97,7 @@ type MarketWebhookService interface {
 type MarketManagementService interface {
 	Catalog(context.Context, string) (marketview.CatalogResult, error)
 	QueryToken(context.Context, string, marketview.TokenQueryInput) (marketview.TokenQueryResult, error)
+	QueryTokens(context.Context, string, marketview.MultiTokenQueryInput) (marketview.MultiTokenQueryResult, error)
 	CreateProject(context.Context, string, marketview.CreateProjectInput) (marketview.ProjectDetail, error)
 	ListProjects(context.Context, string, bool) ([]store.MarketProject, error)
 	Project(context.Context, string, int64) (marketview.ProjectDetail, error)
@@ -195,6 +196,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/market/assets/verify-cross-chain", h.postMarketAssetVerifyCrossChain)
 	mux.HandleFunc("GET /api/market/assets/logo", h.getMarketAssetLogo)
 	mux.HandleFunc("POST /api/market/query", h.postMarketQuery)
+	mux.HandleFunc("POST /api/market/pools/discover", h.postMarketPoolsDiscover)
 	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)
 	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)
 	mux.HandleFunc("GET /api/market/projects/{project_id}", h.getMarketProject)
