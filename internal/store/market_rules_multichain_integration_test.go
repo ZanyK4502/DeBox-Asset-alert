@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/migrations"
 )
 
 func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T) {
@@ -141,6 +143,109 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 		`, project.ID, target.deploymentID, marketPool.ID); err != nil {
 			t.Fatalf("link %s pool: %v", target.chainKey, err)
 		}
+	}
+
+	baseProjects, err := database.ListActiveMarketProjectsForCollection(
+		ctx,
+		8453,
+		10,
+	)
+	if err != nil || len(baseProjects) != 1 ||
+		baseProjects[0].ChainKey != "base" ||
+		baseProjects[0].TokenAddress !=
+			"0x2222222222222222222222222222222222222222" ||
+		baseProjects[0].MarketAssetDeploymentID == nil ||
+		*baseProjects[0].MarketAssetDeploymentID != baseDeploymentID ||
+		baseProjects[0].MarketProjectDeploymentID == nil {
+		t.Fatalf(
+			"Base collection projects = %#v, error = %v",
+			baseProjects,
+			err,
+		)
+	}
+	baseTargets, err := database.ListMarketCollectionTargets(ctx, 8453)
+	if err != nil || len(baseTargets) != 1 ||
+		baseTargets[0].ChainKey != "base" ||
+		baseTargets[0].TokenAddress !=
+			"0x2222222222222222222222222222222222222222" {
+		t.Fatalf("Base collection targets = %#v, error = %v", baseTargets, err)
+	}
+	dueBase, err := database.ListMarketProjectsDueHolderRefresh(
+		ctx,
+		8453,
+		time.Now().UTC(),
+		10,
+	)
+	if err != nil || len(dueBase) != 1 ||
+		dueBase[0].MarketProjectDeploymentID == nil ||
+		dueBase[0].ChainID != 8453 {
+		t.Fatalf("Base holder refresh targets = %#v, error = %v", dueBase, err)
+	}
+
+	discoveredAddress := "0x7777777777777777777777777777777777777777"
+	discoveredPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		ChainKey: "base", ChainID: 8453,
+		Protocol: "integration", ProtocolVersion: "v2",
+		PoolKey: discoveredAddress, PoolAddress: &discoveredAddress,
+		Token0Address: "0x2222222222222222222222222222222222222222",
+		Token0Symbol:  "MULTI", Token0Decimals: 18,
+		Token1Address: "0x8888888888888888888888888888888888888888",
+		Token1Symbol:  "USD", Token1Decimals: 18,
+		LiquidityUSD: "50000", SupportsEventParsing: true,
+		ParserAdapter: "uniswap_v2", VerificationStatus: "verified",
+	})
+	if err != nil {
+		t.Fatalf("create discovered Base pool: %v", err)
+	}
+	discoveredLink, err := database.EnsureMarketProjectPool(
+		ctx,
+		EnsureMarketProjectPoolParams{
+			DeBoxUserID:     userID,
+			MarketProjectID: project.ID,
+			MarketPoolID:    discoveredPool.ID,
+			SelectIfNone:    true,
+			DiscoverySource: "integration",
+		},
+	)
+	if err != nil ||
+		discoveredLink.MarketProjectDeploymentID == nil ||
+		*discoveredLink.MarketProjectDeploymentID == 0 ||
+		discoveredLink.Selected != 0 ||
+		discoveredLink.IsPrimary != 0 {
+		t.Fatalf(
+			"discovered Base project pool = %#v, error = %v",
+			discoveredLink,
+			err,
+		)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE market_project_pools
+		SET market_project_deployment_id = NULL
+		WHERE id = $1
+	`, discoveredLink.ID); err != nil {
+		t.Fatalf("clear discovered deployment link: %v", err)
+	}
+	repairMigration, err := migrations.Files.ReadFile(
+		"0014_repair_multichain_collection_links.sql",
+	)
+	if err != nil {
+		t.Fatalf("read collection link repair migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(repairMigration)); err != nil {
+		t.Fatalf("apply collection link repair migration: %v", err)
+	}
+	var repairedDeploymentID *int64
+	if err := pool.QueryRow(ctx, `
+		SELECT market_project_deployment_id
+		FROM market_project_pools
+		WHERE id = $1
+	`, discoveredLink.ID).Scan(&repairedDeploymentID); err != nil ||
+		repairedDeploymentID == nil {
+		t.Fatalf(
+			"repaired deployment id = %v, error = %v",
+			repairedDeploymentID,
+			err,
+		)
 	}
 
 	first, err := database.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{

@@ -93,6 +93,34 @@ type EnsureMarketProjectPoolParams struct {
 	DiscoverySource string
 }
 
+const marketCollectionProjectColumns = `
+	mp.id AS id,
+	mp.debox_user_id,
+	mp.market_asset_id,
+	mad.id AS market_asset_deployment_id,
+	mpd.id AS market_project_deployment_id,
+	mad.chain_key,
+	mad.chain_id,
+	mad.token_address,
+	mad.token_name,
+	mad.token_symbol,
+	mad.token_decimals,
+	mad.total_supply_raw::text AS total_supply_raw,
+	mpd.status,
+	mpd.pause_reason,
+	CASE WHEN mad.chain_id = 56 THEN mp.four_meme_status ELSE '' END
+		AS four_meme_status,
+	COALESCE(
+		mpd.default_market_pool_id,
+		mad.default_market_pool_id,
+		CASE WHEN mp.chain_id = mad.chain_id THEN mp.main_pool_id END
+	) AS main_pool_id,
+	mp.metadata,
+	mp.last_discovered_at,
+	mp.created_at,
+	mp.updated_at
+`
+
 // MarketTaskLock is connection scoped so multiple Railway instances cannot run
 // the same collector task concurrently.
 type MarketTaskLock struct {
@@ -167,10 +195,15 @@ func (s *Store) ListActiveMarketProjectsForCollection(
 ) ([]MarketProject, error) {
 	limit = clamp(limit, 1, 5000)
 	values, err := collectMany[MarketProject](ctx, s.db, `
-		SELECT `+marketProjectColumns+`
-		FROM market_projects
-		WHERE status = 'active' AND chain_id = $1
-		ORDER BY COALESCE(last_discovered_at, created_at), id
+		SELECT `+marketCollectionProjectColumns+`
+		FROM market_projects mp
+		JOIN market_project_deployments mpd
+		  ON mpd.market_project_id = mp.id
+		 AND mpd.status = 'active'
+		JOIN market_asset_deployments mad
+		  ON mad.id = mpd.market_asset_deployment_id
+		WHERE mp.status = 'active' AND mad.chain_id = $1
+		ORDER BY COALESCE(mp.last_discovered_at, mp.created_at), mp.id, mpd.id
 		LIMIT $2
 	`, chainID, limit)
 	if err != nil {
@@ -186,19 +219,24 @@ func (s *Store) ListMarketProjectsDueHolderRefresh(
 	limit int,
 ) ([]MarketProject, error) {
 	projects, err := collectMany[MarketProject](ctx, s.db, `
-		SELECT DISTINCT ON (mp.chain_id, mp.token_address)
-		       `+marketProjectColumns+`
+		SELECT DISTINCT ON (mad.chain_id, mad.token_address)
+		       `+marketCollectionProjectColumns+`
 		FROM market_projects mp
-		WHERE mp.chain_id = $1
+		JOIN market_project_deployments mpd
+		  ON mpd.market_project_id = mp.id
+		 AND mpd.status = 'active'
+		JOIN market_asset_deployments mad
+		  ON mad.id = mpd.market_asset_deployment_id
+		WHERE mad.chain_id = $1
 		  AND mp.status = 'active'
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM market_holders mh
-			WHERE mh.chain_id = mp.chain_id
-			  AND mh.token_address = mp.token_address
+			WHERE mh.chain_id = mad.chain_id
+			  AND mh.token_address = mad.token_address
 			  AND mh.updated_at > $2
 		  )
-		ORDER BY mp.chain_id, mp.token_address, mp.created_at, mp.id
+		ORDER BY mad.chain_id, mad.token_address, mp.created_at, mp.id
 		LIMIT $3
 	`, chainID, notAfter.UTC(), clamp(limit, 1, 500))
 	if err != nil {
@@ -213,18 +251,26 @@ func (s *Store) ListMarketCollectionTargets(
 ) ([]MarketCollectionTarget, error) {
 	values, err := collectMany[MarketCollectionTarget](ctx, s.db, `
 		SELECT
-			mp.id AS market_project_id, mp.debox_user_id, mp.chain_key,
-			mp.chain_id, mp.token_address, mp.token_name, mp.token_symbol,
-			mp.token_decimals, p.id AS market_pool_id, p.protocol,
+			mp.id AS market_project_id, mp.debox_user_id, mad.chain_key,
+			mad.chain_id, mad.token_address, mad.token_name, mad.token_symbol,
+			mad.token_decimals, p.id AS market_pool_id, p.protocol,
 			p.protocol_version, p.pool_key, p.pool_address,
 			p.token0_address, p.token0_symbol, p.token0_decimals,
 			p.token1_address, p.token1_symbol, p.token1_decimals,
 			p.parser_adapter, mpp.selected, mpp.is_primary
 		FROM market_projects mp
-		JOIN market_project_pools mpp ON mpp.market_project_id = mp.id
+		JOIN market_project_deployments mpd
+		  ON mpd.market_project_id = mp.id
+		 AND mpd.status = 'active'
+		JOIN market_asset_deployments mad
+		  ON mad.id = mpd.market_asset_deployment_id
+		JOIN market_project_pools mpp
+		  ON mpp.market_project_id = mp.id
+		 AND mpp.market_project_deployment_id = mpd.id
 		JOIN market_pools p ON p.id = mpp.market_pool_id
 		WHERE mp.status = 'active'
-		  AND mp.chain_id = $1
+		  AND mad.chain_id = $1
+		  AND p.chain_id = mad.chain_id
 		  AND mpp.selected = 1
 		ORDER BY p.id, mp.id
 	`, chainID)
@@ -243,41 +289,71 @@ func (s *Store) EnsureMarketProjectPool(
 ) (MarketProjectPool, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProjectPool, error) {
 		var projectChainID, poolChainID int64
+		var projectDeploymentID *int64
 		var token, token0, token1 string
 		var hasSelected bool
 		if err := tx.QueryRow(ctx, `
 			SELECT mp.chain_id, mp.token_address, p.chain_id,
-			       p.token0_address, p.token1_address,
+			       p.token0_address, p.token1_address, mpd.id,
 			       EXISTS (
 			           SELECT 1 FROM market_project_pools current
-			           WHERE current.market_project_id = mp.id AND current.selected = 1
+			           WHERE current.market_project_id = mp.id
+			             AND current.market_project_deployment_id
+			                 IS NOT DISTINCT FROM mpd.id
+			             AND current.selected = 1
 			       )
 			FROM market_projects mp
 			CROSS JOIN market_pools p
+			LEFT JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status <> 'removed'
+			 AND EXISTS (
+				SELECT 1
+				FROM market_asset_deployments mad
+				WHERE mad.id = mpd.market_asset_deployment_id
+				  AND mad.chain_id = p.chain_id
+				  AND (
+					mad.token_address = p.token0_address
+					OR mad.token_address = p.token1_address
+				  )
+			 )
 			WHERE mp.id = $1 AND mp.debox_user_id = $2 AND p.id = $3
 			FOR UPDATE OF mp
 		`, params.MarketProjectID, params.DeBoxUserID, params.MarketPoolID).Scan(
-			&projectChainID, &token, &poolChainID, &token0, &token1, &hasSelected,
+			&projectChainID,
+			&token,
+			&poolChainID,
+			&token0,
+			&token1,
+			&projectDeploymentID,
+			&hasSelected,
 		); err != nil {
 			if isNoRows(err) {
 				return MarketProjectPool{}, ErrNotFound
 			}
 			return MarketProjectPool{}, fmt.Errorf("validate discovered market pool: %w", err)
 		}
-		if projectChainID != poolChainID || (token != token0 && token != token1) {
+		if projectDeploymentID == nil &&
+			(projectChainID != poolChainID || (token != token0 && token != token1)) {
 			return MarketProjectPool{}, ErrMarketPoolMismatch
 		}
 		selectPool := params.SelectIfNone && !hasSelected
 		value, err := collectOne[MarketProjectPool](ctx, tx, `
 			INSERT INTO market_project_pools (
-				market_project_id, market_pool_id, selected, is_primary, discovery_source
+				market_project_id, market_project_deployment_id,
+				market_pool_id, selected, is_primary, discovery_source
 			)
-			VALUES ($1, $2, $3, $3, $4)
+			VALUES ($1, $2, $3, $4, $4, $5)
 			ON CONFLICT (market_project_id, market_pool_id) DO UPDATE
-			SET discovery_source = EXCLUDED.discovery_source,
+			SET market_project_deployment_id = COALESCE(
+					EXCLUDED.market_project_deployment_id,
+					market_project_pools.market_project_deployment_id
+			    ),
+			    discovery_source = EXCLUDED.discovery_source,
 			    updated_at = NOW()
 			RETURNING `+marketProjectPoolColumns,
 			params.MarketProjectID,
+			projectDeploymentID,
 			params.MarketPoolID,
 			boolInt(selectPool),
 			strings.TrimSpace(params.DiscoverySource),
@@ -286,11 +362,34 @@ func (s *Store) EnsureMarketProjectPool(
 			return MarketProjectPool{}, fmt.Errorf("ensure discovered market pool: %w", err)
 		}
 		if selectPool {
+			if projectDeploymentID != nil {
+				if _, err := tx.Exec(ctx, `
+					UPDATE market_project_deployments
+					SET default_market_pool_id = $1, updated_at = NOW()
+					WHERE id = $2 AND market_project_id = $3
+				`, params.MarketPoolID, projectDeploymentID, params.MarketProjectID); err != nil {
+					return MarketProjectPool{}, fmt.Errorf(
+						"set discovered deployment primary pool: %w",
+						err,
+					)
+				}
+			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE market_projects
 				SET main_pool_id = $1, updated_at = NOW()
-				WHERE id = $2 AND debox_user_id = $3 AND main_pool_id IS NULL
-			`, params.MarketPoolID, params.MarketProjectID, params.DeBoxUserID); err != nil {
+				WHERE id = $2
+				  AND debox_user_id = $3
+				  AND main_pool_id IS NULL
+				  AND chain_id = $4
+				  AND (token_address = $5 OR token_address = $6)
+			`,
+				params.MarketPoolID,
+				params.MarketProjectID,
+				params.DeBoxUserID,
+				poolChainID,
+				token0,
+				token1,
+			); err != nil {
 				return MarketProjectPool{}, fmt.Errorf("set discovered primary pool: %w", err)
 			}
 		}

@@ -115,24 +115,26 @@ type MarketCombinationRuleProject struct {
 }
 
 type MarketProject struct {
-	ID               int64           `db:"id" json:"id"`
-	DeBoxUserID      string          `db:"debox_user_id" json:"debox_user_id"`
-	MarketAssetID    *int64          `db:"market_asset_id" json:"market_asset_id,omitempty"`
-	ChainKey         string          `db:"chain_key" json:"chain_key"`
-	ChainID          int64           `db:"chain_id" json:"chain_id"`
-	TokenAddress     string          `db:"token_address" json:"token_address"`
-	TokenName        string          `db:"token_name" json:"token_name"`
-	TokenSymbol      string          `db:"token_symbol" json:"token_symbol"`
-	TokenDecimals    int32           `db:"token_decimals" json:"token_decimals"`
-	TotalSupplyRaw   *string         `db:"total_supply_raw" json:"total_supply_raw"`
-	Status           string          `db:"status" json:"status"`
-	PauseReason      string          `db:"pause_reason" json:"pause_reason"`
-	FourMemeStatus   string          `db:"four_meme_status" json:"four_meme_status"`
-	MainPoolID       *int64          `db:"main_pool_id" json:"main_pool_id"`
-	Metadata         json.RawMessage `db:"metadata" json:"metadata"`
-	LastDiscoveredAt *time.Time      `db:"last_discovered_at" json:"last_discovered_at"`
-	CreatedAt        time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt        time.Time       `db:"updated_at" json:"updated_at"`
+	ID                        int64           `db:"id" json:"id"`
+	DeBoxUserID               string          `db:"debox_user_id" json:"debox_user_id"`
+	MarketAssetID             *int64          `db:"market_asset_id" json:"market_asset_id,omitempty"`
+	MarketAssetDeploymentID   *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	MarketProjectDeploymentID *int64          `db:"market_project_deployment_id" json:"market_project_deployment_id,omitempty"`
+	ChainKey                  string          `db:"chain_key" json:"chain_key"`
+	ChainID                   int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress              string          `db:"token_address" json:"token_address"`
+	TokenName                 string          `db:"token_name" json:"token_name"`
+	TokenSymbol               string          `db:"token_symbol" json:"token_symbol"`
+	TokenDecimals             int32           `db:"token_decimals" json:"token_decimals"`
+	TotalSupplyRaw            *string         `db:"total_supply_raw" json:"total_supply_raw"`
+	Status                    string          `db:"status" json:"status"`
+	PauseReason               string          `db:"pause_reason" json:"pause_reason"`
+	FourMemeStatus            string          `db:"four_meme_status" json:"four_meme_status"`
+	MainPoolID                *int64          `db:"main_pool_id" json:"main_pool_id"`
+	Metadata                  json.RawMessage `db:"metadata" json:"metadata"`
+	LastDiscoveredAt          *time.Time      `db:"last_discovered_at" json:"last_discovered_at"`
+	CreatedAt                 time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type MarketPool struct {

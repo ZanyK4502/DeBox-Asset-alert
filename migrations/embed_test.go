@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0013_multichain_market_rules.sql" {
-		t.Fatalf("latest migration = %q, want multi-chain market rules migration", got)
+	if got := names[len(names)-1]; got != "0014_repair_multichain_collection_links.sql" {
+		t.Fatalf("latest migration = %q, want collection link repair migration", got)
 	}
 
 	requiredTables := []string{
@@ -97,7 +97,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		}
 		if dataUpdate.MatchString(sql) &&
 			name != "0011_multichain_market_domain.sql" &&
-			name != "0012_multichain_market_collection.sql" {
+			name != "0012_multichain_market_collection.sql" &&
+			name != "0014_repair_multichain_collection_links.sql" {
 			t.Fatalf("migration %q contains an unreviewed data update", name)
 		}
 		for _, statement := range alterStatement.FindAllString(sql, -1) {

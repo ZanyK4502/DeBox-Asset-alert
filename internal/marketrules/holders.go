@@ -20,39 +20,53 @@ const (
 	holderFetchLimit       = 100
 )
 
-var systemHolderExclusions = map[string]string{
+var commonHolderExclusions = map[string]string{
 	"0x0000000000000000000000000000000000000000": "zero_address",
 	"0x000000000000000000000000000000000000dead": "burn_address",
-	marketparse.BSCFourMemeTokenManager:          "four_meme_manager",
-	marketparse.BSCInfinityCLManager:             "infinity_manager",
-	marketparse.BSCInfinityBinManager:            "infinity_manager",
-	marketparse.BSCInfinityVault:                 "infinity_vault",
-	marketparse.BSCPancakeV2Factory:              "factory",
-	marketparse.BSCPancakeV3Factory:              "factory",
+}
+
+var bscHolderExclusions = map[string]string{
+	marketparse.BSCFourMemeTokenManager: "four_meme_manager",
+	marketparse.BSCInfinityCLManager:    "infinity_manager",
+	marketparse.BSCInfinityBinManager:   "infinity_manager",
+	marketparse.BSCInfinityVault:        "infinity_vault",
+	marketparse.BSCPancakeV2Factory:     "factory",
+	marketparse.BSCPancakeV3Factory:     "factory",
 }
 
 func (service *Service) RefreshDueHolders(ctx context.Context) (int64, error) {
 	cutoff := service.now().Add(-service.settings.HolderRefreshInterval)
-	projects, err := service.repository.ListMarketProjectsDueHolderRefresh(
-		ctx,
-		56,
-		cutoff,
-		10,
-	)
-	if err != nil {
-		return 0, err
-	}
 	var refreshed int64
 	var refreshErrors []error
-	for _, project := range projects {
-		if err := service.refreshProjectHolders(ctx, project); err != nil {
+	for _, profile := range chain.SupportedChains() {
+		projects, err := service.repository.ListMarketProjectsDueHolderRefresh(
+			ctx,
+			profile.ChainID,
+			cutoff,
+			10,
+		)
+		if err != nil {
 			refreshErrors = append(
 				refreshErrors,
-				fmt.Errorf("refresh holders for %s: %w", project.TokenAddress, err),
+				fmt.Errorf("list %s holder refresh targets: %w", profile.Key, err),
 			)
 			continue
 		}
-		refreshed++
+		for _, project := range projects {
+			if err := service.refreshProjectHolders(ctx, project); err != nil {
+				refreshErrors = append(
+					refreshErrors,
+					fmt.Errorf(
+						"refresh %s holders for %s: %w",
+						profile.Key,
+						project.TokenAddress,
+						err,
+					),
+				)
+				continue
+			}
+			refreshed++
+		}
 	}
 	return refreshed, errors.Join(refreshErrors...)
 }
@@ -71,28 +85,13 @@ func (service *Service) refreshProjectHolders(
 	if err != nil {
 		return err
 	}
-	oldHolders, err := service.repository.ListMarketHolders(
-		ctx,
-		project.ID,
-		project.DeBoxUserID,
-		true,
-		500,
-	)
+	oldHolders, snapshots, err := service.projectHolderBaseline(ctx, project)
 	if err != nil {
 		return err
 	}
 	oldByAddress := make(map[string]store.MarketHolder, len(oldHolders))
 	for _, holder := range oldHolders {
 		oldByAddress[strings.ToLower(holder.HolderAddress)] = holder
-	}
-	snapshots, err := service.repository.ListMarketSnapshots(
-		ctx,
-		project.ID,
-		project.DeBoxUserID,
-		1,
-	)
-	if err != nil {
-		return err
 	}
 	var priceUSD *string
 	if len(snapshots) > 0 {
@@ -106,13 +105,21 @@ func (service *Service) refreshProjectHolders(
 	if err != nil {
 		return err
 	}
-	exclusions := make(map[string]string, len(systemHolderExclusions)+len(pools)+1)
-	for address, reason := range systemHolderExclusions {
+	exclusions := make(
+		map[string]string,
+		len(commonHolderExclusions)+len(bscHolderExclusions)+len(pools)+1,
+	)
+	for address, reason := range commonHolderExclusions {
 		exclusions[address] = reason
+	}
+	if project.ChainKey == "bsc" {
+		for address, reason := range bscHolderExclusions {
+			exclusions[address] = reason
+		}
 	}
 	exclusions[project.TokenAddress] = "token_contract"
 	for _, pool := range pools {
-		if pool.PoolAddress != nil {
+		if pool.ChainID == project.ChainID && pool.PoolAddress != nil {
 			exclusions[strings.ToLower(*pool.PoolAddress)] = "market_pool"
 		}
 	}
@@ -233,6 +240,54 @@ func (service *Service) refreshProjectHolders(
 		now,
 	)
 	return err
+}
+
+func (service *Service) projectHolderBaseline(
+	ctx context.Context,
+	project store.MarketProject,
+) ([]store.MarketHolder, []store.MarketSnapshot, error) {
+	if repository, ok := service.repository.(multiChainRuleRepository); ok &&
+		project.MarketProjectDeploymentID != nil {
+		target := store.MarketRuleTarget{
+			TargetKey:                 fmt.Sprintf("deployment:%d", *project.MarketProjectDeploymentID),
+			MarketProjectDeploymentID: project.MarketProjectDeploymentID,
+			ChainKey:                  project.ChainKey,
+			ChainID:                   project.ChainID,
+			TokenAddress:              project.TokenAddress,
+			TokenName:                 project.TokenName,
+			TokenSymbol:               project.TokenSymbol,
+			TokenDecimals:             project.TokenDecimals,
+		}
+		holders, err := repository.ListMarketHoldersForTarget(ctx, target, 500)
+		if err != nil {
+			return nil, nil, err
+		}
+		snapshots, err := repository.ListMarketSnapshotsForTarget(ctx, target, 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		return holders, snapshots, nil
+	}
+	holders, err := service.repository.ListMarketHolders(
+		ctx,
+		project.ID,
+		project.DeBoxUserID,
+		true,
+		500,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshots, err := service.repository.ListMarketSnapshots(
+		ctx,
+		project.ID,
+		project.DeBoxUserID,
+		1,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return holders, snapshots, nil
 }
 
 func (service *Service) recordHolderBalanceChange(

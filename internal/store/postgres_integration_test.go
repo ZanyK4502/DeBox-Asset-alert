@@ -100,7 +100,8 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 13 || latestName != "0013_multichain_market_rules.sql" {
+	if latestVersion != 14 ||
+		latestName != "0014_repair_multichain_collection_links.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
 	}
 }
