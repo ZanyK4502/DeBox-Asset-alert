@@ -140,9 +140,36 @@ func (s *Store) DailySummaryStatistics(
 			WHERE ae.created_at >= $2 AND ae.created_at < $3
 		),
 		active_market_projects AS MATERIALIZED (
-			SELECT id, chain_id, token_address
+			SELECT id
 			FROM market_projects
 			WHERE debox_user_id = $1 AND status = 'active'
+		),
+		active_market_deployments AS MATERIALIZED (
+			SELECT
+				mp.id AS market_project_id,
+				mad.chain_id,
+				mad.token_address
+			FROM market_projects mp
+			JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status = 'active'
+			JOIN market_asset_deployments mad
+			  ON mad.id = mpd.market_asset_deployment_id
+			WHERE mp.debox_user_id = $1 AND mp.status = 'active'
+			UNION
+			SELECT
+				mp.id AS market_project_id,
+				mp.chain_id,
+				mp.token_address
+			FROM market_projects mp
+			WHERE mp.debox_user_id = $1
+			  AND mp.status = 'active'
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status = 'active'
+			  )
 		),
 		market_rule_stats AS (
 			SELECT
@@ -180,13 +207,16 @@ func (s *Store) DailySummaryStatistics(
 						'holder_rank_entered', 'holder_rank_exited'
 					)
 				) AS holder_event_count
-			FROM active_market_projects amp
-			LEFT JOIN market_events me
-			  ON me.chain_id = amp.chain_id
-			 AND me.token_address = amp.token_address
-			 AND me.reorged = 0
-			 AND me.occurred_at >= $2
-			 AND me.occurred_at < $3
+			FROM market_events me
+			WHERE me.reorged = 0
+			  AND me.occurred_at >= $2
+			  AND me.occurred_at < $3
+			  AND EXISTS (
+				SELECT 1
+				FROM active_market_deployments amd
+				WHERE amd.chain_id = me.chain_id
+				  AND amd.token_address = me.token_address
+			  )
 		),
 		market_notification_stats AS (
 			SELECT COUNT(*) FILTER (
@@ -218,23 +248,64 @@ func (s *Store) ListSummaryRecentMarketEvents(
 	limit int,
 ) ([]MarketSummaryEvent, error) {
 	events, err := collectMany[MarketSummaryEvent](ctx, s.db, `
+		WITH active_market_deployments AS MATERIALIZED (
+			SELECT
+				mp.id AS market_project_id,
+				mp.token_name,
+				mp.token_symbol,
+				mad.chain_id,
+				mad.token_address
+			FROM market_projects mp
+			JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status = 'active'
+			JOIN market_asset_deployments mad
+			  ON mad.id = mpd.market_asset_deployment_id
+			WHERE mp.debox_user_id = $1 AND mp.status = 'active'
+			UNION
+			SELECT
+				mp.id AS market_project_id,
+				mp.token_name,
+				mp.token_symbol,
+				mp.chain_id,
+				mp.token_address
+			FROM market_projects mp
+			WHERE mp.debox_user_id = $1
+			  AND mp.status = 'active'
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status = 'active'
+			  )
+		)
 		SELECT
 			me.id,
-			mp.id AS market_project_id,
-			mp.token_symbol,
+			matched.market_project_id,
+			matched.token_name,
+			matched.token_symbol,
+			me.chain_key,
+			me.token_address,
+			COALESCE(pool.protocol, '') AS protocol,
+			COALESCE(pool.protocol_version, '') AS protocol_version,
+			pool.pool_address,
 			me.event_type,
 			me.wallet_address,
 			me.token_amount::text AS token_amount,
 			me.usd_value::text AS usd_value,
 			me.transaction_hash,
 			me.occurred_at
-		FROM market_projects mp
-		JOIN market_events me
-		  ON me.chain_id = mp.chain_id
-		 AND me.token_address = mp.token_address
-		WHERE mp.debox_user_id = $1
-		  AND mp.status = 'active'
-		  AND me.reorged = 0
+		FROM market_events me
+		JOIN LATERAL (
+			SELECT amd.*
+			FROM active_market_deployments amd
+			WHERE amd.chain_id = me.chain_id
+			  AND amd.token_address = me.token_address
+			ORDER BY amd.market_project_id
+			LIMIT 1
+		) matched ON TRUE
+		LEFT JOIN market_pools pool ON pool.id = me.market_pool_id
+		WHERE me.reorged = 0
 		  AND me.occurred_at >= $2
 		  AND me.occurred_at < $3
 		ORDER BY me.occurred_at DESC, me.id DESC
@@ -244,6 +315,157 @@ func (s *Store) ListSummaryRecentMarketEvents(
 		return nil, fmt.Errorf("list summary recent market events: %w", err)
 	}
 	return events, nil
+}
+
+func (s *Store) ListDailyMarketProjectChainSummaries(
+	ctx context.Context,
+	deboxUserID string,
+	periodStart time.Time,
+	periodEnd time.Time,
+) ([]MarketProjectChainSummary, error) {
+	summaries, err := collectMany[MarketProjectChainSummary](ctx, s.db, `
+		WITH active_deployments AS MATERIALIZED (
+			SELECT
+				mp.id AS market_project_id,
+				mp.token_name,
+				mp.token_symbol,
+				mad.chain_key,
+				mad.chain_id,
+				mad.token_address,
+				mpd.default_market_pool_id
+			FROM market_projects mp
+			JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status = 'active'
+			JOIN market_asset_deployments mad
+			  ON mad.id = mpd.market_asset_deployment_id
+			WHERE mp.debox_user_id = $1 AND mp.status = 'active'
+			UNION
+			SELECT
+				mp.id AS market_project_id,
+				mp.token_name,
+				mp.token_symbol,
+				mp.chain_key,
+				mp.chain_id,
+				mp.token_address,
+				mp.main_pool_id AS default_market_pool_id
+			FROM market_projects mp
+			WHERE mp.debox_user_id = $1
+			  AND mp.status = 'active'
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status = 'active'
+			  )
+		)
+		SELECT
+			ad.market_project_id,
+			ad.token_name,
+			ad.token_symbol,
+			ad.chain_key,
+			ad.chain_id,
+			ad.token_address,
+			start_snapshot.price_usd::text AS start_price_usd,
+			end_snapshot.price_usd::text AS end_price_usd,
+			COALESCE(events.trade_volume_usd, 0)::text AS trade_volume_usd,
+			COALESCE(events.buy_count, 0) AS buy_count,
+			COALESCE(events.buy_usd, 0)::text AS buy_usd,
+			COALESCE(events.sell_count, 0) AS sell_count,
+			COALESCE(events.sell_usd, 0)::text AS sell_usd,
+			COALESCE(large_trades.large_trade_count, 0) AS large_trade_count,
+			COALESCE(events.holder_increase_count, 0) AS holder_increase_count,
+			COALESCE(events.holder_decrease_count, 0) AS holder_decrease_count,
+			COALESCE(events.holder_rank_enter_count, 0) AS holder_rank_enter_count,
+			COALESCE(events.holder_rank_exit_count, 0) AS holder_rank_exit_count
+		FROM active_deployments ad
+		LEFT JOIN LATERAL (
+			SELECT
+				COALESCE(SUM(me.usd_value) FILTER (
+					WHERE me.event_type IN ('buy', 'sell')
+				), 0) AS trade_volume_usd,
+				COUNT(*) FILTER (WHERE me.event_type = 'buy') AS buy_count,
+				COALESCE(SUM(me.usd_value) FILTER (
+					WHERE me.event_type = 'buy'
+				), 0) AS buy_usd,
+				COUNT(*) FILTER (WHERE me.event_type = 'sell') AS sell_count,
+				COALESCE(SUM(me.usd_value) FILTER (
+					WHERE me.event_type = 'sell'
+				), 0) AS sell_usd,
+				COUNT(*) FILTER (
+					WHERE me.event_type = 'holder_increase'
+				) AS holder_increase_count,
+				COUNT(*) FILTER (
+					WHERE me.event_type = 'holder_decrease'
+				) AS holder_decrease_count,
+				COUNT(*) FILTER (
+					WHERE me.event_type = 'holder_rank_entered'
+				) AS holder_rank_enter_count,
+				COUNT(*) FILTER (
+					WHERE me.event_type = 'holder_rank_exited'
+				) AS holder_rank_exit_count
+			FROM market_events me
+			WHERE me.chain_id = ad.chain_id
+			  AND me.token_address = ad.token_address
+			  AND me.reorged = 0
+			  AND me.occurred_at >= $2
+			  AND me.occurred_at < $3
+		) events ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT COUNT(DISTINCT mre.market_event_id) AS large_trade_count
+			FROM market_rule_events mre
+			JOIN market_rules mr ON mr.id = mre.market_rule_id
+			JOIN market_events me ON me.id = mre.market_event_id
+			WHERE mr.market_project_id = ad.market_project_id
+			  AND mr.rule_type IN (
+				'market_large_buy',
+				'market_large_sell',
+				'market_consecutive_large_buy',
+				'market_consecutive_large_sell',
+				'market_four_meme_large_trade'
+			  )
+			  AND me.chain_id = ad.chain_id
+			  AND me.token_address = ad.token_address
+			  AND me.reorged = 0
+			  AND me.occurred_at >= $2
+			  AND me.occurred_at < $3
+		) large_trades ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT ms.price_usd
+			FROM market_snapshots ms
+			WHERE ms.chain_id = ad.chain_id
+			  AND ms.token_address = ad.token_address
+			  AND ms.price_usd IS NOT NULL
+			  AND (
+				ad.default_market_pool_id IS NULL
+				OR ms.market_pool_id = ad.default_market_pool_id
+			  )
+			  AND ms.captured_at >= $2
+			  AND ms.captured_at < $3
+			ORDER BY ms.captured_at, ms.id
+			LIMIT 1
+		) start_snapshot ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT ms.price_usd
+			FROM market_snapshots ms
+			WHERE ms.chain_id = ad.chain_id
+			  AND ms.token_address = ad.token_address
+			  AND ms.price_usd IS NOT NULL
+			  AND (
+				ad.default_market_pool_id IS NULL
+				OR ms.market_pool_id = ad.default_market_pool_id
+			  )
+			  AND ms.captured_at >= $2
+			  AND ms.captured_at < $3
+			ORDER BY ms.captured_at DESC, ms.id DESC
+			LIMIT 1
+		) end_snapshot ON TRUE
+		ORDER BY ad.market_project_id, ad.chain_id
+	`, deboxUserID, periodStart, periodEnd)
+	if err != nil {
+		return nil, fmt.Errorf("list daily market project chain summaries: %w", err)
+	}
+	return summaries, nil
 }
 
 func (s *Store) ListSummaryRecentEvents(

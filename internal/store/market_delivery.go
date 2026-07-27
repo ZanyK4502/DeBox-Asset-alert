@@ -1246,13 +1246,14 @@ func (s *Store) loadRealtimeMarketDelivery(
 		EndsAt:               event.OccurredAt,
 		Note:                 ruleEvent.Note,
 	}
+	delivery.Timezone = s.marketNotificationTimezone(ctx, rule.DeBoxUserID)
 	if event.MarketPoolID != nil {
 		delivery.Pool, _ = s.GetMarketPool(ctx, *event.MarketPoolID)
 	}
 	delivery.Snapshot, _ = s.LatestMarketSnapshot(
 		ctx,
-		project.ChainID,
-		project.TokenAddress,
+		event.ChainID,
+		event.TokenAddress,
 		event.MarketPoolID,
 	)
 	return delivery, nil
@@ -1285,7 +1286,7 @@ func (s *Store) loadStageMarketDelivery(
 	if err != nil {
 		return MarketNotificationDelivery{}, fmt.Errorf("load stage market project: %w", err)
 	}
-	notes, err := s.marketStageRecentNotes(ctx, id, 5)
+	recentEvents, err := s.marketStageRecentEvents(ctx, id, project, 5)
 	if err != nil {
 		return MarketNotificationDelivery{}, err
 	}
@@ -1303,20 +1304,22 @@ func (s *Store) loadStageMarketDelivery(
 		TriggerCount:         window.TriggerCount,
 		StartsAt:             window.StartsAt,
 		EndsAt:               window.EndsAt,
-		RecentNotes:          notes,
+		RecentEvents:         recentEvents,
+		Timezone:             s.marketNotificationTimezone(ctx, rule.DeBoxUserID),
 	}, nil
 }
 
-func (s *Store) marketStageRecentNotes(
+func (s *Store) marketStageRecentEvents(
 	ctx context.Context,
 	windowID int64,
+	project MarketProject,
 	limit int,
-) ([]string, error) {
-	type noteValue struct {
-		Note string `db:"note"`
+) ([]MarketNotificationEvent, error) {
+	type eventReference struct {
+		MarketRuleEventID int64 `db:"market_rule_event_id"`
 	}
-	values, err := collectMany[noteValue](ctx, s.db, `
-		SELECT mre.note
+	values, err := collectMany[eventReference](ctx, s.db, `
+		SELECT mre.id AS market_rule_event_id
 		FROM market_stage_window_events mswe
 		JOIN market_rule_events mre ON mre.id = mswe.market_rule_event_id
 		JOIN market_events me ON me.id = mre.market_event_id
@@ -1325,11 +1328,15 @@ func (s *Store) marketStageRecentNotes(
 		LIMIT $2
 	`, windowID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list market stage notes: %w", err)
+		return nil, fmt.Errorf("list market stage events: %w", err)
 	}
-	result := make([]string, 0, len(values))
+	result := make([]MarketNotificationEvent, 0, len(values))
 	for _, value := range values {
-		result = append(result, value.Note)
+		item, err := s.loadMarketNotificationEvent(ctx, value.MarketRuleEventID, &project)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
 	}
 	return result, nil
 }
@@ -1376,6 +1383,7 @@ func (s *Store) loadCombinationMarketDelivery(
 		EndsAt:                  window.EndsAt,
 		Note:                    combination.Note,
 		CombinationMembers:      progress,
+		Timezone:                s.marketNotificationTimezone(ctx, combination.DeBoxUserID),
 	}, nil
 }
 
@@ -1385,6 +1393,7 @@ func (s *Store) marketCombinationProgress(
 ) ([]MarketCombinationProgress, error) {
 	values, err := collectMany[MarketCombinationProgress](ctx, s.db, `
 		SELECT
+			mcm.id AS member_id,
 			mcm.source_type,
 			CASE
 			  WHEN mcm.source_type = 'watch' THEN wr.rule_type
@@ -1404,38 +1413,108 @@ func (s *Store) marketCombinationProgress(
 		return nil, fmt.Errorf("load market combination progress: %w", err)
 	}
 	for index := range values {
-		type noteValue struct {
-			Note string `db:"note"`
+		type triggerValue struct {
+			Note              string `db:"note"`
+			MarketRuleEventID *int64 `db:"market_rule_event_id"`
 		}
-		notes, err := collectMany[noteValue](ctx, s.db, `
-			SELECT mcte.note
+		triggers, err := collectMany[triggerValue](ctx, s.db, `
+			SELECT mcte.note, mcte.market_rule_event_id
 			FROM market_combination_trigger_events mcte
-			JOIN market_combination_members mcm
-			  ON mcm.id = mcte.market_combination_member_id
 			WHERE mcte.market_combination_window_id = $1
-			  AND mcm.source_type = $2
-			  AND (
-			    ($2 = 'watch' AND COALESCE((
-			      SELECT wr.rule_type FROM watch_rules wr
-			      WHERE wr.id = mcm.watch_rule_id
-			    ), '') = $3)
-			    OR
-			    ($2 = 'market' AND COALESCE((
-			      SELECT mr.rule_type FROM market_rules mr
-			      WHERE mr.id = mcm.market_rule_id
-			    ), '') = $3)
-			  )
+			  AND mcte.market_combination_member_id = $2
 			ORDER BY mcte.created_at DESC, mcte.id DESC
 			LIMIT 3
-		`, windowID, values[index].SourceType, values[index].RuleType)
+		`, windowID, values[index].MemberID)
 		if err != nil {
-			return nil, fmt.Errorf("load market combination notes: %w", err)
+			return nil, fmt.Errorf("load market combination triggers: %w", err)
 		}
-		for _, note := range notes {
-			values[index].RecentNotes = append(values[index].RecentNotes, note.Note)
+		for _, trigger := range triggers {
+			if trigger.MarketRuleEventID == nil {
+				values[index].RecentNotes = append(values[index].RecentNotes, trigger.Note)
+				continue
+			}
+			event, err := s.loadMarketNotificationEvent(ctx, *trigger.MarketRuleEventID, nil)
+			if err != nil {
+				return nil, err
+			}
+			values[index].RecentEvents = append(values[index].RecentEvents, event)
 		}
 	}
 	return values, nil
+}
+
+func (s *Store) loadMarketNotificationEvent(
+	ctx context.Context,
+	marketRuleEventID int64,
+	knownProject *MarketProject,
+) (MarketNotificationEvent, error) {
+	ruleEvent, err := collectOne[MarketRuleEvent](ctx, s.db, `
+		SELECT `+marketRuleEventColumns+`
+		FROM market_rule_events
+		WHERE id = $1
+	`, marketRuleEventID)
+	if err != nil {
+		return MarketNotificationEvent{}, fmt.Errorf("load market notification rule event: %w", err)
+	}
+	event, err := collectOne[MarketEvent](ctx, s.db, `
+		SELECT `+marketEventColumns+`
+		FROM market_events
+		WHERE id = $1 AND reorged = 0
+	`, ruleEvent.MarketEventID)
+	if err != nil {
+		return MarketNotificationEvent{}, fmt.Errorf("load market notification event: %w", err)
+	}
+	project := MarketProject{}
+	if knownProject != nil {
+		project = *knownProject
+	} else {
+		project, err = collectOne[MarketProject](ctx, s.db, `
+			SELECT `+marketProjectColumns+`
+			FROM market_projects
+			WHERE id = (
+				SELECT mr.market_project_id
+				FROM market_rules mr
+				WHERE mr.id = $1
+			)
+		`, ruleEvent.MarketRuleID)
+		if err != nil {
+			return MarketNotificationEvent{}, fmt.Errorf("load market notification project: %w", err)
+		}
+	}
+	result := MarketNotificationEvent{
+		Project: project,
+		Event:   event,
+		Note:    ruleEvent.Note,
+	}
+	if event.MarketPoolID != nil {
+		result.Pool, _ = s.GetMarketPool(ctx, *event.MarketPoolID)
+	}
+	return result, nil
+}
+
+func (s *Store) marketNotificationTimezone(ctx context.Context, deboxUserID string) string {
+	type timezoneValue struct {
+		Timezone string `db:"timezone"`
+	}
+	value, err := collectOptional[timezoneValue](ctx, s.db, `
+		SELECT daily_summary_timezone AS timezone
+		FROM subscriptions
+		WHERE debox_user_id = $1
+		  AND status = 'active'
+		  AND (is_permanent = 1 OR expires_at > NOW())
+		ORDER BY CASE plan_code
+		           WHEN 'professional' THEN 2
+		           WHEN 'standard' THEN 1
+		           ELSE 0
+		         END DESC,
+		         is_permanent DESC,
+		         expires_at DESC
+		LIMIT 1
+	`, deboxUserID)
+	if err != nil || value == nil || strings.TrimSpace(value.Timezone) == "" {
+		return "Asia/Shanghai"
+	}
+	return value.Timezone
 }
 
 func (s *Store) CompleteMarketDelivery(

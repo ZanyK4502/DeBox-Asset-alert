@@ -11,6 +11,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -64,6 +65,7 @@ type Repository interface {
 	DailySummaryStatistics(context.Context, string, time.Time, time.Time) (store.SummaryStatistics, error)
 	ListSummaryRecentEvents(context.Context, string, time.Time, time.Time, int) ([]store.SummaryEvent, error)
 	ListSummaryRecentMarketEvents(context.Context, string, time.Time, time.Time, int) ([]store.MarketSummaryEvent, error)
+	ListDailyMarketProjectChainSummaries(context.Context, string, time.Time, time.Time) ([]store.MarketProjectChainSummary, error)
 	MarkScheduledPushSent(context.Context, int64, string, time.Time) error
 }
 
@@ -297,6 +299,15 @@ func (e *Executor) summaryText(
 	if err != nil {
 		return "", err
 	}
+	marketSummaries, err := e.deps.Repository.ListDailyMarketProjectChainSummaries(
+		ctx,
+		subscription.DeBoxUserID,
+		periodStart,
+		periodEnd,
+	)
+	if err != nil {
+		return "", err
+	}
 	return buildSummaryText(
 		subscription,
 		periodStart,
@@ -304,6 +315,7 @@ func (e *Executor) summaryText(
 		statistics,
 		events,
 		marketEvents,
+		marketSummaries,
 	), nil
 }
 
@@ -314,6 +326,7 @@ func buildSummaryText(
 	statistics store.SummaryStatistics,
 	events []store.SummaryEvent,
 	marketEvents []store.MarketSummaryEvent,
+	marketSummaries []store.MarketProjectChainSummary,
 ) string {
 	english := normalizeLanguage(subscription.DailySummaryLanguage) == "en"
 	periodText := periodLabel(
@@ -325,6 +338,7 @@ func buildSummaryText(
 	summaryLabel := strings.TrimSpace(subscription.DailySummaryLabel)
 	recentText := recentEventsText(events, english)
 	recentMarketText := recentMarketEventsText(marketEvents, english)
+	marketProjectsText := marketProjectSummariesText(marketSummaries, english)
 
 	if english {
 		title := "DeBox Asset Alert Daily Summary"
@@ -352,6 +366,7 @@ func buildSummaryText(
 				"Market events: %d total, %d liquidity, %d holder changes<br/>"+
 				"Risk notice: %s<br/><br/>"+
 				"<b>Recent address events</b><br/>%s<br/><br/>"+
+				"%s<br/><br/>"+
 				"<b>Recent market events</b><br/>%s",
 			title,
 			html.EscapeString(periodText),
@@ -377,6 +392,7 @@ func buildSummaryText(
 			statistics.HolderEventCount,
 			html.EscapeString(alertHint),
 			recentText,
+			marketProjectsText,
 			recentMarketText,
 		)
 	}
@@ -406,6 +422,7 @@ func buildSummaryText(
 			"市场事件：共 %d 条，流动性 %d 条，大户变化 %d 条<br/>"+
 			"异常提醒：%s<br/><br/>"+
 			"<b>最近地址事件</b><br/>%s<br/><br/>"+
+			"%s<br/><br/>"+
 			"<b>最近市场事件</b><br/>%s",
 		title,
 		html.EscapeString(periodText),
@@ -431,8 +448,108 @@ func buildSummaryText(
 		statistics.HolderEventCount,
 		html.EscapeString(alertHint),
 		recentText,
+		marketProjectsText,
 		recentMarketText,
 	)
+}
+
+func marketProjectSummariesText(
+	summaries []store.MarketProjectChainSummary,
+	english bool,
+) string {
+	if len(summaries) == 0 {
+		if english {
+			return "<b>Token project reports</b><br/>No active token projects."
+		}
+		return "<b>项目币日报</b><br/>暂无启用中的项目币。"
+	}
+	lines := make([]string, 0, len(summaries)*5)
+	currentProjectID := int64(0)
+	for _, item := range summaries {
+		if item.MarketProjectID != currentProjectID {
+			if currentProjectID != 0 {
+				lines = append(lines, "")
+			}
+			currentProjectID = item.MarketProjectID
+			name := strings.TrimSpace(item.TokenName)
+			if name == "" {
+				name = item.TokenSymbol
+			}
+			title := name + " 项目币日报"
+			if english {
+				title = name + " token report"
+			}
+			lines = append(lines, "<b>"+html.EscapeString(title)+"</b>")
+		}
+		chainName := marketChainName(item.ChainKey)
+		lines = append(lines, fmt.Sprintf(
+			"<b>%s</b> · %s",
+			html.EscapeString(chainName),
+			html.EscapeString(item.TokenAddress),
+		))
+		if english {
+			lines = append(lines,
+				"Price change: "+html.EscapeString(priceChangeText(item.StartPriceUSD, item.EndPriceUSD)),
+				fmt.Sprintf(
+					"Volume: $%s (buys %d / sells %d)",
+					moneyText(item.TradeVolumeUSD),
+					item.BuyCount,
+					item.SellCount,
+				),
+				fmt.Sprintf("Large trades: %d", item.LargeTradeCount),
+				fmt.Sprintf(
+					"Holder changes: increase %d, decrease %d, entered %d, exited %d",
+					item.HolderIncreaseCount,
+					item.HolderDecreaseCount,
+					item.HolderRankEnterCount,
+					item.HolderRankExitCount,
+				),
+			)
+		} else {
+			lines = append(lines,
+				"价格变化："+html.EscapeString(priceChangeText(item.StartPriceUSD, item.EndPriceUSD)),
+				fmt.Sprintf(
+					"成交量：$%s（买入 %d 笔 / 卖出 %d 笔）",
+					moneyText(item.TradeVolumeUSD),
+					item.BuyCount,
+					item.SellCount,
+				),
+				fmt.Sprintf("大额买卖：%d 笔", item.LargeTradeCount),
+				fmt.Sprintf(
+					"大户变化：增持 %d，减持 %d，进榜 %d，退榜 %d",
+					item.HolderIncreaseCount,
+					item.HolderDecreaseCount,
+					item.HolderRankEnterCount,
+					item.HolderRankExitCount,
+				),
+			)
+		}
+	}
+	return strings.Join(lines, "<br/>")
+}
+
+func priceChangeText(start, end *string) string {
+	if start == nil || end == nil ||
+		strings.TrimSpace(*start) == "" || strings.TrimSpace(*end) == "" {
+		return "-"
+	}
+	startValue, startOK := new(big.Rat).SetString(*start)
+	endValue, endOK := new(big.Rat).SetString(*end)
+	if !startOK || !endOK {
+		return "$" + moneyText(*start) + " → $" + moneyText(*end)
+	}
+	result := "$" + moneyText(*start) + " → $" + moneyText(*end)
+	if startValue.Sign() == 0 {
+		return result
+	}
+	change := new(big.Rat).Sub(endValue, startValue)
+	change.Quo(change, startValue)
+	change.Mul(change, big.NewRat(100, 1))
+	changeText := change.FloatString(2)
+	if change.Sign() > 0 {
+		changeText = "+" + changeText
+	}
+	return result + " (" + changeText + "%)"
 }
 
 func recentMarketEventsText(events []store.MarketSummaryEvent, english bool) string {
@@ -463,14 +580,36 @@ func recentMarketEventsText(events []store.MarketSummaryEvent, english bool) str
 			wallet = " · " + shortAddress(*event.WalletAddress)
 		}
 		lines = append(lines, fmt.Sprintf(
-			"- %s · %s%s%s",
+			"- %s · %s · %s · %s%s%s",
 			html.EscapeString(event.TokenSymbol),
+			html.EscapeString(marketChainName(event.ChainKey)),
+			html.EscapeString(marketPoolSummary(event)),
 			html.EscapeString(label),
 			html.EscapeString(detail),
 			html.EscapeString(wallet),
 		))
 	}
 	return strings.Join(lines, "<br/>")
+}
+
+func marketPoolSummary(event store.MarketSummaryEvent) string {
+	dex := strings.TrimSpace(event.Protocol + " " + event.ProtocolVersion)
+	pool := valueOrDash(event.PoolAddress)
+	if dex == "" {
+		return pool
+	}
+	return dex + " / " + pool
+}
+
+func marketChainName(chainKey string) string {
+	if strings.TrimSpace(chainKey) == "" {
+		return "-"
+	}
+	profile, err := chain.ChainProfile(chainKey, "")
+	if err == nil {
+		return profile.Name
+	}
+	return chainKey
 }
 
 func moneyText(value string) string {

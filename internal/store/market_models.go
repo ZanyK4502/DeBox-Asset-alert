@@ -380,6 +380,7 @@ type MarketNotificationDelivery struct {
 	NotificationChatType    string                      `db:"notification_chat_type" json:"notification_chat_type"`
 	NotificationLanguage    string                      `db:"notification_language" json:"notification_language"`
 	NotificationLabel       string                      `db:"notification_label" json:"notification_label"`
+	Timezone                string                      `db:"timezone" json:"timezone"`
 	Project                 MarketProject               `db:"-" json:"project"`
 	Rule                    *MarketRule                 `db:"-" json:"rule,omitempty"`
 	Event                   *MarketEvent                `db:"-" json:"event,omitempty"`
@@ -390,15 +391,25 @@ type MarketNotificationDelivery struct {
 	EndsAt                  time.Time                   `db:"ends_at" json:"ends_at"`
 	Note                    string                      `db:"note" json:"note"`
 	RecentNotes             []string                    `db:"-" json:"recent_notes"`
+	RecentEvents            []MarketNotificationEvent   `db:"-" json:"recent_events"`
 	CombinationMembers      []MarketCombinationProgress `db:"-" json:"combination_members"`
 }
 
+type MarketNotificationEvent struct {
+	Project MarketProject `db:"-" json:"project"`
+	Event   MarketEvent   `db:"-" json:"event"`
+	Pool    *MarketPool   `db:"-" json:"pool,omitempty"`
+	Note    string        `db:"note" json:"note"`
+}
+
 type MarketCombinationProgress struct {
-	SourceType           string   `db:"source_type" json:"source_type"`
-	RuleType             string   `db:"rule_type" json:"rule_type"`
-	RequiredTriggerCount int64    `db:"required_trigger_count" json:"required_trigger_count"`
-	TriggerCount         int64    `db:"trigger_count" json:"trigger_count"`
-	RecentNotes          []string `db:"-" json:"recent_notes"`
+	MemberID             int64                     `db:"member_id" json:"member_id"`
+	SourceType           string                    `db:"source_type" json:"source_type"`
+	RuleType             string                    `db:"rule_type" json:"rule_type"`
+	RequiredTriggerCount int64                     `db:"required_trigger_count" json:"required_trigger_count"`
+	TriggerCount         int64                     `db:"trigger_count" json:"trigger_count"`
+	RecentNotes          []string                  `db:"-" json:"recent_notes"`
+	RecentEvents         []MarketNotificationEvent `db:"-" json:"recent_events"`
 }
 
 type MarketHolder struct {

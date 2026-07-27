@@ -14,23 +14,24 @@ import (
 var testNow = time.Date(2026, 7, 22, 12, 5, 0, 0, time.UTC)
 
 type fakeRepository struct {
-	subscriptions []store.Subscription
-	scheduled     map[int64]*store.Subscription
-	targets       map[int64][]store.DailySummaryTarget
-	statistics    store.SummaryStatistics
-	events        []store.SummaryEvent
-	marketEvents  []store.MarketSummaryEvent
-	listAfterIDs  []int64
-	marks         []summaryMark
-	targetMarks   []targetMark
-	calls         []string
-	listErr       error
-	getErr        error
-	targetErr     error
-	statisticsErr error
-	eventsErr     error
-	markErr       error
-	targetMarkErr error
+	subscriptions   []store.Subscription
+	scheduled       map[int64]*store.Subscription
+	targets         map[int64][]store.DailySummaryTarget
+	statistics      store.SummaryStatistics
+	events          []store.SummaryEvent
+	marketEvents    []store.MarketSummaryEvent
+	marketSummaries []store.MarketProjectChainSummary
+	listAfterIDs    []int64
+	marks           []summaryMark
+	targetMarks     []targetMark
+	calls           []string
+	listErr         error
+	getErr          error
+	targetErr       error
+	statisticsErr   error
+	eventsErr       error
+	markErr         error
+	targetMarkErr   error
 }
 
 type summaryMark struct {
@@ -179,6 +180,16 @@ func (f *fakeRepository) ListSummaryRecentMarketEvents(
 ) ([]store.MarketSummaryEvent, error) {
 	f.calls = append(f.calls, fmt.Sprintf("market-events:%d", limit))
 	return f.marketEvents, f.eventsErr
+}
+
+func (f *fakeRepository) ListDailyMarketProjectChainSummaries(
+	_ context.Context,
+	_ string,
+	_ time.Time,
+	_ time.Time,
+) ([]store.MarketProjectChainSummary, error) {
+	f.calls = append(f.calls, "market-summaries")
+	return f.marketSummaries, f.eventsErr
 }
 
 func (f *fakeRepository) MarkScheduledPushSent(
@@ -427,6 +438,7 @@ func TestBuildSummaryTextPreservesTotalsAndEscapesLabel(t *testing.T) {
 		statistics,
 		events,
 		nil,
+		nil,
 	)
 
 	for _, expected := range []string{
@@ -458,6 +470,7 @@ func TestBuildChineseSummaryWithoutEvents(t *testing.T) {
 		periodEnd.Add(-24*time.Hour),
 		periodEnd,
 		store.SummaryStatistics{},
+		nil,
 		nil,
 		nil,
 	)
@@ -499,11 +512,16 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 		},
 		nil,
 		[]store.MarketSummaryEvent{{
-			TokenSymbol:   "<PRJ>",
-			EventType:     "buy",
-			WalletAddress: &wallet,
-			USDValue:      &buyUSD,
+			TokenSymbol:     "<PRJ>",
+			ChainKey:        "base",
+			Protocol:        "uniswap",
+			ProtocolVersion: "v3",
+			PoolAddress:     pointerString("0x2222222222222222222222222222222222222222"),
+			EventType:       "buy",
+			WalletAddress:   &wallet,
+			USDValue:        &buyUSD,
 		}},
+		nil,
 	)
 
 	for _, expected := range []string{
@@ -513,7 +531,7 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 		"卖出 3 笔（$400）",
 		"净买入 $+850.5",
 		"市场事件：共 9 条，流动性 1 条，大户变化 1 条",
-		"&lt;PRJ&gt; · 买入 $1250.5",
+		"&lt;PRJ&gt; · Base · uniswap v3 / 0x2222222222222222222222222222222222222222 · 买入 $1250.5",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("unified summary missing %q:\n%s", expected, text)
@@ -521,6 +539,114 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 	}
 	if strings.Contains(text, "<PRJ>") {
 		t.Fatalf("market token symbol was not escaped:\n%s", text)
+	}
+}
+
+func pointerString(value string) *string {
+	return &value
+}
+
+func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
+	subscription := testSubscription(1)
+	startPrice := "1"
+	endPrice := "1.25"
+	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+
+	text := buildSummaryText(
+		subscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		store.SummaryStatistics{},
+		nil,
+		nil,
+		[]store.MarketProjectChainSummary{
+			{
+				MarketProjectID:     1,
+				TokenName:           "ABC",
+				TokenSymbol:         "ABC",
+				ChainKey:            "bsc",
+				TokenAddress:        "0x1111111111111111111111111111111111111111",
+				StartPriceUSD:       &startPrice,
+				EndPriceUSD:         &endPrice,
+				TradeVolumeUSD:      "15000.5",
+				BuyCount:            4,
+				SellCount:           2,
+				LargeTradeCount:     2,
+				HolderIncreaseCount: 1,
+			},
+			{
+				MarketProjectID:     1,
+				TokenName:           "ABC",
+				TokenSymbol:         "ABC",
+				ChainKey:            "base",
+				TokenAddress:        "0x2222222222222222222222222222222222222222",
+				TradeVolumeUSD:      "300",
+				BuyCount:            1,
+				SellCount:           1,
+				HolderDecreaseCount: 1,
+			},
+		},
+	)
+
+	for _, expected := range []string{
+		"<b>ABC 项目币日报</b>",
+		"<b>BNB Chain</b> · 0x1111111111111111111111111111111111111111",
+		"价格变化：$1 → $1.25 (+25.00%)",
+		"成交量：$15000.5（买入 4 笔 / 卖出 2 笔）",
+		"大额买卖：2 笔",
+		"大户变化：增持 1，减持 0，进榜 0，退榜 0",
+		"<b>Base</b> · 0x2222222222222222222222222222222222222222",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("multichain summary missing %q:\n%s", expected, text)
+		}
+	}
+	if strings.Count(text, "<b>ABC 项目币日报</b>") != 1 {
+		t.Fatalf("project heading should appear once:\n%s", text)
+	}
+}
+
+func TestBuildEnglishSummaryGroupsProjectsAndEscapesNames(t *testing.T) {
+	subscription := testSubscription(1)
+	subscription.DailySummaryLanguage = "en"
+	startPrice, endPrice := "2", "1.5"
+	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	text := buildSummaryText(
+		subscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		store.SummaryStatistics{},
+		nil,
+		nil,
+		[]store.MarketProjectChainSummary{{
+			MarketProjectID:     1,
+			TokenName:           "<ABC>",
+			ChainKey:            "ethereum",
+			TokenAddress:        "0x1111111111111111111111111111111111111111",
+			StartPriceUSD:       &startPrice,
+			EndPriceUSD:         &endPrice,
+			TradeVolumeUSD:      "500",
+			BuyCount:            1,
+			SellCount:           2,
+			LargeTradeCount:     1,
+			HolderDecreaseCount: 1,
+			HolderRankExitCount: 1,
+		}},
+	)
+	for _, expected := range []string{
+		"<b>&lt;ABC&gt; token report</b>",
+		"<b>Ethereum</b>",
+		"Price change: $2 → $1.5 (-25.00%)",
+		"Volume: $500 (buys 1 / sells 2)",
+		"Large trades: 1",
+		"Holder changes: increase 0, decrease 1, entered 0, exited 1",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("English multichain summary missing %q:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "<ABC>") {
+		t.Fatalf("English project name was not escaped:\n%s", text)
 	}
 }
 

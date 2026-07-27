@@ -312,13 +312,40 @@ type SummaryStatistics struct {
 type MarketSummaryEvent struct {
 	ID              int64     `db:"id" json:"id"`
 	MarketProjectID int64     `db:"market_project_id" json:"market_project_id"`
+	TokenName       string    `db:"token_name" json:"token_name"`
 	TokenSymbol     string    `db:"token_symbol" json:"token_symbol"`
+	ChainKey        string    `db:"chain_key" json:"chain_key"`
+	TokenAddress    string    `db:"token_address" json:"token_address"`
+	Protocol        string    `db:"protocol" json:"protocol"`
+	ProtocolVersion string    `db:"protocol_version" json:"protocol_version"`
+	PoolAddress     *string   `db:"pool_address" json:"pool_address"`
 	EventType       string    `db:"event_type" json:"event_type"`
 	WalletAddress   *string   `db:"wallet_address" json:"wallet_address"`
 	TokenAmount     *string   `db:"token_amount" json:"token_amount"`
 	USDValue        *string   `db:"usd_value" json:"usd_value"`
 	TransactionHash *string   `db:"transaction_hash" json:"transaction_hash"`
 	OccurredAt      time.Time `db:"occurred_at" json:"occurred_at"`
+}
+
+type MarketProjectChainSummary struct {
+	MarketProjectID      int64   `db:"market_project_id" json:"market_project_id"`
+	TokenName            string  `db:"token_name" json:"token_name"`
+	TokenSymbol          string  `db:"token_symbol" json:"token_symbol"`
+	ChainKey             string  `db:"chain_key" json:"chain_key"`
+	ChainID              int64   `db:"chain_id" json:"chain_id"`
+	TokenAddress         string  `db:"token_address" json:"token_address"`
+	StartPriceUSD        *string `db:"start_price_usd" json:"start_price_usd"`
+	EndPriceUSD          *string `db:"end_price_usd" json:"end_price_usd"`
+	TradeVolumeUSD       string  `db:"trade_volume_usd" json:"trade_volume_usd"`
+	BuyCount             int64   `db:"buy_count" json:"buy_count"`
+	BuyUSD               string  `db:"buy_usd" json:"buy_usd"`
+	SellCount            int64   `db:"sell_count" json:"sell_count"`
+	SellUSD              string  `db:"sell_usd" json:"sell_usd"`
+	LargeTradeCount      int64   `db:"large_trade_count" json:"large_trade_count"`
+	HolderIncreaseCount  int64   `db:"holder_increase_count" json:"holder_increase_count"`
+	HolderDecreaseCount  int64   `db:"holder_decrease_count" json:"holder_decrease_count"`
+	HolderRankEnterCount int64   `db:"holder_rank_enter_count" json:"holder_rank_enter_count"`
+	HolderRankExitCount  int64   `db:"holder_rank_exit_count" json:"holder_rank_exit_count"`
 }
 
 type SummaryEvent struct {
