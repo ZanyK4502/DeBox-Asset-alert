@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,8 @@ type fakeAssetCatalog struct {
 	resolve     [2]string
 	result      assetcatalog.SearchResult
 	candidate   *assetcatalog.Candidate
+	manualInput assetcatalog.ManualResolveInput
+	manual      assetcatalog.ManualResolveResult
 	logo        assetcatalog.Logo
 	err         error
 }
@@ -40,6 +44,14 @@ func (f *fakeAssetCatalog) ResolveContract(
 ) (*assetcatalog.Candidate, error) {
 	f.resolve = [2]string{chainKey, contract}
 	return f.candidate, f.err
+}
+
+func (f *fakeAssetCatalog) ResolveManualContracts(
+	_ context.Context,
+	input assetcatalog.ManualResolveInput,
+) (assetcatalog.ManualResolveResult, error) {
+	f.manualInput = input
+	return f.manual, f.err
 }
 
 func (f *fakeAssetCatalog) Logo(
@@ -157,5 +169,69 @@ func TestMarketAssetLogoSetsSafeHeadersAndSupportsETag(t *testing.T) {
 	handler.ServeHTTP(conditionalRecorder, conditional)
 	if conditionalRecorder.Code != http.StatusNotModified {
 		t.Fatalf("conditional status = %d", conditionalRecorder.Code)
+	}
+}
+
+func TestMarketAssetManualResolveRouteAndErrorMapping(t *testing.T) {
+	assets := &fakeAssetCatalog{manual: assetcatalog.ManualResolveResult{
+		CanMerge: true, MergeStatus: assetcatalog.MergeStatusSingleChain,
+	}}
+	handler := New(testConfig(t), Dependencies{
+		Auth: &fakeAuthService{session: &store.AuthSession{
+			DeBoxUserID: "user-1",
+		}},
+		Assets: assets,
+	})
+	request := func() *http.Request {
+		value := httptest.NewRequest(
+			http.MethodPost,
+			"/api/market/assets/manual-resolve",
+			strings.NewReader(
+				`{"contracts":[{"chain_key":"base","contract_address":"0x0000000000000000000000000000000000000001"}]}`,
+			),
+		)
+		value.AddCookie(&http.Cookie{
+			Name: auth.CookieName, Value: "session-token",
+		})
+		return value
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request())
+	if recorder.Code != http.StatusOK ||
+		len(assets.manualInput.Contracts) != 1 ||
+		assets.manualInput.Contracts[0].ChainKey != "base" {
+		t.Fatalf(
+			"manual route = %d/%#v",
+			recorder.Code,
+			assets.manualInput,
+		)
+	}
+
+	assets.err = fmt.Errorf(
+		"%w: duplicate chain",
+		assetcatalog.ErrInvalidManualRequest,
+	)
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, request())
+	if invalid.Code != http.StatusBadRequest ||
+		invalid.Body.String() !=
+			`{"detail":"invalid manual contract request"}`+"\n" {
+		t.Fatalf("invalid response = %d/%s", invalid.Code, invalid.Body.String())
+	}
+
+	assets.err = fmt.Errorf(
+		"%w: item 1",
+		assetcatalog.ErrContractUnreadable,
+	)
+	unreadable := httptest.NewRecorder()
+	handler.ServeHTTP(unreadable, request())
+	if unreadable.Code != http.StatusUnprocessableEntity ||
+		unreadable.Body.String() !=
+			`{"detail":"token contract metadata is unavailable"}`+"\n" {
+		t.Fatalf(
+			"unreadable response = %d/%s",
+			unreadable.Code,
+			unreadable.Body.String(),
+		)
 	}
 }

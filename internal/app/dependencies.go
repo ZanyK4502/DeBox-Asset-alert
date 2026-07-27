@@ -100,6 +100,7 @@ func buildDependencies(
 		coinGeckoClient,
 		marketDataClient,
 		nil,
+		assetcatalog.WithManualProviders(chainClient, marketDataClient),
 	)
 	if err != nil {
 		closeDependencies()

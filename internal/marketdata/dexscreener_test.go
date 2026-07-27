@@ -101,6 +101,47 @@ func TestDexScreenerSearchPairsKeepsSupportedEVMChainsAndCaches(t *testing.T) {
 	}
 }
 
+func TestDexScreenerDiscoversPoolsOnAllSupportedEVMChains(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+		if len(parts) != 4 || parts[0] != "token-pairs" ||
+			parts[1] != "v1" || parts[3] != marketTokenA {
+			http.NotFound(writer, request)
+			return
+		}
+		payload := strings.Replace(
+			pairArrayJSON(marketPairA, marketTokenA, marketTokenB),
+			`"chainId":"bsc"`,
+			`"chainId":"`+parts[2]+`"`,
+			1,
+		)
+		_, _ = io.WriteString(writer, payload)
+	}))
+	defer server.Close()
+	client := newTestDexScreenerClient(t, server)
+	for _, chainID := range []string{
+		ChainBSC,
+		ChainEthereum,
+		ChainBase,
+		ChainPolygon,
+		ChainArbitrum,
+		ChainOptimism,
+	} {
+		pairs, err := client.DiscoverPools(
+			context.Background(), chainID, marketTokenA,
+		)
+		if err != nil {
+			t.Fatalf("DiscoverPools(%s) error = %v", chainID, err)
+		}
+		if len(pairs) != 1 || pairs[0].ChainID != chainID {
+			t.Fatalf("DiscoverPools(%s) = %#v", chainID, pairs)
+		}
+	}
+}
+
 func TestDexScreenerBatchesTokensAndPairs(t *testing.T) {
 	var tokenRequests atomic.Int32
 	var pairRequests atomic.Int32
@@ -279,7 +320,7 @@ func TestDexScreenerValidatesInputsAndHTTPFailures(t *testing.T) {
 	defer server.Close()
 	client := newTestDexScreenerClient(t, server)
 
-	if _, err := client.DiscoverPools(context.Background(), "ethereum", marketTokenA); err == nil {
+	if _, err := client.DiscoverPools(context.Background(), "solana", marketTokenA); err == nil {
 		t.Fatal("DiscoverPools() accepted unsupported chain")
 	}
 	if _, err := client.PairsByTokens(context.Background(), "bsc", nil); err == nil {

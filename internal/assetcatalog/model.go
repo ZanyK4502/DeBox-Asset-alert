@@ -10,16 +10,31 @@ import (
 const (
 	SourceCoinGecko   = "coingecko"
 	SourceDexScreener = "dexscreener"
+	SourceOnChain     = "onchain"
 
 	IdentityVerified    = "verified"
 	IdentitySingleChain = "single_chain"
+
+	MergeStatusSingleChain      = "single_chain"
+	MergeStatusVerified         = "verified"
+	MergeStatusSeparateProjects = "requires_separate_projects"
+
+	LookupMatched     = "matched"
+	LookupNotListed   = "not_listed"
+	LookupUnavailable = "unavailable"
+
+	MarketAvailable   = "available"
+	MarketEmpty       = "empty"
+	MarketUnavailable = "unavailable"
 )
 
 var (
-	ErrInvalidQuery = errors.New("invalid asset search query")
-	ErrNotFound     = errors.New("asset not found")
-	ErrUnavailable  = errors.New("asset catalog temporarily unavailable")
-	ErrInvalidLogo  = errors.New("invalid asset logo")
+	ErrInvalidQuery         = errors.New("invalid asset search query")
+	ErrNotFound             = errors.New("asset not found")
+	ErrUnavailable          = errors.New("asset catalog temporarily unavailable")
+	ErrInvalidLogo          = errors.New("invalid asset logo")
+	ErrInvalidManualRequest = errors.New("invalid manual contract request")
+	ErrContractUnreadable   = errors.New("token contract metadata is unavailable")
 )
 
 // Candidate is a chain-independent asset identity returned to the creation
@@ -59,6 +74,40 @@ type Logo struct {
 	ContentType string
 	Body        []byte
 	ETag        string
+}
+
+type ManualContractInput struct {
+	ChainKey        string `json:"chain_key"`
+	ContractAddress string `json:"contract_address"`
+}
+
+type ManualResolveInput struct {
+	Contracts []ManualContractInput `json:"contracts"`
+}
+
+type ManualContractResult struct {
+	InputIndex           int    `json:"input_index"`
+	ChainKey             string `json:"chain_key"`
+	ChainID              int64  `json:"chain_id"`
+	ChainName            string `json:"chain_name"`
+	PlatformID           string `json:"platform_id"`
+	ContractAddress      string `json:"contract_address"`
+	TokenName            string `json:"token_name"`
+	TokenSymbol          string `json:"token_symbol"`
+	TokenDecimals        int32  `json:"token_decimals"`
+	TotalSupplyRaw       string `json:"total_supply_raw"`
+	CanonicalAssetID     string `json:"canonical_asset_id"`
+	IdentitySource       string `json:"identity_source"`
+	IdentityLookupStatus string `json:"identity_lookup_status"`
+	MarketLookupStatus   string `json:"market_lookup_status"`
+	DiscoveredPoolCount  int    `json:"discovered_pool_count"`
+}
+
+type ManualResolveResult struct {
+	Contracts   []ManualContractResult `json:"contracts"`
+	Candidates  []Candidate            `json:"candidates"`
+	CanMerge    bool                   `json:"can_merge"`
+	MergeStatus string                 `json:"merge_status"`
 }
 
 func normalizeQuery(value string) (string, error) {

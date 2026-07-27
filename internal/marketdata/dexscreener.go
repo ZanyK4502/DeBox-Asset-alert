@@ -614,7 +614,14 @@ func normalizeRequest(chainID string, addresses []string) (string, []string, err
 	case "bnb", "bnbchain", "bnb_chain":
 		normalizedChain = ChainBSC
 	}
-	if normalizedChain != ChainBSC {
+	switch normalizedChain {
+	case ChainBSC,
+		ChainEthereum,
+		ChainBase,
+		ChainPolygon,
+		ChainArbitrum,
+		ChainOptimism:
+	default:
 		return "", nil, fmt.Errorf("unsupported market chain: %s", normalizedChain)
 	}
 	if len(addresses) == 0 {

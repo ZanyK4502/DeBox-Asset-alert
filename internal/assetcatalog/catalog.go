@@ -23,16 +23,44 @@ type pairSearcher interface {
 	SearchPairs(context.Context, string) ([]marketdata.Pair, error)
 }
 
+type tokenMetadataProvider interface {
+	TokenMetadata(
+		context.Context,
+		string,
+		string,
+		string,
+	) (chain.TokenMetadata, error)
+}
+
+type poolDiscoveryProvider interface {
+	DiscoverPools(context.Context, string, string) ([]marketdata.Pair, error)
+}
+
 type Catalog struct {
-	primary  primaryProvider
-	fallback pairSearcher
-	logos    *logoProxy
+	primary       primaryProvider
+	fallback      pairSearcher
+	tokenMetadata tokenMetadataProvider
+	poolDiscovery poolDiscoveryProvider
+	logos         *logoProxy
+}
+
+type CatalogOption func(*Catalog)
+
+func WithManualProviders(
+	tokenMetadata tokenMetadataProvider,
+	poolDiscovery poolDiscoveryProvider,
+) CatalogOption {
+	return func(target *Catalog) {
+		target.tokenMetadata = tokenMetadata
+		target.poolDiscovery = poolDiscovery
+	}
 }
 
 func NewCatalog(
 	primary primaryProvider,
 	fallback pairSearcher,
 	logoHTTPClient HTTPDoer,
+	options ...CatalogOption,
 ) (*Catalog, error) {
 	if primary == nil {
 		return nil, fmt.Errorf("asset identity provider is required")
@@ -41,9 +69,13 @@ func NewCatalog(
 	if err != nil {
 		return nil, err
 	}
-	return &Catalog{
+	result := &Catalog{
 		primary: primary, fallback: fallback, logos: logos,
-	}, nil
+	}
+	for _, option := range options {
+		option(result)
+	}
+	return result, nil
 }
 
 func (c *Catalog) Search(

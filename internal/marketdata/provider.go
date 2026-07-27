@@ -6,7 +6,13 @@ import (
 )
 
 const (
-	ChainBSC          = "bsc"
+	ChainBSC      = "bsc"
+	ChainEthereum = "ethereum"
+	ChainBase     = "base"
+	ChainPolygon  = "polygon"
+	ChainArbitrum = "arbitrum"
+	ChainOptimism = "optimism"
+
 	SourceDexScreener = "dexscreener"
 )
 

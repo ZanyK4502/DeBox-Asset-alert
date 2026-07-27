@@ -52,6 +52,26 @@ func (h handler) getMarketAssetResolve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"candidate": candidate})
 }
 
+func (h handler) postMarketAssetManualResolve(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if !h.requireAssetSession(w, r) {
+		return
+	}
+	var input assetcatalog.ManualResolveInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := h.deps.Assets.ResolveManualContracts(r.Context(), input)
+	if err != nil {
+		writeAssetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h handler) getMarketAssetLogo(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAssetSession(w, r) {
 		return
@@ -105,6 +125,12 @@ func writeAssetError(w http.ResponseWriter, err error) {
 	case errors.Is(err, assetcatalog.ErrInvalidQuery):
 		status = http.StatusBadRequest
 		publicErr = assetcatalog.ErrInvalidQuery
+	case errors.Is(err, assetcatalog.ErrInvalidManualRequest):
+		status = http.StatusBadRequest
+		publicErr = assetcatalog.ErrInvalidManualRequest
+	case errors.Is(err, assetcatalog.ErrContractUnreadable):
+		status = http.StatusUnprocessableEntity
+		publicErr = assetcatalog.ErrContractUnreadable
 	}
 	writeError(w, status, publicErr)
 }
