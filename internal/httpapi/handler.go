@@ -113,7 +113,12 @@ type MarketManagementService interface {
 	ArchiveCombination(context.Context, string, int64) error
 	RestoreCombination(context.Context, string, int64) (store.MarketCombinationRule, error)
 	Recommendations(context.Context, string, int64) ([]marketrules.Recommendation, error)
-	Events(context.Context, string, int64, int64, int) ([]store.MarketEvent, error)
+	Events(
+		context.Context,
+		string,
+		int64,
+		marketview.EventFilterInput,
+	) ([]store.MarketEvent, error)
 	SaveAddressLabel(context.Context, string, int64, marketview.AddressLabelInput) (store.MarketAddressLabel, error)
 	DeleteAddressLabel(context.Context, string, int64) error
 }

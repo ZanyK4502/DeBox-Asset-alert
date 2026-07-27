@@ -2055,6 +2055,63 @@ label.market-pool-card {
   margin: 0;
 }
 
+.market-project-identity {
+  display: flex !important;
+  align-items: center;
+  gap: 12px !important;
+}
+
+.market-project-identity > img,
+.market-token-fallback {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border-radius: 50%;
+}
+
+.market-project-identity > img {
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.market-token-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  font-weight: 800;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+
+.market-detail-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin: 14px 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+}
+
+.market-detail-tab {
+  min-width: 0;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.market-detail-tab.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 17%, var(--surface-2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.market-detail-panel {
+  min-width: 0;
+}
+
 .market-metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2087,12 +2144,310 @@ label.market-pool-card {
   margin-top: 16px;
 }
 
+.market-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.market-overview-rules {
+  grid-column: 1 / -1;
+}
+
 .market-panel {
   min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 17px;
   background: var(--surface);
+}
+
+.market-contract-list,
+.market-chain-summary-list,
+.market-overview-rule-list {
+  display: grid;
+  gap: 10px;
+}
+
+.market-contract-row {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.7fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.market-chain-identity,
+.market-inline-actions,
+.market-event-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-chain-identity img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+
+.market-chain-identity > span {
+  display: grid;
+  gap: 2px;
+}
+
+.market-chain-identity small,
+.market-contract-row code {
+  color: var(--muted);
+}
+
+.market-contract-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.market-chain-summary {
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.market-chain-summary dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.market-chain-summary dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.market-chain-summary dt,
+.market-chain-summary small,
+.market-overview-rule small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.market-chain-summary dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+.market-overview-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.market-overview-rule:last-child {
+  border-bottom: 0;
+}
+
+.market-overview-rule > div {
+  display: grid;
+  gap: 3px;
+}
+
+.market-detail-goals {
+  margin-top: 8px;
+}
+
+.market-rule-mode-tabs {
+  margin: 14px 0;
+}
+
+.market-rule-section-head {
+  margin-top: 6px;
+}
+
+.market-rule-section-head h4 {
+  margin: 0;
+}
+
+.market-combination-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.market-combination-members {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.market-combination-members legend {
+  padding: 0 6px;
+  color: var(--muted);
+}
+
+#marketCombinationMemberOptions {
+  display: grid;
+  gap: 8px;
+}
+
+.market-combination-member-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.market-combination-member-option > span {
+  display: grid;
+  gap: 3px;
+}
+
+.market-combination-member-option small,
+.market-trigger-count > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.market-trigger-count {
+  grid-template-columns: auto 72px !important;
+  align-items: center;
+}
+
+.market-trigger-count input {
+  min-width: 0;
+}
+
+.market-combination-item span {
+  overflow-wrap: anywhere;
+}
+
+.market-pool-card.selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.market-pool-status {
+  display: inline-flex;
+  justify-self: end;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.market-pool-status.monitoring {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.market-pool-status.available {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.market-pool-status.quotes {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+
+.market-pool-advanced {
+  position: relative;
+}
+
+.market-pool-advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.market-pool-advanced p {
+  max-width: 520px;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.market-pool-explanation {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.compact-filter {
+  min-width: 180px;
+  margin: 0;
+}
+
+.market-advanced-card {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.market-advanced-card > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.market-advanced-card[open] > summary {
+  margin-bottom: 14px;
+}
+
+.market-holder-change {
+  justify-self: end;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: var(--surface-2);
+}
+
+.market-holder-change.increased,
+.market-holder-change.entered {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.market-holder-change.decreased,
+.market-holder-change.exited {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.market-event-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto;
+  align-items: end;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.market-event-filters label {
+  min-width: 0;
+}
+
+.market-event-title .badge {
+  font-size: 0.7rem;
 }
 
 .market-events-panel {
@@ -2175,7 +2530,9 @@ label.market-pool-card {
   .market-guide,
   .market-metric-grid,
   .market-detail-grid,
-  .market-confirm-grid {
+  .market-confirm-grid,
+  .market-overview-grid,
+  .market-combination-form {
     grid-template-columns: 1fr;
   }
 
@@ -2185,6 +2542,23 @@ label.market-pool-card {
 
   .market-events-panel {
     grid-column: auto;
+  }
+
+  .market-overview-rules,
+  .market-combination-members {
+    grid-column: auto;
+  }
+
+  .market-contract-row {
+    grid-template-columns: minmax(140px, 0.65fr) minmax(0, 1fr);
+  }
+
+  .market-contract-row .market-inline-actions {
+    grid-column: 1 / -1;
+  }
+
+  .market-event-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .market-query-form,
@@ -2260,6 +2634,44 @@ label.market-pool-card {
   .market-pool-values {
     grid-column: 2;
     text-align: left;
+  }
+
+  .market-detail-tabs {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .market-detail-tab {
+    min-width: max-content;
+    padding-inline: 14px;
+  }
+
+  .market-chain-summary dl,
+  .market-event-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .market-contract-row,
+  .market-combination-member-option {
+    grid-template-columns: 1fr;
+  }
+
+  .market-contract-row .market-inline-actions {
+    grid-column: auto;
+    flex-wrap: wrap;
+  }
+
+  .market-trigger-count {
+    grid-template-columns: minmax(0, 1fr) 72px !important;
+  }
+
+  .market-project-identity {
+    align-items: flex-start;
+  }
+
+  .market-holder-change {
+    justify-self: start;
   }
 
   .market-project-card,

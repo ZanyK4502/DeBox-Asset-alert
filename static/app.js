@@ -42,9 +42,13 @@ const state = {
   marketWizard: freshMarketWizard(),
   marketProjects: [],
   marketDetail: null,
+  marketDetailTab: "overview",
+  marketRuleMode: "single",
+  marketHolderChain: "",
   marketRecommendations: [],
   marketEvents: [],
   marketEventsNextBeforeId: null,
+  marketEventFilters: freshMarketEventFilters(),
 };
 
 function freshMarketWizard() {
@@ -61,6 +65,15 @@ function freshMarketWizard() {
     poolSelections: {},
     searchRequest: 0,
     busy: false,
+  };
+}
+
+function freshMarketEventFilters() {
+  return {
+    chainKey: "",
+    eventType: "",
+    poolId: "",
+    address: "",
   };
 }
 
@@ -152,6 +165,28 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function copyText(value) {
+  const text = String(value || "");
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (_) {
+      // Embedded webviews can expose Clipboard API while denying access.
+    }
+  }
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand("copy");
+  input.remove();
+  if (!copied) throw new Error(t("requestFailed"));
 }
 
 function applyStaticTranslations() {
@@ -492,9 +527,13 @@ function resetConnectionState() {
   state.marketWizard = freshMarketWizard();
   state.marketProjects = [];
   state.marketDetail = null;
+  state.marketDetailTab = "overview";
+  state.marketRuleMode = "single";
+  state.marketHolderChain = "";
   state.marketRecommendations = [];
   state.marketEvents = [];
   state.marketEventsNextBeforeId = null;
+  state.marketEventFilters = freshMarketEventFilters();
   $("walletAddressInput").value = "";
   $("profileBox").innerHTML = t("noWallet");
   $("subscriptionBox").innerHTML = t("connectToView");
@@ -2214,6 +2253,9 @@ function renderMarketGoal() {
     button.classList.toggle("active", button.dataset.marketGoal === state.marketGoal);
   });
   $("marketGoalHint").textContent = t(MARKET_GOAL_HINT_KEYS[state.marketGoal]);
+  if ($("marketDetailGoalHint")) {
+    $("marketDetailGoalHint").textContent = t(MARKET_GOAL_HINT_KEYS[state.marketGoal]);
+  }
   renderMarketWizardRuleEditor();
   renderMarketRuleEditor();
 }
@@ -2592,15 +2634,21 @@ function renderMarketDetail() {
   }
   wrap.hidden = false;
   const project = detail.project;
-  const chainNames = [...new Set((detail.pools || []).map((pool) => marketChainName(pool.chain_key)))];
+  const asset = detail.asset || {};
+  const deployments = marketDetailDeployments();
+  const chainNames = deployments.map((deployment) => marketChainName(deployment.chain_key));
+  const logo = asset.logo_url || "";
   $("marketProjectHeader").innerHTML = `
-    <div>
-      <p class="eyebrow">${escapeHtml(chainNames.join(" · ") || marketChainName(project.chain_key))}</p>
-      <h3>${escapeHtml(project.token_name || project.token_symbol)} (${escapeHtml(project.token_symbol)})</h3>
-      <span>${escapeHtml(t("marketProjectChainsAndPools", {
-        chains: chainNames.length || 1,
-        pools: (detail.pools || []).filter((pool) => Number(pool.selected) === 1).length,
-      }))}</span>
+    <div class="market-project-identity">
+      ${logo ? `<img src="${escapeHtml(logo)}" alt="" />` : `<span class="market-token-fallback">${escapeHtml((asset.symbol || project.token_symbol || "?").slice(0, 1))}</span>`}
+      <div>
+        <p class="eyebrow">${escapeHtml(chainNames.join(" · ") || marketChainName(project.chain_key))}</p>
+        <h3>${escapeHtml(asset.canonical_name || project.token_name || project.token_symbol)} (${escapeHtml(asset.symbol || project.token_symbol)})</h3>
+        <span>${escapeHtml(t("marketProjectChainsAndPools", {
+          chains: deployments.length || 1,
+          pools: (detail.pools || []).filter((pool) => Number(pool.selected) === 1).length,
+        }))}</span>
+      </div>
     </div>
     <span class="badge">${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(project.status)}`))}</span>
   `;
@@ -2608,30 +2656,165 @@ function renderMarketDetail() {
     project.status === "archived" ? "restoreMarketProject" : "archiveMarketProject",
   );
   $("archiveMarketProjectBtn").classList.toggle("danger", project.status !== "archived");
-  const snapshot = detail.latest_snapshot || {};
+  const snapshots = detail.snapshots?.length
+    ? detail.snapshots
+    : (detail.latest_snapshot ? [detail.latest_snapshot] : []);
+  const snapshot = snapshots[0] || {};
+  const totalLiquidity = snapshots.reduce((total, item) => total + Number(item.liquidity_usd || 0), 0);
+  const totalVolume = snapshots.reduce((total, item) => total + Number(item.volume_24h_usd || 0), 0);
+  const activeRules = (detail.rules || []).filter(marketRuleIsActive);
+  const activeCombinations = (detail.combinations || []).filter(marketCombinationIsActive);
   const metrics = [
     [t("marketMetricPrice"), marketMoney(snapshot.price_usd)],
-    [t("marketMetricLiquidity"), marketMoney(snapshot.liquidity_usd)],
-    [t("marketMetricVolume24h"), marketMoney(snapshot.volume_24h_usd)],
-    [t("marketMetricBuys24h"), snapshot.buys_24h ?? "-"],
-    [t("marketMetricSells24h"), snapshot.sells_24h ?? "-"],
-    [t("marketMetricMarketCap"), `${marketMoney(snapshot.market_cap_usd)} / ${marketMoney(snapshot.fdv_usd)}`],
+    [t("marketMetricLiquidity"), snapshots.length ? marketMoney(totalLiquidity) : "-"],
+    [t("marketMetricVolume24h"), snapshots.length ? marketMoney(totalVolume) : "-"],
+    [t("marketMonitoredChains"), String(deployments.length || 1)],
+    [t("marketMonitoredPools"), String((detail.pools || []).filter((pool) => Number(pool.selected) === 1).length)],
+    [t("marketRunningRulesCount"), String(activeRules.length + activeCombinations.length)],
   ];
   $("marketMetricGrid").innerHTML = metrics.map(([label, value]) => `
     <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>
   `).join("");
-  const providerHealth = detail.provider_health || [];
+  const chainKeys = new Set(deployments.map((deployment) => deployment.chain_key));
+  const providerHealth = (detail.provider_health || []).filter(
+    (item) => !chainKeys.size || !item.chain_key || chainKeys.has(item.chain_key),
+  );
   const degraded = providerHealth.some((item) => item.status !== "healthy");
   const providerStatusKey = providerHealth.length
     ? (degraded ? "marketProviderDegraded" : "marketProviderHealthy")
     : "marketProviderPending";
   $("marketProviderStatus").textContent = t(providerStatusKey);
   $("marketProviderStatus").classList.toggle("warning", degraded);
+  renderMarketDetailTabs();
+  renderMarketOverview();
   renderMarketProjectPools();
   renderMarketRuleEditor();
   renderMarketRules();
+  renderMarketCombinations();
   renderMarketHolders();
+  renderMarketEventFilters();
   renderMarketEvents();
+}
+
+function marketDetailDeployments() {
+  const detail = state.marketDetail;
+  if (detail?.deployments?.length) return detail.deployments;
+  if (!detail?.project) return [];
+  return [{
+    id: 0,
+    chain_key: detail.project.chain_key,
+    chain_id: detail.project.chain_id,
+    token_address: detail.project.token_address,
+    token_name: detail.project.token_name,
+    token_symbol: detail.project.token_symbol,
+    status: detail.project.status,
+  }];
+}
+
+function marketRuleIsActive(rule) {
+  return Number(rule?.enabled) === 1 && rule?.run_status === "active";
+}
+
+function marketCombinationIsActive(rule) {
+  return Number(rule?.enabled) === 1 && rule?.run_status === "active";
+}
+
+function setMarketDetailTab(tab) {
+  const allowed = new Set(["overview", "rules", "pools", "holders", "events"]);
+  state.marketDetailTab = allowed.has(tab) ? tab : "overview";
+  renderMarketDetailTabs();
+}
+
+function renderMarketDetailTabs() {
+  document.querySelectorAll("[data-market-detail-tab]").forEach((button) => {
+    const active = button.dataset.marketDetailTab === state.marketDetailTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-market-detail-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.marketDetailPanel !== state.marketDetailTab;
+  });
+}
+
+function chainExplorerAddress(chainKey, address) {
+  const roots = {
+    bsc: "https://bscscan.com/address/",
+    ethereum: "https://etherscan.io/address/",
+    base: "https://basescan.org/address/",
+    polygon: "https://polygonscan.com/address/",
+    arbitrum: "https://arbiscan.io/address/",
+    optimism: "https://optimistic.etherscan.io/address/",
+  };
+  return `${roots[chainKey] || ""}${address}`;
+}
+
+function renderMarketOverview() {
+  const detail = state.marketDetail;
+  if (!detail) return;
+  const deployments = marketDetailDeployments();
+  $("marketOverviewContracts").innerHTML = deployments.map((deployment) => `
+    <div class="market-contract-row">
+      <span class="market-chain-identity">
+        ${chainLogoSrc(deployment.chain_key) ? `<img src="${escapeHtml(chainLogoSrc(deployment.chain_key))}" alt="" />` : ""}
+        <span><strong>${escapeHtml(marketChainName(deployment.chain_key))}</strong><small>${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(deployment.status || "active")}`))}</small></span>
+      </span>
+      <code title="${escapeHtml(deployment.token_address)}">${escapeHtml(deployment.token_address)}</code>
+      <span class="market-inline-actions">
+        <button class="secondary compact" type="button" data-copy-market-address="${escapeHtml(deployment.token_address)}">${escapeHtml(t("copy"))}</button>
+        <a class="secondary compact button-link" href="${escapeHtml(chainExplorerAddress(deployment.chain_key, deployment.token_address))}" target="_blank" rel="noopener">${escapeHtml(t("viewOnExplorer"))}</a>
+      </span>
+    </div>
+  `).join("");
+  $("marketOverviewContracts").querySelectorAll("[data-copy-market-address]").forEach((button) => {
+    button.addEventListener("click", guardAsync(async () => {
+      await copyText(button.dataset.copyMarketAddress);
+      toast(t("copied"));
+    }));
+  });
+
+  const snapshots = new Map((detail.snapshots || []).map((snapshot) => [snapshot.chain_key, snapshot]));
+  $("marketOverviewChains").innerHTML = deployments.map((deployment) => {
+    const snapshot = snapshots.get(deployment.chain_key);
+    return `
+      <div class="market-chain-summary">
+        <div class="market-chain-pool-head">
+          <span>
+            ${chainLogoSrc(deployment.chain_key) ? `<img src="${escapeHtml(chainLogoSrc(deployment.chain_key))}" alt="" />` : ""}
+            <strong>${escapeHtml(marketChainName(deployment.chain_key))}</strong>
+          </span>
+          <small>${escapeHtml(snapshot ? marketDate(snapshot.captured_at) : t("marketWaitingForData"))}</small>
+        </div>
+        <dl>
+          <div><dt>${escapeHtml(t("marketMetricPrice"))}</dt><dd>${marketMoney(snapshot?.price_usd)}</dd></div>
+          <div><dt>${escapeHtml(t("marketMetricLiquidity"))}</dt><dd>${marketMoney(snapshot?.liquidity_usd)}</dd></div>
+          <div><dt>${escapeHtml(t("marketMetricVolume24h"))}</dt><dd>${marketMoney(snapshot?.volume_24h_usd)}</dd></div>
+        </dl>
+      </div>
+    `;
+  }).join("");
+
+  const activeRules = (detail.rules || []).filter(marketRuleIsActive);
+  const activeCombinations = (detail.combinations || []).filter(marketCombinationIsActive);
+  const items = [
+    ...activeRules.map((rule) => ({
+      name: marketRuleName(marketRuleDefinition(rule.rule_type)) || rule.rule_type,
+      note: rule.last_triggered_at
+        ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) })
+        : t("marketNotTriggeredYet"),
+      kind: t("marketSingleRule"),
+    })),
+    ...activeCombinations.map((combination) => ({
+      name: combination.note || t("marketCombinationRule"),
+      note: t("marketCombinationMembersCount", { count: combination.members?.length || 0 }),
+      kind: t("marketCombinationRule"),
+    })),
+  ];
+  $("marketOverviewRules").innerHTML = items.length ? items.map((item) => `
+    <div class="market-overview-rule">
+      <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.note)}</small></div>
+      <span class="badge">${escapeHtml(item.kind)}</span>
+    </div>
+  `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoRunningRules"))}</div>`;
 }
 
 function renderMarketProjectPools() {
@@ -2657,8 +2840,13 @@ function renderMarketProjectPools() {
     const selected = Number(pool.selected) === 1;
     const primary = Number(pool.is_primary) === 1;
     const supported = Number(pool.supports_event_parsing) === 1;
+    const statusKey = !supported
+      ? "marketPoolQuotesOnlyStatus"
+      : selected
+        ? "marketPoolMonitoringStatus"
+        : "marketPoolAvailableStatus";
     return `
-      <div class="market-pool-card${supported ? "" : " unsupported"}">
+      <div class="market-pool-card${supported ? "" : " unsupported"}${selected ? " selected" : ""}">
         <div>
           <strong>${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)}</strong>
           <span>${escapeHtml(pool.token0_symbol)} / ${escapeHtml(pool.token1_symbol)}</span>
@@ -2666,22 +2854,22 @@ function renderMarketProjectPools() {
         </div>
         <div class="market-pool-values">
           <strong>${marketMoney(pool.liquidity_usd)}</strong>
-          <span>${escapeHtml(
-            !supported
-              ? t("marketPoolQuotesExplanation")
-              : primary
-                ? t("marketPoolPrimaryFull")
-                : selected
-                  ? t("marketPoolFullEnabled")
-                  : t("marketPoolFullAvailable")
-          )}</span>
+          <span class="market-pool-status ${supported ? (selected ? "monitoring" : "available") : "quotes"}">${escapeHtml(t(statusKey))}</span>
+          ${primary ? `<small>${escapeHtml(t("marketDefaultQuotePool"))}</small>` : ""}
         </div>
         ${supported && editable ? `
           <div class="market-pool-actions">
-            ${!primary ? `<button type="button" class="secondary compact" data-market-primary="${pool.id}">${escapeHtml(t("marketSetPrimary"))}</button>` : ""}
-            ${!primary ? `<button type="button" class="secondary compact" data-market-toggle-pool="${pool.id}" data-selected="${selected}">${escapeHtml(t(selected ? "marketDisablePool" : "marketEnablePool"))}</button>` : ""}
+            ${!primary ? `<button type="button" class="secondary compact" data-market-toggle-pool="${pool.id}" data-selected="${selected}">${escapeHtml(t(selected ? "marketStopMonitoringPool" : "marketAddMonitoringPool"))}</button>` : ""}
+            ${!primary ? `
+              <details class="market-pool-advanced">
+                <summary>${escapeHtml(t("advancedManagement"))}</summary>
+                <p>${escapeHtml(t("marketDefaultQuotePoolHint"))}</p>
+                <button type="button" class="secondary compact" data-market-primary="${pool.id}">${escapeHtml(t("marketSetDefaultQuotePool"))}</button>
+              </details>
+            ` : ""}
           </div>
         ` : ""}
+        ${!supported ? `<p class="market-pool-explanation">${escapeHtml(t("marketPoolQuotesExplanation"))}</p>` : ""}
       </div>
     `;
         }).join("")}
@@ -2737,7 +2925,7 @@ function renderMarketRuleEditor() {
   const pools = (state.marketDetail?.pools || []).filter((pool) => Number(pool.selected) === 1);
   $("marketRulePoolSelect").innerHTML = `
     <option value="">${escapeHtml(t("marketAllSelectedPools"))}</option>
-    ${pools.map((pool) => `<option value="${pool.id}">${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
+    ${pools.map((pool) => `<option value="${pool.id}">${escapeHtml(marketChainName(pool.chain_key))} · ${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
   `;
   const editable = state.marketDetail?.project?.status === "active";
   $("marketRuleForm").querySelectorAll("input, select, button").forEach((control) => {
@@ -2752,6 +2940,57 @@ function renderMarketRuleEditor() {
   }
   updateMarketDeliveryFields();
   renderMarketGroupOptions();
+  renderMarketRuleMode();
+  renderMarketCombinationEditor();
+}
+
+function setMarketRuleMode(mode) {
+  state.marketRuleMode = mode === "combination" ? "combination" : "single";
+  renderMarketRuleMode();
+}
+
+function renderMarketRuleMode() {
+  const combination = state.marketRuleMode === "combination";
+  $("marketSingleRulePanel").hidden = combination;
+  $("marketCombinationRulePanel").hidden = !combination;
+  $("marketSingleRuleModeBtn").classList.toggle("active", !combination);
+  $("marketCombinationRuleModeBtn").classList.toggle("active", combination);
+  $("marketSingleRuleModeBtn").setAttribute("aria-selected", String(!combination));
+  $("marketCombinationRuleModeBtn").setAttribute("aria-selected", String(combination));
+}
+
+function renderMarketCombinationEditor() {
+  const rules = (state.marketDetail?.rules || []).filter((rule) => Number(rule.enabled) === 1);
+  const professional = currentPlan()?.code === "professional";
+  $("marketCombinationEntitlementNotice").hidden = professional;
+  $("marketCombinationMemberOptions").innerHTML = rules.length ? rules.map((rule) => `
+    <label class="market-combination-member-option">
+      <input type="checkbox" value="${rule.id}" data-market-combination-member />
+      <span>
+        <strong>${escapeHtml(marketRuleName(marketRuleDefinition(rule.rule_type)) || rule.rule_type)}</strong>
+        <small>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))}</small>
+      </span>
+      <span class="market-trigger-count">
+        <span>${escapeHtml(t("triggerCount"))}</span>
+        <input type="number" min="1" step="1" value="1" data-market-combination-count="${rule.id}" />
+      </span>
+    </label>
+  `).join("") : `<div class="empty-state">${escapeHtml(t("marketCombinationNeedsRules"))}</div>`;
+  $("marketCombinationGroupSelect").innerHTML = state.groups.map((group) => `
+    <option value="${escapeHtml(group.gid)}">${escapeHtml(group.name || group.gid)}</option>
+  `).join("");
+  const groupAllowed = professional && state.groups.length > 0;
+  const groupOption = [...$("marketCombinationTargetTypeSelect").options]
+    .find((option) => option.value === "group");
+  if (groupOption) groupOption.disabled = !groupAllowed;
+  if (!groupAllowed && $("marketCombinationTargetTypeSelect").value === "group") {
+    $("marketCombinationTargetTypeSelect").value = "private";
+  }
+  $("marketCombinationGroupWrap").hidden =
+    $("marketCombinationTargetTypeSelect").value !== "group";
+  $("marketCombinationForm").querySelectorAll("input, select, button").forEach((control) => {
+    control.disabled = !professional || state.marketDetail?.project?.status !== "active";
+  });
 }
 
 function selectedMarketRecommendation(ruleType, sensitivity) {
@@ -2783,8 +3022,9 @@ function renderMarketRules() {
       <div class="list-item">
         <div>
           <strong>${escapeHtml(marketRuleName(definition) || rule.rule_type)}</strong>
-          <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(rule.delivery_mode)}</span>
+          <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(t(rule.deployment_scope === "all" ? "marketAllChains" : "marketSelectedChainsScope"))} · ${escapeHtml(rule.delivery_mode)}</span>
           <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${rule.pause_reason ? ` · ${escapeHtml(rule.pause_reason)}` : ""}</small>
+          <small>${escapeHtml(rule.last_triggered_at ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) }) : t("marketNotTriggeredYet"))}</small>
         </div>
         <div class="list-item-actions">
           ${active || !projectActive ? "" : `<button type="button" class="secondary compact" data-restore-market-rule="${rule.id}">${escapeHtml(t("restoreMonitor"))}</button>`}
@@ -2801,9 +3041,54 @@ function renderMarketRules() {
   });
 }
 
+function renderMarketCombinations() {
+  const combinations = state.marketDetail?.combinations || [];
+  const projectActive = state.marketDetail?.project?.status === "active";
+  $("marketCombinationsList").innerHTML = combinations.length
+    ? combinations.map((combination) => {
+      const active = marketCombinationIsActive(combination);
+      const memberNames = (combination.members || []).map((member) => {
+        const rule = (state.marketDetail?.rules || []).find(
+          (item) => item.id === member.market_rule_id,
+        );
+        return `${marketRuleName(marketRuleDefinition(rule?.rule_type)) || rule?.rule_type || "-"} × ${member.required_trigger_count}`;
+      });
+      return `
+        <div class="list-item market-combination-item">
+          <div>
+            <strong>${escapeHtml(combination.note || t("marketCombinationRule"))}</strong>
+            <span>${escapeHtml(memberNames.join(" + "))}</span>
+            <small>${escapeHtml(t("marketCombinationCycle", { minutes: combination.cycle_minutes }))}</small>
+            <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${combination.pause_reason ? ` · ${escapeHtml(combination.pause_reason)}` : ""}</small>
+          </div>
+          <div class="list-item-actions">
+            ${!active && projectActive ? `<button type="button" class="secondary compact" data-restore-market-combination="${combination.id}">${escapeHtml(t("restoreMonitor"))}</button>` : ""}
+            ${active ? `<button type="button" class="secondary compact danger" data-delete-market-combination="${combination.id}">${escapeHtml(t("pause"))}</button>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("")
+    : `<div class="empty-state">${escapeHtml(t("marketNoCombinations"))}</div>`;
+  $("marketCombinationsList").querySelectorAll("[data-delete-market-combination]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() =>
+      archiveMarketCombination(Number(button.dataset.deleteMarketCombination))));
+  });
+  $("marketCombinationsList").querySelectorAll("[data-restore-market-combination]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() =>
+      restoreMarketCombination(Number(button.dataset.restoreMarketCombination))));
+  });
+}
+
 function renderMarketHolders() {
   const detail = state.marketDetail;
   if (!detail) return;
+  const deployments = marketDetailDeployments();
+  const selectedChain = state.marketHolderChain;
+  $("marketHolderChainFilter").innerHTML = `
+    <option value="">${escapeHtml(t("allChains"))}</option>
+    ${deployments.map((deployment) => `<option value="${escapeHtml(deployment.chain_key)}">${escapeHtml(marketChainName(deployment.chain_key))}</option>`).join("")}
+  `;
+  $("marketHolderChainFilter").value = selectedChain;
   $("marketLabelForm").querySelectorAll("input, select, button").forEach((control) => {
     control.disabled = detail.project?.status !== "active";
   });
@@ -2817,25 +3102,79 @@ function renderMarketHolders() {
     button.addEventListener("click", guardAsync(() => deleteMarketLabel(Number(button.dataset.deleteMarketLabel))));
   });
   const labels = new Map((detail.labels || []).map((label) => [label.address, label]));
-  $("marketHoldersList").innerHTML = (detail.holders || []).map((holder) => {
+  const holders = (detail.holders || []).filter(
+    (holder) => !selectedChain || holder.chain_key === selectedChain,
+  );
+  $("marketHoldersList").innerHTML = holders.map((holder) => {
     const label = labels.get(holder.holder_address);
+    const changeKey = {
+      increased: "marketHolderIncreased",
+      decreased: "marketHolderDecreased",
+      entered: "marketHolderEntered",
+      exited: "marketHolderExited",
+      unchanged: "marketHolderUnchanged",
+    }[holder.change_type] || "marketHolderUnchanged";
     return `
       <div class="market-holder-row">
-        <strong>#${holder.rank ?? "-"} · ${escapeHtml(label?.label || shortAddress(holder.holder_address))}</strong>
-        <span>${escapeHtml(holder.balance)} ${escapeHtml(detail.project.token_symbol)} · ${escapeHtml(holder.supply_percent || "-")}%</span>
-        <small>${escapeHtml(holder.address_kind || "wallet")}${Number(holder.excluded) ? " · excluded" : ""}</small>
+        <div>
+          <strong>#${holder.rank ?? "-"} · ${escapeHtml(label?.label || shortAddress(holder.holder_address))}</strong>
+          <small>${escapeHtml(marketChainName(holder.chain_key))} · ${escapeHtml(holder.address_kind || "wallet")}${Number(holder.excluded) ? ` · ${escapeHtml(t("marketExcluded"))}` : ""}</small>
+        </div>
+        <span>${escapeHtml(holder.balance)} ${escapeHtml(detail.asset?.symbol || detail.project.token_symbol)} · ${escapeHtml(holder.supply_percent || "-")}%</span>
+        <span class="market-holder-change ${escapeHtml(holder.change_type || "unchanged")}">${escapeHtml(t(changeKey))}</span>
       </div>
     `;
   }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoHolders"))}</div>`;
 }
 
+function renderMarketEventFilters() {
+  const filters = state.marketEventFilters;
+  const deployments = marketDetailDeployments();
+  const pools = state.marketDetail?.pools || [];
+  $("marketEventChainFilter").innerHTML = `
+    <option value="">${escapeHtml(t("allChains"))}</option>
+    ${deployments.map((deployment) => `<option value="${escapeHtml(deployment.chain_key)}">${escapeHtml(marketChainName(deployment.chain_key))}</option>`).join("")}
+  `;
+  $("marketEventChainFilter").value = filters.chainKey;
+  const eventTypes = [
+    "buy", "sell", "liquidity_added", "liquidity_removed",
+    "holder_increase", "holder_decrease", "holder_rank_entered",
+    "holder_rank_exited", "pool_initialized", "migrated", "token_transfer",
+  ];
+  $("marketEventTypeFilter").innerHTML = `
+    <option value="">${escapeHtml(t("allEventTypes"))}</option>
+    ${eventTypes.map((type) => `<option value="${type}">${escapeHtml(marketEventLabel(type))}</option>`).join("")}
+  `;
+  $("marketEventTypeFilter").value = filters.eventType;
+  const filteredPools = filters.chainKey
+    ? pools.filter((pool) => pool.chain_key === filters.chainKey)
+    : pools;
+  $("marketEventPoolFilter").innerHTML = `
+    <option value="">${escapeHtml(t("allPools"))}</option>
+    ${filteredPools.map((pool) => `<option value="${pool.id}">${escapeHtml(marketChainName(pool.chain_key))} · ${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
+  `;
+  $("marketEventPoolFilter").value = String(filters.poolId || "");
+  $("marketEventAddressFilter").value = filters.address;
+  const activeCount = Object.values(filters).filter(Boolean).length;
+  $("marketEventFilterStatus").textContent = activeCount
+    ? t("marketFiltersApplied", { count: activeCount })
+    : t("marketNoFilters");
+}
+
 function renderMarketEvents() {
   const list = $("marketEventsList");
+  const pools = new Map((state.marketDetail?.pools || []).map((pool) => [pool.id, pool]));
   list.innerHTML = state.marketEvents.length ? state.marketEvents.map((event) => `
     <div class="market-event-row">
       <div>
-        <strong>${escapeHtml(marketEventLabel(event.event_type))}</strong>
+        <span class="market-event-title">
+          <strong>${escapeHtml(marketEventLabel(event.event_type))}</strong>
+          <span class="badge">${escapeHtml(marketChainName(event.chain_key))}</span>
+        </span>
         <span>${event.usd_value ? marketMoney(event.usd_value) : escapeHtml(event.token_amount || "-")} · ${escapeHtml(event.wallet_address ? shortAddress(event.wallet_address) : "-")}</span>
+        <small>${escapeHtml(event.market_pool_id && pools.get(event.market_pool_id)
+          ? `${pools.get(event.market_pool_id).protocol} ${pools.get(event.market_pool_id).protocol_version} · ${pools.get(event.market_pool_id).token0_symbol}/${pools.get(event.market_pool_id).token1_symbol}`
+          : event.source || "-")}</small>
       </div>
       <div>
         <time>${escapeHtml(marketDate(event.occurred_at))}</time>
@@ -3182,6 +3521,12 @@ async function createMarketProject() {
     }
     await loadMarketContext();
     state.marketDetail = await api(`/api/market/projects/${detail.project.id}`);
+    state.marketDetailTab = "overview";
+    state.marketRuleMode = "single";
+    state.marketHolderChain = "";
+    state.marketEventFilters = freshMarketEventFilters();
+    state.marketEvents = [];
+    state.marketEventsNextBeforeId = null;
     await loadMarketProjectExtras(detail.project.id);
     resetMarketWizard();
     $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -3197,6 +3542,12 @@ async function createMarketProject() {
 
 async function openMarketProject(projectId) {
   state.marketDetail = await api(`/api/market/projects/${projectId}`);
+  state.marketDetailTab = "overview";
+  state.marketRuleMode = "single";
+  state.marketHolderChain = "";
+  state.marketEventFilters = freshMarketEventFilters();
+  state.marketEvents = [];
+  state.marketEventsNextBeforeId = null;
   await loadMarketProjectExtras(projectId);
   $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -3216,6 +3567,11 @@ async function loadMarketEvents(projectId = state.marketDetail?.project?.id, app
   if (append && state.marketEventsNextBeforeId) {
     query.set("before_id", state.marketEventsNextBeforeId);
   }
+  const filters = state.marketEventFilters;
+  if (filters.chainKey) query.set("chain_key", filters.chainKey);
+  if (filters.eventType) query.set("event_type", filters.eventType);
+  if (filters.poolId) query.set("pool_id", filters.poolId);
+  if (filters.address) query.set("address", filters.address);
   const result = await api(`/api/market/projects/${projectId}/events?${query}`);
   state.marketEvents = append
     ? [...state.marketEvents, ...(result.events || [])]
@@ -3306,6 +3662,80 @@ async function restoreMarketRule(ruleId) {
   await api(`/api/market/rules/${ruleId}/restore`, { method: "POST" });
   await refreshMarketProject();
   toast(t("marketRuleRestored"));
+}
+
+async function createMarketCombination(event) {
+  event.preventDefault();
+  const members = [...document.querySelectorAll("[data-market-combination-member]:checked")]
+    .map((checkbox) => ({
+      source_type: "market",
+      market_rule_id: Number(checkbox.value),
+      required_trigger_count: Number(
+        document.querySelector(`[data-market-combination-count="${checkbox.value}"]`)?.value || 1,
+      ),
+    }));
+  if (members.length < 2) {
+    toast(t("marketCombinationNeedsTwoRules"));
+    return;
+  }
+  const targetType = $("marketCombinationTargetTypeSelect").value;
+  await api("/api/market/combinations", {
+    method: "POST",
+    body: JSON.stringify({
+      note: $("marketCombinationNoteInput").value.trim(),
+      cycle_type: "fixed",
+      cycle_minutes: Number($("marketCombinationCycleInput").value),
+      notification_chat_type: targetType,
+      notification_chat_id: targetType === "group"
+        ? $("marketCombinationGroupSelect").value
+        : "",
+      notification_language: $("marketCombinationLanguageSelect").value,
+      members,
+    }),
+  });
+  $("marketCombinationNoteInput").value = "";
+  await refreshMarketProject();
+  state.marketRuleMode = "combination";
+  renderMarketRuleMode();
+  toast(t("marketCombinationCreated"));
+}
+
+async function archiveMarketCombination(combinationId) {
+  await api(`/api/market/combinations/${combinationId}`, { method: "DELETE" });
+  await refreshMarketProject();
+  state.marketRuleMode = "combination";
+  renderMarketRuleMode();
+  toast(t("marketCombinationPaused"));
+}
+
+async function restoreMarketCombination(combinationId) {
+  await api(`/api/market/combinations/${combinationId}/restore`, { method: "POST" });
+  await refreshMarketProject();
+  state.marketRuleMode = "combination";
+  renderMarketRuleMode();
+  toast(t("marketCombinationRestored"));
+}
+
+async function applyMarketEventFilters(event) {
+  event.preventDefault();
+  state.marketEventFilters = {
+    chainKey: $("marketEventChainFilter").value,
+    eventType: $("marketEventTypeFilter").value,
+    poolId: $("marketEventPoolFilter").value,
+    address: $("marketEventAddressFilter").value.trim(),
+  };
+  state.marketEvents = [];
+  state.marketEventsNextBeforeId = null;
+  await loadMarketEvents();
+  renderMarketEventFilters();
+}
+
+async function clearMarketEventFilters() {
+  state.marketEventFilters = freshMarketEventFilters();
+  state.marketEvents = [];
+  state.marketEventsNextBeforeId = null;
+  renderMarketEventFilters();
+  await loadMarketEvents();
 }
 
 async function saveMarketLabel(event) {
@@ -3427,12 +3857,48 @@ function bindEvents() {
     state.marketRecommendations = [];
     state.marketEvents = [];
     state.marketEventsNextBeforeId = null;
+    state.marketDetailTab = "overview";
+    state.marketRuleMode = "single";
+    state.marketHolderChain = "";
+    state.marketEventFilters = freshMarketEventFilters();
     renderMarketDetail();
     $("marketProjectsList").scrollIntoView({ behavior: "smooth", block: "center" });
   });
   $("archiveMarketProjectBtn").addEventListener("click", guardAsync(archiveMarketProject));
+  document.querySelectorAll("[data-market-detail-tab]").forEach((button) => {
+    button.addEventListener("click", () => setMarketDetailTab(button.dataset.marketDetailTab));
+  });
+  $("openMarketRulesTabBtn").addEventListener("click", () => setMarketDetailTab("rules"));
+  $("marketSingleRuleModeBtn").addEventListener("click", () => setMarketRuleMode("single"));
+  $("marketCombinationRuleModeBtn").addEventListener("click", () => setMarketRuleMode("combination"));
   $("marketRuleForm").addEventListener("submit", guardAsync(createMarketRule));
+  $("marketCombinationForm").addEventListener("submit", guardAsync(createMarketCombination));
+  $("marketCombinationTargetTypeSelect").addEventListener("change", () => {
+    $("marketCombinationGroupWrap").hidden =
+      $("marketCombinationTargetTypeSelect").value !== "group";
+  });
   $("marketLabelForm").addEventListener("submit", guardAsync(saveMarketLabel));
+  $("marketHolderChainFilter").addEventListener("change", () => {
+    state.marketHolderChain = $("marketHolderChainFilter").value;
+    renderMarketHolders();
+  });
+  $("marketEventFiltersForm").addEventListener("submit", guardAsync(applyMarketEventFilters));
+  $("clearMarketEventFiltersBtn").addEventListener("click", guardAsync(clearMarketEventFilters));
+  $("marketEventChainFilter").addEventListener("change", () => {
+    const chainKey = $("marketEventChainFilter").value;
+    const poolsByID = new Map(
+      (state.marketDetail?.pools || []).map((pool) => [String(pool.id), pool]),
+    );
+    [...$("marketEventPoolFilter").options].forEach((option) => {
+      if (!option.value) return;
+      const visible = !chainKey || poolsByID.get(option.value)?.chain_key === chainKey;
+      option.hidden = !visible;
+      option.disabled = !visible;
+    });
+    if ($("marketEventPoolFilter").selectedOptions[0]?.disabled) {
+      $("marketEventPoolFilter").value = "";
+    }
+  });
   $("refreshMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents()));
   $("loadMoreMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents(undefined, true)));
   $("marketRuleTypeSelect").addEventListener("change", renderMarketRuleEditor);

@@ -68,7 +68,16 @@ type MarketProjectDeployment struct {
 
 type MarketProjectDeploymentView struct {
 	MarketProjectDeployment
-	Deployment MarketAssetDeployment `db:"-" json:"deployment"`
+	ChainKey             string          `db:"chain_key" json:"chain_key"`
+	ChainID              int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress         string          `db:"token_address" json:"token_address"`
+	TokenName            string          `db:"token_name" json:"token_name"`
+	TokenSymbol          string          `db:"token_symbol" json:"token_symbol"`
+	TokenDecimals        int32           `db:"token_decimals" json:"token_decimals"`
+	VerificationStatus   string          `db:"verification_status" json:"verification_status"`
+	VerificationSource   string          `db:"verification_source" json:"verification_source"`
+	VerificationEvidence json.RawMessage `db:"verification_evidence" json:"verification_evidence"`
+	VerifiedAt           *time.Time      `db:"verified_at" json:"verified_at,omitempty"`
 }
 
 type MarketRuleDeploymentScope struct {
@@ -265,6 +274,15 @@ type MarketEvent struct {
 	Metadata                json.RawMessage `db:"metadata" json:"metadata"`
 }
 
+type MarketEventFilter struct {
+	BeforeID      int64
+	Limit         int
+	ChainKey      string
+	EventType     string
+	MarketPoolID  int64
+	WalletAddress string
+}
+
 type MarketRuleEvent struct {
 	ID                      int64           `db:"id" json:"id"`
 	MarketRuleID            int64           `db:"market_rule_id" json:"market_rule_id"`
@@ -401,6 +419,13 @@ type MarketHolder struct {
 	FirstSeenAt             time.Time `db:"first_seen_at" json:"first_seen_at"`
 	LastSeenAt              time.Time `db:"last_seen_at" json:"last_seen_at"`
 	UpdatedAt               time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type MarketHolderView struct {
+	MarketHolder
+	PreviousBalance *string `db:"previous_balance" json:"previous_balance,omitempty"`
+	PreviousRank    *int32  `db:"previous_rank" json:"previous_rank,omitempty"`
+	ChangeType      string  `db:"change_type" json:"change_type"`
 }
 
 type MarketHolderSnapshot struct {

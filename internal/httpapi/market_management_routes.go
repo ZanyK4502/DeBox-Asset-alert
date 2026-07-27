@@ -190,8 +190,26 @@ func (h handler) getMarketEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("limit 必须是 1 到 100 之间的整数。"))
 		return
 	}
+	if limit == 0 {
+		limit = 50
+	}
+	poolID, err := optionalPositiveInt64(r.URL.Query().Get("pool_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("pool_id 必须是正整数。"))
+		return
+	}
 	events, err := h.deps.Market.Events(
-		r.Context(), session.DeBoxUserID, projectID, beforeID, limit,
+		r.Context(),
+		session.DeBoxUserID,
+		projectID,
+		marketview.EventFilterInput{
+			BeforeID:      beforeID,
+			Limit:         limit,
+			ChainKey:      r.URL.Query().Get("chain_key"),
+			EventType:     r.URL.Query().Get("event_type"),
+			MarketPoolID:  poolID,
+			WalletAddress: r.URL.Query().Get("address"),
+		},
 	)
 	if err != nil {
 		writeMarketError(w, err)

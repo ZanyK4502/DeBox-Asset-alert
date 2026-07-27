@@ -70,11 +70,28 @@ type AssetIdentityService interface {
 }
 
 type multiChainProjectRepository interface {
-	ListMarketProjectDeployments(
+	GetMarketProjectAsset(
 		context.Context,
 		int64,
 		string,
-	) ([]store.MarketProjectDeployment, error)
+	) (*store.MarketAsset, error)
+	ListMarketProjectDeploymentViews(
+		context.Context,
+		int64,
+		string,
+	) ([]store.MarketProjectDeploymentView, error)
+	ListLatestMarketProjectSnapshots(
+		context.Context,
+		int64,
+		string,
+	) ([]store.MarketSnapshot, error)
+	ListMarketHolderViews(
+		context.Context,
+		int64,
+		string,
+		bool,
+		int,
+	) ([]store.MarketHolderView, error)
 }
 
 type multiChainProjectEntitlements interface {
@@ -166,14 +183,26 @@ type CreateProjectDeploymentInput struct {
 }
 
 type ProjectDetail struct {
-	Project        store.MarketProject             `json:"project"`
-	Pools          []store.MarketPoolView          `json:"pools"`
-	LatestSnapshot *store.MarketSnapshot           `json:"latest_snapshot"`
-	Rules          []store.MarketRule              `json:"rules"`
-	Holders        []store.MarketHolder            `json:"holders"`
-	Labels         []store.MarketAddressLabel      `json:"labels"`
-	ProviderHealth []store.MarketProviderHealth    `json:"provider_health"`
-	Deployments    []store.MarketProjectDeployment `json:"deployments"`
+	Project        store.MarketProject                 `json:"project"`
+	Asset          *store.MarketAsset                  `json:"asset,omitempty"`
+	Pools          []store.MarketPoolView              `json:"pools"`
+	LatestSnapshot *store.MarketSnapshot               `json:"latest_snapshot"`
+	Snapshots      []store.MarketSnapshot              `json:"snapshots"`
+	Rules          []store.MarketRule                  `json:"rules"`
+	Combinations   []store.MarketCombinationRule       `json:"combinations"`
+	Holders        []store.MarketHolderView            `json:"holders"`
+	Labels         []store.MarketAddressLabel          `json:"labels"`
+	ProviderHealth []store.MarketProviderHealth        `json:"provider_health"`
+	Deployments    []store.MarketProjectDeploymentView `json:"deployments"`
+}
+
+type EventFilterInput struct {
+	BeforeID      int64
+	Limit         int
+	ChainKey      string
+	EventType     string
+	MarketPoolID  int64
+	WalletAddress string
 }
 
 type CreateRuleInput struct {
@@ -748,10 +777,31 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	deployments := []store.MarketProjectDeployment{}
+	var asset *store.MarketAsset
+	deployments := []store.MarketProjectDeploymentView{}
+	snapshots := []store.MarketSnapshot{}
+	holderViews := []store.MarketHolderView{}
 	if repository, ok := s.deps.Repository.(multiChainProjectRepository); ok {
-		deployments, err = repository.ListMarketProjectDeployments(
+		asset, err = repository.GetMarketProjectAsset(
 			ctx, projectID, deboxUserID,
+		)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
+		deployments, err = repository.ListMarketProjectDeploymentViews(
+			ctx, projectID, deboxUserID,
+		)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
+		snapshots, err = repository.ListLatestMarketProjectSnapshots(
+			ctx, projectID, deboxUserID,
+		)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
+		holderViews, err = repository.ListMarketHolderViews(
+			ctx, projectID, deboxUserID, true, 500,
 		)
 		if err != nil {
 			return ProjectDetail{}, err
@@ -761,9 +811,20 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	holders, err := s.deps.Repository.ListMarketHolders(ctx, projectID, deboxUserID, true, 100)
-	if err != nil {
-		return ProjectDetail{}, err
+	if len(holderViews) == 0 {
+		holders, holderErr := s.deps.Repository.ListMarketHolders(
+			ctx, projectID, deboxUserID, true, 100,
+		)
+		if holderErr != nil {
+			return ProjectDetail{}, holderErr
+		}
+		holderViews = make([]store.MarketHolderView, len(holders))
+		for index := range holders {
+			holderViews[index] = store.MarketHolderView{
+				MarketHolder: holders[index],
+				ChangeType:   "unchanged",
+			}
+		}
 	}
 	labels, err := s.deps.Repository.ListMarketAddressLabels(ctx, projectID, deboxUserID)
 	if err != nil {
@@ -773,6 +834,34 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
+	combinations := []store.MarketCombinationRule{}
+	if repository, ok := s.deps.Repository.(interface {
+		ListMarketCombinationRules(
+			context.Context,
+			string,
+		) ([]store.MarketCombinationRule, error)
+	}); ok {
+		combinations, err = repository.ListMarketCombinationRules(ctx, deboxUserID)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
+	}
+	ruleIDs := make(map[int64]struct{}, len(rules))
+	for _, rule := range rules {
+		ruleIDs[rule.ID] = struct{}{}
+	}
+	projectCombinations := make([]store.MarketCombinationRule, 0)
+	for _, combination := range combinations {
+		for _, member := range combination.Members {
+			if member.MarketRuleID == nil {
+				continue
+			}
+			if _, belongs := ruleIDs[*member.MarketRuleID]; belongs {
+				projectCombinations = append(projectCombinations, combination)
+				break
+			}
+		}
+	}
 	snapshot, err := s.deps.Repository.LatestMarketSnapshot(
 		ctx, project.ChainID, project.TokenAddress, project.MainPoolID,
 	)
@@ -780,9 +869,10 @@ func (s *Service) Project(
 		return ProjectDetail{}, err
 	}
 	return ProjectDetail{
-		Project: *project, Pools: pools, LatestSnapshot: snapshot, Rules: rules,
-		Holders: holders, Labels: labels, ProviderHealth: health,
-		Deployments: deployments,
+		Project: *project, Asset: asset, Pools: pools,
+		LatestSnapshot: snapshot, Snapshots: snapshots, Rules: rules,
+		Combinations: projectCombinations, Holders: holderViews,
+		Labels: labels, ProviderHealth: health, Deployments: deployments,
 	}, nil
 }
 
@@ -1052,16 +1142,60 @@ func (s *Service) Events(
 	ctx context.Context,
 	deboxUserID string,
 	projectID int64,
-	beforeID int64,
-	limit int,
+	input EventFilterInput,
 ) ([]store.MarketEvent, error) {
-	if limit == 0 {
-		limit = 50
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
-	if beforeID < 0 || limit < 1 || limit > 100 {
+	if input.BeforeID < 0 || input.Limit < 1 || input.Limit > 100 ||
+		input.MarketPoolID < 0 {
 		return nil, errors.New("市场事件分页参数无效。")
 	}
-	return s.deps.Repository.ListMarketEvents(ctx, projectID, deboxUserID, beforeID, limit)
+	input.ChainKey = strings.ToLower(strings.TrimSpace(input.ChainKey))
+	input.EventType = strings.ToLower(strings.TrimSpace(input.EventType))
+	input.WalletAddress = strings.ToLower(strings.TrimSpace(input.WalletAddress))
+	if input.WalletAddress != "" {
+		address, err := chain.ValidateAddress(input.WalletAddress)
+		if err != nil {
+			return nil, errors.New("事件地址筛选必须是有效的 EVM 地址。")
+		}
+		input.WalletAddress = address
+	}
+	if input.ChainKey != "" {
+		profile, err := chain.ChainProfile(input.ChainKey, "")
+		if err != nil {
+			return nil, err
+		}
+		input.ChainKey = profile.Key
+	}
+	if len(input.EventType) > 64 {
+		return nil, errors.New("事件类型筛选无效。")
+	}
+	if repository, ok := s.deps.Repository.(interface {
+		ListMarketEventsFiltered(
+			context.Context,
+			int64,
+			string,
+			store.MarketEventFilter,
+		) ([]store.MarketEvent, error)
+	}); ok {
+		return repository.ListMarketEventsFiltered(
+			ctx,
+			projectID,
+			deboxUserID,
+			store.MarketEventFilter{
+				BeforeID:      input.BeforeID,
+				Limit:         input.Limit,
+				ChainKey:      input.ChainKey,
+				EventType:     input.EventType,
+				MarketPoolID:  input.MarketPoolID,
+				WalletAddress: input.WalletAddress,
+			},
+		)
+	}
+	return s.deps.Repository.ListMarketEvents(
+		ctx, projectID, deboxUserID, input.BeforeID, input.Limit,
+	)
 }
 
 func (s *Service) SaveAddressLabel(

@@ -191,6 +191,112 @@ func TestPostgresCreatesOneLogicalMultiChainProjectAtomically(t *testing.T) {
 	`, *project.MarketAssetID).Scan(&evidenceCount); err != nil || evidenceCount != 2 {
 		t.Fatalf("identity evidence count = %d, error = %v", evidenceCount, err)
 	}
+
+	asset, err := database.GetMarketProjectAsset(ctx, project.ID, userID)
+	if err != nil || asset == nil || asset.CanonicalAssetID != "wizard-token" {
+		t.Fatalf("project asset = %#v, error = %v", asset, err)
+	}
+	deploymentViews, err := database.ListMarketProjectDeploymentViews(
+		ctx, project.ID, userID,
+	)
+	if err != nil || len(deploymentViews) != 2 ||
+		deploymentViews[0].ChainKey != "bsc" ||
+		deploymentViews[1].ChainKey != "base" {
+		t.Fatalf("project deployment views = %#v, error = %v", deploymentViews, err)
+	}
+	deploymentIDByChain := map[string]int64{}
+	for _, deployment := range deploymentViews {
+		deploymentIDByChain[deployment.ChainKey] = deployment.MarketAssetDeploymentID
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO market_snapshots (
+			market_asset_deployment_id, chain_key, chain_id, token_address,
+			market_pool_id, price_usd, liquidity_usd, volume_24h_usd,
+			source, captured_at
+		)
+		VALUES
+			($1, 'bsc', 56, $2, $3, 1.25, 100000, 40000, 'integration', NOW()),
+			($4, 'base', 8453, $5, $6, 1.24, 80000, 30000, 'integration', NOW())
+	`,
+		deploymentIDByChain["bsc"], bscToken, bscPool.ID,
+		deploymentIDByChain["base"], baseToken, basePool.ID,
+	); err != nil {
+		t.Fatalf("create detail snapshots: %v", err)
+	}
+	snapshots, err := database.ListLatestMarketProjectSnapshots(
+		ctx, project.ID, userID,
+	)
+	if err != nil || len(snapshots) != 2 {
+		t.Fatalf("latest project snapshots = %#v, error = %v", snapshots, err)
+	}
+
+	holderAddress := "0xcccccccccccccccccccccccccccccccccccccccc"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO market_holders (
+			market_asset_deployment_id, chain_key, chain_id, token_address,
+			holder_address, balance_raw, balance, supply_percent, rank, source
+		)
+		VALUES ($1, 'base', 8453, $2, $3, 150, 150, 1.5, 2, 'integration')
+	`, deploymentIDByChain["base"], baseToken, holderAddress); err != nil {
+		t.Fatalf("create multi-chain holder: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO market_holder_snapshots (
+			market_asset_deployment_id, chain_key, chain_id, token_address,
+			holder_address, balance_raw, balance, supply_percent, rank,
+			source, captured_at
+		)
+		VALUES
+			($1, 'base', 8453, $2, $3, 100, 100, 1, 3,
+				'integration', NOW() - INTERVAL '1 minute'),
+			($1, 'base', 8453, $2, $3, 150, 150, 1.5, 2,
+				'integration', NOW())
+	`, deploymentIDByChain["base"], baseToken, holderAddress); err != nil {
+		t.Fatalf("create multi-chain holder history: %v", err)
+	}
+	holderViews, err := database.ListMarketHolderViews(
+		ctx, project.ID, userID, true, 20,
+	)
+	if err != nil || len(holderViews) != 1 ||
+		holderViews[0].ChainKey != "base" ||
+		holderViews[0].ChangeType != "increased" {
+		t.Fatalf("multi-chain holder views = %#v, error = %v", holderViews, err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO market_events (
+			market_pool_id, market_asset_deployment_id,
+			chain_key, chain_id, token_address, event_type, event_key,
+			wallet_address, usd_value, source, confirmed, occurred_at
+		)
+		VALUES
+			($1, $2, 'bsc', 56, $3, 'buy', 'detail-bsc-buy',
+				$4, 250, 'integration', 1, NOW()),
+			($5, $6, 'base', 8453, $7, 'sell', 'detail-base-sell',
+				$4, 300, 'integration', 1, NOW())
+	`,
+		bscPool.ID, deploymentIDByChain["bsc"], bscToken, holderAddress,
+		basePool.ID, deploymentIDByChain["base"], baseToken,
+	); err != nil {
+		t.Fatalf("create multi-chain detail events: %v", err)
+	}
+	filteredEvents, err := database.ListMarketEventsFiltered(
+		ctx,
+		project.ID,
+		userID,
+		MarketEventFilter{
+			ChainKey:      "base",
+			EventType:     "sell",
+			MarketPoolID:  basePool.ID,
+			WalletAddress: holderAddress,
+			Limit:         20,
+		},
+	)
+	if err != nil || len(filteredEvents) != 1 ||
+		filteredEvents[0].ChainKey != "base" ||
+		filteredEvents[0].EventType != "sell" {
+		t.Fatalf("filtered multi-chain events = %#v, error = %v", filteredEvents, err)
+	}
 }
 
 func TestPostgresRejectsStandardMultiPoolProjectWithoutPartialRows(t *testing.T) {

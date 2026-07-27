@@ -10,7 +10,9 @@ const app = fs.readFileSync(path.join(root, "static", "app.js"), "utf8");
 const i18nSource = fs.readFileSync(path.join(root, "static", "i18n.js"), "utf8");
 const timeSource = fs.readFileSync(path.join(root, "static", "time.js"), "utf8");
 
-const htmlIDs = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+const allHTMLIDs = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+const htmlIDs = new Set(allHTMLIDs);
+assert.equal(htmlIDs.size, allHTMLIDs.length, "H5 contains duplicate HTML ids");
 const referencedIDs = new Set([...app.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]));
 for (const id of referencedIDs) {
   assert.ok(htmlIDs.has(id), `app.js references missing HTML id: ${id}`);
@@ -40,6 +42,8 @@ const requiredAPIs = [
   "/api/market/pools/discover",
   "/api/market/projects",
   "/api/market/rules/",
+  "/api/market/combinations",
+  "/events?",
   "/api/market/labels/",
 ];
 for (const endpoint of requiredAPIs) {
@@ -60,6 +64,27 @@ assert.ok(
     app.includes('cooldown_scope: "chain"'),
   "market wizard must create the first rule with explicit multi-chain scopes",
 );
+for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
+  assert.ok(
+    html.includes(`data-market-detail-tab="${tab}"`) &&
+      html.includes(`data-market-detail-panel="${tab}"`),
+    `market project detail is missing the ${tab} tab or panel`,
+  );
+}
+for (const filterID of [
+  "marketEventChainFilter",
+  "marketEventTypeFilter",
+  "marketEventPoolFilter",
+  "marketEventAddressFilter",
+]) {
+  assert.ok(htmlIDs.has(filterID), `market event filter is missing: ${filterID}`);
+}
+for (const queryKey of ["chain_key", "event_type", "pool_id", "address"]) {
+  assert.ok(
+    app.includes(`query.set("${queryKey}"`),
+    `market event request is missing query filter: ${queryKey}`,
+  );
+}
 
 const context = { window: {} };
 vm.runInNewContext(i18nSource, context, { filename: "static/i18n.js" });

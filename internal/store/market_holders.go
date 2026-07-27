@@ -172,10 +172,21 @@ func (s *Store) ListMarketHolders(
 			mh.rank, mh.address_kind, mh.excluded, mh.exclusion_reason,
 			mh.source, mh.first_seen_at, mh.last_seen_at, mh.updated_at
 		FROM market_holders mh
-		JOIN market_projects mp
-		  ON mp.chain_id = mh.chain_id
-		 AND mp.token_address = mh.token_address
-		WHERE mp.id = $1 AND mp.debox_user_id = $2
+		JOIN market_projects mp ON mp.id = $1
+		WHERE mp.debox_user_id = $2
+		  AND (
+			(mp.chain_id = mh.chain_id AND mp.token_address = mh.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND mad.chain_id = mh.chain_id
+				  AND mad.token_address = mh.token_address
+			)
+		  )
 	`
 	if !includeExcluded {
 		query += " AND mh.excluded = 0"
@@ -189,6 +200,75 @@ func (s *Store) ListMarketHolders(
 		return nil, fmt.Errorf("list market holders: %w", err)
 	}
 	return holders, nil
+}
+
+func (s *Store) ListMarketHolderViews(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+	includeExcluded bool,
+	limit int,
+) ([]MarketHolderView, error) {
+	limit = clamp(limit, 1, 500)
+	query := `
+		SELECT
+			mh.id, mh.market_asset_deployment_id,
+			mh.chain_key, mh.chain_id, mh.token_address, mh.holder_address,
+			mh.balance_raw::text AS balance_raw,
+			mh.balance::text AS balance,
+			mh.supply_percent::text AS supply_percent,
+			mh.rank, mh.address_kind, mh.excluded, mh.exclusion_reason,
+			mh.source, mh.first_seen_at, mh.last_seen_at, mh.updated_at,
+			previous.balance::text AS previous_balance,
+			previous.rank AS previous_rank,
+			CASE
+				WHEN previous.rank IS NULL AND mh.rank IS NOT NULL THEN 'entered'
+				WHEN previous.rank IS NOT NULL AND mh.rank IS NULL THEN 'exited'
+				WHEN previous.balance IS NOT NULL AND mh.balance > previous.balance THEN 'increased'
+				WHEN previous.balance IS NOT NULL AND mh.balance < previous.balance THEN 'decreased'
+				ELSE 'unchanged'
+			END AS change_type
+		FROM market_holders mh
+		JOIN market_projects mp ON mp.id = $1
+		LEFT JOIN LATERAL (
+			SELECT mhs.balance, mhs.rank
+			FROM market_holder_snapshots mhs
+			WHERE mhs.chain_id = mh.chain_id
+			  AND mhs.token_address = mh.token_address
+			  AND mhs.holder_address = mh.holder_address
+			ORDER BY mhs.captured_at DESC, mhs.id DESC
+			OFFSET 1
+			LIMIT 1
+		) previous ON TRUE
+		WHERE mp.debox_user_id = $2
+		  AND (
+			(mp.chain_id = mh.chain_id AND mp.token_address = mh.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND mad.chain_id = mh.chain_id
+				  AND mad.token_address = mh.token_address
+			)
+		  )
+	`
+	if !includeExcluded {
+		query += " AND mh.excluded = 0"
+	}
+	query += `
+		ORDER BY mh.chain_id, mh.rank NULLS LAST, mh.balance_raw DESC, mh.holder_address
+		LIMIT $3
+	`
+	values, err := collectMany[MarketHolderView](
+		ctx, s.db, query, projectID, deboxUserID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list market holder views: %w", err)
+	}
+	return values, nil
 }
 
 func (s *Store) ListMarketHolderSnapshots(
@@ -212,11 +292,21 @@ func (s *Store) ListMarketHolderSnapshots(
 			mhs.supply_percent::text AS supply_percent,
 			mhs.rank, mhs.source, mhs.captured_at
 		FROM market_holder_snapshots mhs
-		JOIN market_projects mp
-		  ON mp.chain_id = mhs.chain_id
-		 AND mp.token_address = mhs.token_address
-		WHERE mp.id = $1
-		  AND mp.debox_user_id = $2
+		JOIN market_projects mp ON mp.id = $1
+		WHERE mp.debox_user_id = $2
+		  AND (
+			(mp.chain_id = mhs.chain_id AND mp.token_address = mhs.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND mad.chain_id = mhs.chain_id
+				  AND mad.token_address = mhs.token_address
+			)
+		  )
 		  AND mhs.holder_address = $3
 		ORDER BY mhs.captured_at DESC, mhs.id DESC
 		LIMIT $4

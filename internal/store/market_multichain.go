@@ -719,6 +719,130 @@ func (s *Store) ListMarketProjectDeployments(
 	return values, nil
 }
 
+func (s *Store) GetMarketProjectAsset(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+) (*MarketAsset, error) {
+	value, err := collectOptional[MarketAsset](ctx, s.db, `
+		SELECT
+			ma.id, ma.canonical_name, ma.symbol, ma.logo_url, ma.identity_source,
+			ma.canonical_asset_id, ma.verification_status, ma.metadata,
+			ma.created_at, ma.updated_at
+		FROM market_projects mp
+		JOIN market_assets ma ON ma.id = mp.market_asset_id
+		WHERE mp.id = $1 AND mp.debox_user_id = $2
+	`, projectID, strings.TrimSpace(deboxUserID))
+	if err != nil {
+		return nil, fmt.Errorf("get market project asset: %w", err)
+	}
+	return value, nil
+}
+
+func (s *Store) ListMarketProjectDeploymentViews(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+) ([]MarketProjectDeploymentView, error) {
+	values, err := collectMany[MarketProjectDeploymentView](ctx, s.db, `
+		SELECT
+			mpd.id,
+			mpd.market_project_id,
+			mpd.market_asset_id,
+			mpd.market_asset_deployment_id,
+			mpd.status,
+			mpd.pause_reason,
+			mpd.default_market_pool_id,
+			mpd.metadata,
+			mpd.created_at,
+			mpd.updated_at,
+			mad.chain_key,
+			mad.chain_id,
+			mad.token_address,
+			mad.token_name,
+			mad.token_symbol,
+			mad.token_decimals,
+			mad.verification_status,
+			mad.verification_source,
+			mad.verification_evidence,
+			mad.verified_at
+		FROM market_project_deployments mpd
+		JOIN market_projects mp ON mp.id = mpd.market_project_id
+		JOIN market_asset_deployments mad
+		  ON mad.id = mpd.market_asset_deployment_id
+		WHERE mpd.market_project_id = $1 AND mp.debox_user_id = $2
+		ORDER BY mad.chain_id, mpd.id
+	`, projectID, strings.TrimSpace(deboxUserID))
+	if err != nil {
+		return nil, fmt.Errorf("list market project deployment views: %w", err)
+	}
+	return values, nil
+}
+
+func (s *Store) ListLatestMarketProjectSnapshots(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+) ([]MarketSnapshot, error) {
+	values, err := collectMany[MarketSnapshot](ctx, s.db, `
+		SELECT DISTINCT ON (mpd.id)
+			ms.id, ms.market_asset_deployment_id,
+			ms.chain_key, ms.chain_id, ms.token_address, ms.market_pool_id,
+			ms.price_usd::text AS price_usd,
+			ms.liquidity_usd::text AS liquidity_usd,
+			ms.fdv_usd::text AS fdv_usd,
+			ms.market_cap_usd::text AS market_cap_usd,
+			ms.volume_5m_usd::text AS volume_5m_usd,
+			ms.volume_15m_usd::text AS volume_15m_usd,
+			ms.volume_1h_usd::text AS volume_1h_usd,
+			ms.volume_6h_usd::text AS volume_6h_usd,
+			ms.volume_24h_usd::text AS volume_24h_usd,
+			ms.buys_5m, ms.sells_5m, ms.buys_1h, ms.sells_1h,
+			ms.buys_24h, ms.sells_24h,
+			ms.source, ms.source_timestamp, ms.captured_at, ms.raw_payload
+		FROM market_project_deployments mpd
+		JOIN market_projects mp ON mp.id = mpd.market_project_id
+		JOIN market_asset_deployments mad
+		  ON mad.id = mpd.market_asset_deployment_id
+		JOIN market_project_pools mpp
+		  ON mpp.market_project_id = mpd.market_project_id
+		 AND (
+			mpp.market_project_deployment_id = mpd.id
+			OR (
+				mpp.market_project_deployment_id IS NULL
+				AND EXISTS (
+					SELECT 1
+					FROM market_pools legacy_pool
+					WHERE legacy_pool.id = mpp.market_pool_id
+					  AND legacy_pool.chain_id = mad.chain_id
+					  AND (
+						legacy_pool.token0_address = mad.token_address
+						OR legacy_pool.token1_address = mad.token_address
+					  )
+				)
+			)
+		 )
+		 AND mpp.selected = 1
+		JOIN market_snapshots ms
+		  ON ms.market_pool_id = mpp.market_pool_id
+		 AND ms.chain_id = mad.chain_id
+		 AND ms.token_address = mad.token_address
+		WHERE mpd.market_project_id = $1
+		  AND mp.debox_user_id = $2
+		  AND mpd.status <> 'removed'
+		ORDER BY
+			mpd.id,
+			(mpp.market_pool_id = mpd.default_market_pool_id) DESC,
+			mpp.is_primary DESC,
+			ms.captured_at DESC,
+			ms.id DESC
+	`, projectID, strings.TrimSpace(deboxUserID))
+	if err != nil {
+		return nil, fmt.Errorf("list latest market project snapshots: %w", err)
+	}
+	return values, nil
+}
+
 func (s *Store) ListMarketAssetIdentityEvidence(
 	ctx context.Context,
 	assetID int64,

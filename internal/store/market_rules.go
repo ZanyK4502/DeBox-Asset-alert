@@ -742,10 +742,26 @@ func (s *Store) ListMarketEvents(
 	beforeID int64,
 	limit int,
 ) ([]MarketEvent, error) {
-	limit = clamp(limit, 1, 500)
+	return s.ListMarketEventsFiltered(ctx, projectID, deboxUserID, MarketEventFilter{
+		BeforeID: beforeID,
+		Limit:    limit,
+	})
+}
+
+func (s *Store) ListMarketEventsFiltered(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+	filter MarketEventFilter,
+) ([]MarketEvent, error) {
+	filter.Limit = clamp(filter.Limit, 1, 500)
+	filter.ChainKey = strings.ToLower(strings.TrimSpace(filter.ChainKey))
+	filter.EventType = strings.ToLower(strings.TrimSpace(filter.EventType))
+	filter.WalletAddress = strings.ToLower(strings.TrimSpace(filter.WalletAddress))
 	events, err := collectMany[MarketEvent](ctx, s.db, `
 		SELECT
-			me.id, me.market_pool_id, me.chain_key, me.chain_id, me.token_address,
+			me.id, me.market_pool_id, me.market_asset_deployment_id,
+			me.chain_key, me.chain_id, me.token_address,
 			me.event_type, me.event_key, me.transaction_hash, me.transaction_index,
 			me.log_index, me.block_number, me.block_hash, me.wallet_address,
 			me.token_amount_raw::text AS token_amount_raw,
@@ -757,16 +773,45 @@ func (s *Store) ListMarketEvents(
 			me.source, me.confidence::text AS confidence, me.confirmed, me.reorged,
 			me.occurred_at, me.observed_at, me.raw_payload, me.metadata
 		FROM market_events me
-		JOIN market_projects mp
-		  ON mp.chain_id = me.chain_id
-		 AND mp.token_address = me.token_address
-		WHERE mp.id = $1 AND mp.debox_user_id = $2
+		JOIN market_projects mp ON mp.id = $1
+		WHERE mp.debox_user_id = $2
+		  AND (
+			(mp.chain_id = me.chain_id AND mp.token_address = me.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND (
+					me.market_asset_deployment_id = mad.id
+					OR (
+						me.chain_id = mad.chain_id
+						AND me.token_address = mad.token_address
+					)
+				  )
+			)
+		  )
 		  AND ($3::bigint = 0 OR me.id < $3)
+		  AND ($4::text = '' OR me.chain_key = $4)
+		  AND ($5::text = '' OR me.event_type = $5)
+		  AND ($6::bigint = 0 OR me.market_pool_id = $6)
+		  AND ($7::text = '' OR me.wallet_address = $7)
 		ORDER BY me.id DESC
-		LIMIT $4
-	`, projectID, deboxUserID, beforeID, limit)
+		LIMIT $8
+	`,
+		projectID,
+		strings.TrimSpace(deboxUserID),
+		filter.BeforeID,
+		filter.ChainKey,
+		filter.EventType,
+		filter.MarketPoolID,
+		filter.WalletAddress,
+		filter.Limit,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("list market events: %w", err)
+		return nil, fmt.Errorf("list filtered market events: %w", err)
 	}
 	return events, nil
 }
@@ -781,7 +826,8 @@ func (s *Store) ListMarketEventsAfter(
 	limit = clamp(limit, 1, 2000)
 	events, err := collectMany[MarketEvent](ctx, s.db, `
 		SELECT
-			me.id, me.market_pool_id, me.chain_key, me.chain_id, me.token_address,
+			me.id, me.market_pool_id, me.market_asset_deployment_id,
+			me.chain_key, me.chain_id, me.token_address,
 			me.event_type, me.event_key, me.transaction_hash, me.transaction_index,
 			me.log_index, me.block_number, me.block_hash, me.wallet_address,
 			me.token_amount_raw::text AS token_amount_raw,
@@ -793,10 +839,26 @@ func (s *Store) ListMarketEventsAfter(
 			me.source, me.confidence::text AS confidence, me.confirmed, me.reorged,
 			me.occurred_at, me.observed_at, me.raw_payload, me.metadata
 		FROM market_events me
-		JOIN market_projects mp
-		  ON mp.chain_id = me.chain_id
-		 AND mp.token_address = me.token_address
-		WHERE mp.id = $1 AND mp.debox_user_id = $2
+		JOIN market_projects mp ON mp.id = $1
+		WHERE mp.debox_user_id = $2
+		  AND (
+			(mp.chain_id = me.chain_id AND mp.token_address = me.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND (
+					me.market_asset_deployment_id = mad.id
+					OR (
+						me.chain_id = mad.chain_id
+						AND me.token_address = mad.token_address
+					)
+				  )
+			)
+		  )
 		  AND me.id > $3
 		ORDER BY me.id
 		LIMIT $4
