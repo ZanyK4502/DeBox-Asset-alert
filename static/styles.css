@@ -218,6 +218,10 @@ h2 {
   font-size: 13px;
 }
 
+.mini-grid span {
+  white-space: nowrap;
+}
+
 .section {
   margin-top: 16px;
   padding: 20px;
