@@ -79,6 +79,11 @@ assert.ok(
     app.includes("plan.market_project_limit"),
   "subscription status must display project-token usage and quota",
 );
+assert.ok(
+  app.includes('currentPlan()?.market_pool_mode === "multiple"') &&
+    app.includes('t("marketMultiPoolProfessionalOnly")'),
+  "market wizard must disable multi-pool scope outside Professional",
+);
 for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
   assert.ok(
     html.includes(`data-market-detail-tab="${tab}"`) &&

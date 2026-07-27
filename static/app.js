@@ -2607,6 +2607,19 @@ function updateWizardPoolSelection(checkbox) {
 function renderMarketWizardRuleEditor() {
   const select = $("marketWizardRuleTypeSelect");
   if (!select || !state.marketCatalog) return;
+  const poolScopeSelect = $("marketWizardPoolScopeSelect");
+  const previousPoolScope = poolScopeSelect.value;
+  const multiPoolAllowed = currentPlan()?.market_pool_mode === "multiple";
+  poolScopeSelect.innerHTML = `
+    <option value="primary">${escapeHtml(t("marketPrimaryPoolsOnly"))}</option>
+    <option value="all" ${multiPoolAllowed ? "" : "disabled"}>${escapeHtml(t("marketAllChosenPools"))} · ${escapeHtml(t("professional"))}</option>
+  `;
+  poolScopeSelect.value = multiPoolAllowed && previousPoolScope === "all"
+    ? "all"
+    : "primary";
+  $("marketWizardPoolScopeDescription").textContent = multiPoolAllowed
+    ? ""
+    : t("marketMultiPoolProfessionalOnly");
   const previous = select.value;
   const goalRules = new Set(MARKET_GOAL_RULES[state.marketGoal] || []);
   const definitions = (state.marketCatalog.rules || []).filter((rule) => goalRules.has(rule.code));
