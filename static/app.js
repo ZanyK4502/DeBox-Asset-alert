@@ -2421,8 +2421,7 @@ function renderMarketSelectedAsset() {
       } else {
         state.marketWizard.selectedChains.delete(checkbox.dataset.marketDeploymentChain);
       }
-      state.marketWizard.verification = null;
-      state.marketWizard.poolResult = null;
+      clearMarketWizardVerification();
       renderMarketSelectedAsset();
     });
   });
@@ -3242,6 +3241,14 @@ function setMarketVerifyLoading(loading) {
   button.textContent = t(button.dataset.i18n);
 }
 
+function clearMarketWizardVerification() {
+  state.marketWizard.verification = null;
+  state.marketWizard.poolResult = null;
+  state.marketWizard.poolSelections = {};
+  $("marketIdentityStatus").textContent = "";
+  $("marketPoolSelectionStatus").textContent = "";
+}
+
 function resetMarketWizard() {
   state.marketWizard = freshMarketWizard();
   state.marketGoal = "price";
@@ -3299,9 +3306,7 @@ function selectMarketCandidate(index) {
   state.marketWizard.selectedChains = new Set(
     (candidate.deployments || []).map((deployment) => deployment.chain_key),
   );
-  state.marketWizard.verification = null;
-  state.marketWizard.poolResult = null;
-  state.marketWizard.poolSelections = {};
+  clearMarketWizardVerification();
   state.marketWizard.step = 2;
   renderMarketWizard();
   $("marketWizard").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -3366,9 +3371,7 @@ async function resolveMarketManualContracts() {
     state.marketWizard.selectedChains = new Set(
       result.contracts.map((item) => item.chain_key),
     );
-    state.marketWizard.verification = null;
-    state.marketWizard.poolResult = null;
-    state.marketWizard.poolSelections = {};
+    clearMarketWizardVerification();
     state.marketWizard.step = 2;
     $("marketManualStatus").textContent = t("marketContractsResolved");
     renderMarketWizard();
@@ -3471,6 +3474,9 @@ function continueMarketWizardToRules() {
 
 function setMarketWizardStep(step) {
   if (step < 1 || step > state.marketWizard.step) return;
+  if (step < state.marketWizard.step && step <= 2) {
+    clearMarketWizardVerification();
+  }
   state.marketWizard.step = step;
   renderMarketWizard();
 }
