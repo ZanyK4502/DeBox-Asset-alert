@@ -1647,7 +1647,87 @@ select:focus {
   min-width: 0;
 }
 
-.market-candidate-identity strong small,
+.market-candidate-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.market-candidate-symbol {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 0.7em;
+  line-height: 1.2;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--muted) 18%, var(--surface-2));
+  cursor: help;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: pan-y;
+}
+
+.market-candidate-symbol::before,
+.market-candidate-symbol::after {
+  position: absolute;
+  left: 50%;
+  z-index: 4;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.market-candidate-symbol::before {
+  content: attr(data-symbol-tooltip);
+  bottom: calc(100% + 7px);
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface);
+  box-shadow: 0 5px 16px rgb(0 0 0 / 24%);
+  transform: translate(-50%, 3px);
+}
+
+.market-candidate-symbol::after {
+  content: "";
+  bottom: calc(100% + 2px);
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  transform: translate(-50%, 3px) rotate(45deg);
+}
+
+.market-candidate-symbol:hover::before,
+.market-candidate-symbol:hover::after,
+.market-candidate-symbol.is-tooltip-visible::before,
+.market-candidate-symbol.is-tooltip-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+.market-candidate-symbol:hover::before,
+.market-candidate-symbol.is-tooltip-visible::before {
+  transform: translate(-50%, 0);
+}
+
+.market-candidate-symbol:hover::after,
+.market-candidate-symbol.is-tooltip-visible::after {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
 .market-candidate-identity span,
 .market-candidate-chains {
   color: var(--muted);

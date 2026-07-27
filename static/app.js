@@ -2308,7 +2308,10 @@ function renderMarketAssetCandidates() {
             : escapeHtml((candidate.symbol || "?").slice(0, 1))}
         </span>
         <span class="market-candidate-identity">
-          <strong>${escapeHtml(candidate.name || candidate.symbol || "-")} <small>${escapeHtml(candidate.symbol || "-")}</small></strong>
+          <strong class="market-candidate-title">
+            ${escapeHtml(candidate.name || candidate.symbol || "-")}
+            <span class="market-candidate-symbol" data-symbol-tooltip="${escapeHtml(t("marketTokenSymbol"))}">${escapeHtml(candidate.symbol || "-")}</span>
+          </strong>
           <span>${escapeHtml(t(candidate.identity_source === "coingecko" ? "marketVerifiedByCoinGecko" : "marketSingleChainSource"))}</span>
           <span class="market-candidate-deployments">
             ${(candidate.deployments || []).map((deployment) => `
@@ -2321,7 +2324,13 @@ function renderMarketAssetCandidates() {
     `;
   }).join("");
   list.querySelectorAll("[data-market-candidate]").forEach((button) => {
-    button.addEventListener("click", () => selectMarketCandidate(Number(button.dataset.marketCandidate)));
+    button.addEventListener("click", () => {
+      if (button.dataset.marketSymbolLongPress === "true") {
+        delete button.dataset.marketSymbolLongPress;
+        return;
+      }
+      selectMarketCandidate(Number(button.dataset.marketCandidate));
+    });
   });
 }
 
@@ -3764,6 +3773,52 @@ async function deleteMarketLabel(labelId) {
   toast(t("holderLabelDeleted"));
 }
 
+function bindMarketSymbolTooltips() {
+  const list = $("marketAssetCandidates");
+  let pressTimer = null;
+  let pressTarget = null;
+  let pressStartX = 0;
+  let pressStartY = 0;
+
+  const clearPress = () => {
+    clearTimeout(pressTimer);
+    pressTimer = null;
+    pressTarget?.classList.remove("is-tooltip-visible");
+    pressTarget = null;
+  };
+
+  list.addEventListener("pointerdown", (event) => {
+    const target = event.target.closest(".market-candidate-symbol");
+    if (!target || event.pointerType === "mouse" || event.button !== 0) return;
+    clearPress();
+    pressTarget = target;
+    pressStartX = event.clientX;
+    pressStartY = event.clientY;
+    pressTimer = setTimeout(() => {
+      if (!pressTarget) return;
+      pressTarget.classList.add("is-tooltip-visible");
+      const card = pressTarget.closest("[data-market-candidate]");
+      card.dataset.marketSymbolLongPress = "true";
+      setTimeout(() => {
+        delete card.dataset.marketSymbolLongPress;
+      }, 800);
+    }, 300);
+  });
+
+  list.addEventListener("pointermove", (event) => {
+    if (!pressTarget) return;
+    if (Math.hypot(event.clientX - pressStartX, event.clientY - pressStartY) > 8) {
+      clearPress();
+    }
+  });
+  list.addEventListener("pointerup", clearPress);
+  list.addEventListener("pointercancel", clearPress);
+  list.addEventListener("pointerleave", clearPress);
+  list.addEventListener("contextmenu", (event) => {
+    if (event.target.closest(".market-candidate-symbol")) event.preventDefault();
+  });
+}
+
 function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
@@ -3813,6 +3868,7 @@ function bindEvents() {
   $("summaryEditBtn").addEventListener("click", editSummary);
   $("summaryDisableBtn").addEventListener("click", guardAsync(disableSummary));
   $("marketAssetSearchForm").addEventListener("submit", guardAsync(searchMarketAssets));
+  bindMarketSymbolTooltips();
   $("marketAssetSearchInput").addEventListener("input", () => {
     clearTimeout(marketSearchTimer);
     const query = $("marketAssetSearchInput").value.trim();
