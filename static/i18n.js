@@ -17,7 +17,7 @@ window.H5_I18N = Object.freeze({
     freePrice: "免费",
     refundNotice: "订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。",
     planSwitchNotice: "付费套餐未到期时仅支持续费同一套餐，到期后可选择其他套餐。",
-    paymentNotice: "使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。",
+    paymentNotice: "请使用 BNB Chain USDT 支付",
     payRenew: "支付 / 续费",
     permanentPlanButton: "永久套餐",
     permanentPlanActive: "永久白名单套餐，无需续费。",
