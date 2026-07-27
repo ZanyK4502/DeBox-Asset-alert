@@ -27,7 +27,7 @@ window.H5_I18N = Object.freeze({
     marketStepAsset: "选择项目币",
     marketStepAssetHint: "按名称搜索，找不到再用合约",
     marketStepChains: "确认链与合约",
-    marketStepChainsHint: "只把已验证的同一个币合并",
+    marketStepChainsHint: "再次确认需监控的项目币",
     marketStepPools: "选择交易池",
     marketStepPoolsHint: "每条链至少选择一个完整监控池",
     marketStepRules: "设置规则与通知",
