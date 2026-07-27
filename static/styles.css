@@ -903,6 +903,11 @@ select:focus {
   line-height: 1.45;
 }
 
+#marketIdentityStatus:empty,
+#marketPoolSelectionStatus:empty {
+  display: none;
+}
+
 .form-actions {
   grid-column: 1 / -1;
 }
