@@ -52,7 +52,7 @@ window.H5_I18N = Object.freeze({
     marketSingleChainSource: "单链候选，不能作为跨链同币证明",
     marketChainsCount: "{count} 条支持链",
     marketTokenSymbol: "代币简称",
-    marketManualIntro: "找不到项目币时，逐条填写“链 + 合约”。最多六条，每条链只能填写一个合约。",
+    marketManualIntro: "找不到项目币时，可逐条添加“链 + 合约”。每条链只能添加一次，最多添加六条链。",
     marketAddChainContract: "添加一条链 + 合约",
     marketCheckContracts: "读取并校验",
     marketManualHint: "系统会读取链上名称、简称，并检查这些合约能否证明是同一个币。",

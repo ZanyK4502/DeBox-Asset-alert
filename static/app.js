@@ -2335,27 +2335,36 @@ function renderMarketAssetCandidates() {
 
 function renderMarketManualRows() {
   const rows = state.marketWizard.manualRows;
-  $("marketManualRows").innerHTML = rows.map((row, index) => `
-    <div class="market-manual-row">
-      <label>
-        <span>${escapeHtml(t("chain"))}</span>
-        <select data-market-manual-chain="${index}">
-          ${state.chains.map((chain) => `
-            <option value="${escapeHtml(chain.key)}" ${chain.key === row.chainKey ? "selected" : ""}>${escapeHtml(chain.name)}</option>
-          `).join("")}
-        </select>
-      </label>
-      <label>
-        <span>${escapeHtml(t("marketTokenContract"))}</span>
-        <input data-market-manual-contract="${index}" value="${escapeHtml(row.contractAddress)}" placeholder="0x..." autocomplete="off" />
-      </label>
-      <button type="button" class="secondary compact danger" data-remove-market-manual="${index}" ${rows.length === 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
-    </div>
-  `).join("");
+  $("marketManualRows").innerHTML = rows.map((row, index) => {
+    const usedByOtherRows = new Set(
+      rows.filter((_, otherIndex) => otherIndex !== index).map((item) => item.chainKey),
+    );
+    const availableChains = state.chains.filter((chain) =>
+      chain.key === row.chainKey || !usedByOtherRows.has(chain.key)
+    );
+    return `
+      <div class="market-manual-row">
+        <label>
+          <span>${escapeHtml(t("chain"))}</span>
+          <select data-market-manual-chain="${index}">
+            ${availableChains.map((chain) => `
+              <option value="${escapeHtml(chain.key)}" ${chain.key === row.chainKey ? "selected" : ""}>${escapeHtml(chain.name)}</option>
+            `).join("")}
+          </select>
+        </label>
+        <label>
+          <span>${escapeHtml(t("marketTokenContract"))}</span>
+          <input data-market-manual-contract="${index}" value="${escapeHtml(row.contractAddress)}" placeholder="0x..." autocomplete="off" />
+        </label>
+        <button type="button" class="secondary compact danger" data-remove-market-manual="${index}" ${rows.length === 1 ? "disabled" : ""}>${escapeHtml(t("remove"))}</button>
+      </div>
+    `;
+  }).join("");
   $("addMarketManualRowBtn").disabled = rows.length >= state.chains.length;
   $("marketManualRows").querySelectorAll("[data-market-manual-chain]").forEach((select) => {
     select.addEventListener("change", () => {
       state.marketWizard.manualRows[Number(select.dataset.marketManualChain)].chainKey = select.value;
+      renderMarketManualRows();
     });
   });
   $("marketManualRows").querySelectorAll("[data-market-manual-contract]").forEach((input) => {
