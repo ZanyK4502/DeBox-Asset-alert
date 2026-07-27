@@ -33,7 +33,7 @@ window.H5_I18N = Object.freeze({
     marketStepRules: "设置规则与通知",
     marketStepRulesHint: "确认后一次创建监控",
     marketChooseAsset: "先找到要监控的项目币",
-    marketChooseAssetIntro: "推荐直接输入名称或简称。候选结果会展示 Logo、支持链和每条链的合约地址。",
+    marketChooseAssetIntro: "推荐直接输入币的名称或简称。候选结果会展示其详细信息（ 图标、所在链及其合约地址）",
     marketResetWizard: "重新开始",
     marketLookupMode: "项目币查找方式",
     marketSearchByName: "按名称搜索（推荐）",
