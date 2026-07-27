@@ -42,7 +42,7 @@ window.H5_I18N = Object.freeze({
     marketAssetSearchPlaceholder: "例如：Cake、USDT",
     search: "搜索",
     remove: "移除",
-    marketAssetSearchHint: "输入至少 2 个字符。搜索只负责找币，不会立即创建监控。",
+    marketAssetSearchHint: "至少输入两个字符",
     marketAssetSearching: "正在搜索项目币…",
     marketAssetSearchFound: "找到 {count} 个候选项目币，请核对名称、简称、链和合约。",
     marketAssetSearchFallback: "CoinGecko 暂时不可用，当前显示单链行情候选；跨链项目不能据此合并。",
