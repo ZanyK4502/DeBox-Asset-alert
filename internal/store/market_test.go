@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	pgxmock "github.com/pashagolub/pgxmock/v4"
 )
@@ -102,6 +103,81 @@ func TestCreateMarketProjectWithinQuotaIsAtomic(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+func TestDeleteArchivedMarketProjectDeletesOwnedArchive(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "delete-market-project-user"
+	const projectID int64 = 41
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT .* FROM market_projects").
+		WithArgs(projectID, userID).
+		WillReturnRows(marketProjectRowsForDelete(projectID, userID, "archived"))
+	mock.ExpectExec("DELETE FROM market_combination_rules").
+		WithArgs(projectID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM market_projects").
+		WithArgs(projectID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	if err := newWithDB(mock).DeleteArchivedMarketProject(
+		context.Background(), projectID, userID,
+	); err != nil {
+		t.Fatalf("DeleteArchivedMarketProject(): %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestDeleteArchivedMarketProjectRejectsActiveProject(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "active-market-project-user"
+	const projectID int64 = 42
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT .* FROM market_projects").
+		WithArgs(projectID, userID).
+		WillReturnRows(marketProjectRowsForDelete(projectID, userID, "active"))
+	mock.ExpectRollback()
+
+	err = newWithDB(mock).DeleteArchivedMarketProject(
+		context.Background(), projectID, userID,
+	)
+	if !errors.Is(err, ErrMarketProjectNotArchived) {
+		t.Fatalf("error = %v, want ErrMarketProjectNotArchived", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func marketProjectRowsForDelete(projectID int64, userID, status string) *pgxmock.Rows {
+	now := time.Now().UTC()
+	return pgxmock.NewRows([]string{
+		"id", "debox_user_id", "market_asset_id", "chain_key", "chain_id",
+		"token_address", "token_name", "token_symbol", "token_decimals",
+		"total_supply_raw", "status", "pause_reason", "four_meme_status",
+		"main_pool_id", "metadata", "last_discovered_at", "created_at", "updated_at",
+	}).AddRow(
+		projectID, userID, nil, "bsc", int64(56),
+		"0x1111111111111111111111111111111111111111", "Token", "TKN", int32(18),
+		nil, status, "", "not_applicable", nil, []byte(`{}`), nil, now, now,
+	)
 }
 
 func TestNormalizedJSONRejectsInvalidPayload(t *testing.T) {

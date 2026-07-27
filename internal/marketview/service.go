@@ -30,6 +30,7 @@ type Repository interface {
 	GetMarketProject(context.Context, int64, string) (*store.MarketProject, error)
 	SetMarketProjectStatus(context.Context, int64, string, string, string) (store.MarketProject, error)
 	ArchiveMarketProject(context.Context, int64, string) (store.MarketProject, error)
+	DeleteArchivedMarketProject(context.Context, int64, string) error
 	UpsertMarketPool(context.Context, store.UpsertMarketPoolParams) (store.MarketPool, error)
 	ListMarketProjectPoolViews(context.Context, int64, string) ([]store.MarketPoolView, error)
 	LatestMarketSnapshot(context.Context, int64, string, *int64) (*store.MarketSnapshot, error)
@@ -882,6 +883,14 @@ func (s *Service) ArchiveProject(
 	projectID int64,
 ) (store.MarketProject, error) {
 	return s.deps.Repository.ArchiveMarketProject(ctx, projectID, deboxUserID)
+}
+
+func (s *Service) DeleteArchivedProject(
+	ctx context.Context,
+	deboxUserID string,
+	projectID int64,
+) error {
+	return s.deps.Repository.DeleteArchivedMarketProject(ctx, projectID, deboxUserID)
 }
 
 func (s *Service) RestoreProject(

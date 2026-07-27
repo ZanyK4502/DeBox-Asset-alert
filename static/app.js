@@ -2717,6 +2717,7 @@ function renderMarketDetail() {
     project.status === "archived" ? "restoreMarketProject" : "archiveMarketProject",
   );
   $("archiveMarketProjectBtn").classList.toggle("danger", project.status !== "archived");
+  $("deleteMarketProjectBtn").hidden = project.status !== "archived";
   const snapshots = detail.snapshots?.length
     ? detail.snapshots
     : (detail.latest_snapshot ? [detail.latest_snapshot] : []);
@@ -3682,6 +3683,16 @@ async function archiveMarketProject() {
   toast(t("marketProjectArchived"));
 }
 
+async function deleteMarketProject() {
+  const project = state.marketDetail?.project;
+  if (!project?.id || project.status !== "archived") return;
+  if (!confirm(t("deleteMarketProjectConfirm"))) return;
+  await api(`/api/market/projects/${project.id}/permanent`, { method: "DELETE" });
+  state.marketDetail = null;
+  await loadMarketContext();
+  toast(t("marketProjectDeleted"));
+}
+
 async function updateMarketPool(poolId, selected, isPrimary) {
   const projectId = state.marketDetail?.project?.id;
   if (!projectId) return;
@@ -3989,6 +4000,7 @@ function bindEvents() {
     $("marketProjectsList").scrollIntoView({ behavior: "smooth", block: "center" });
   });
   $("archiveMarketProjectBtn").addEventListener("click", guardAsync(archiveMarketProject));
+  $("deleteMarketProjectBtn").addEventListener("click", guardAsync(deleteMarketProject));
   document.querySelectorAll("[data-market-detail-tab]").forEach((button) => {
     button.addEventListener("click", () => setMarketDetailTab(button.dataset.marketDetailTab));
   });

@@ -103,6 +103,7 @@ type MarketManagementService interface {
 	ListProjects(context.Context, string, bool) ([]store.MarketProject, error)
 	Project(context.Context, string, int64) (marketview.ProjectDetail, error)
 	ArchiveProject(context.Context, string, int64) (store.MarketProject, error)
+	DeleteArchivedProject(context.Context, string, int64) error
 	RestoreProject(context.Context, string, int64) (store.MarketProject, error)
 	SelectPool(context.Context, string, int64, marketview.PoolSelectionInput) (marketview.ProjectDetail, error)
 	CreateRule(context.Context, string, int64, marketview.CreateRuleInput) (store.MarketRule, error)
@@ -212,6 +213,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)
 	mux.HandleFunc("GET /api/market/projects/{project_id}", h.getMarketProject)
 	mux.HandleFunc("DELETE /api/market/projects/{project_id}", h.deleteMarketProject)
+	mux.HandleFunc("DELETE /api/market/projects/{project_id}/permanent", h.deleteArchivedMarketProject)
 	mux.HandleFunc("POST /api/market/projects/{project_id}/restore", h.postRestoreMarketProject)
 	mux.HandleFunc("PATCH /api/market/projects/{project_id}/pool", h.patchMarketProjectPool)
 	mux.HandleFunc("GET /api/market/projects/{project_id}/recommendations", h.getMarketRecommendations)

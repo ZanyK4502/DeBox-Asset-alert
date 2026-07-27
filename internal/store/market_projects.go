@@ -437,6 +437,54 @@ func (s *Store) ArchiveMarketProject(
 	})
 }
 
+func (s *Store) DeleteArchivedMarketProject(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+) error {
+	_, err := withTxValue(ctx, s.db, func(tx DBTX) (bool, error) {
+		project, err := collectOne[MarketProject](ctx, tx, `
+			SELECT `+marketProjectColumns+`
+			FROM market_projects
+			WHERE id = $1 AND debox_user_id = $2
+			FOR UPDATE
+		`, projectID, deboxUserID)
+		if isNoRows(err) {
+			return false, ErrNotFound
+		}
+		if err != nil {
+			return false, fmt.Errorf("lock archived market project for deletion: %w", err)
+		}
+		if project.Status != "archived" {
+			return false, ErrMarketProjectNotArchived
+		}
+
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM market_combination_rules
+			WHERE debox_user_id = $2
+			  AND id IN (
+				SELECT market_combination_rule_id
+				FROM market_combination_rule_projects
+				WHERE market_project_id = $1
+			  )
+		`, projectID, deboxUserID); err != nil {
+			return false, fmt.Errorf("delete archived market project combinations: %w", err)
+		}
+		command, err := tx.Exec(ctx, `
+			DELETE FROM market_projects
+			WHERE id = $1 AND debox_user_id = $2 AND status = 'archived'
+		`, projectID, deboxUserID)
+		if err != nil {
+			return false, fmt.Errorf("delete archived market project: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return false, ErrNotFound
+		}
+		return true, nil
+	})
+	return err
+}
+
 func (s *Store) UpdateMarketProjectsFourMemeStatus(
 	ctx context.Context,
 	chainID int64,

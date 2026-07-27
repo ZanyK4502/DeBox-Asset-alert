@@ -125,6 +125,20 @@ func (h handler) deleteMarketProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "project": project})
 }
 
+func (h handler) deleteArchivedMarketProject(w http.ResponseWriter, r *http.Request) {
+	session, projectID, ok := h.marketResourceRequest(w, r, "project_id")
+	if !ok {
+		return
+	}
+	if err := h.deps.Market.DeleteArchivedProject(
+		r.Context(), session.DeBoxUserID, projectID,
+	); err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h handler) postRestoreMarketProject(w http.ResponseWriter, r *http.Request) {
 	session, projectID, ok := h.marketResourceRequest(w, r, "project_id")
 	if !ok {
