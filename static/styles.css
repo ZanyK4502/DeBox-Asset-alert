@@ -291,6 +291,29 @@ button:disabled {
   opacity: 0.55;
 }
 
+#marketVerifyAndDiscoverBtn.is-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#marketVerifyAndDiscoverBtn.is-loading::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  border: 2px solid rgba(3, 16, 10, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: market-button-spin 700ms linear infinite;
+}
+
+@keyframes market-button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .plans {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

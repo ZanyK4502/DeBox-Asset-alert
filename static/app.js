@@ -3225,6 +3225,14 @@ function setMarketWizardBusy(busy) {
   });
 }
 
+function setMarketVerifyLoading(loading) {
+  const button = $("marketVerifyAndDiscoverBtn");
+  button.classList.toggle("is-loading", loading);
+  button.setAttribute("aria-busy", String(loading));
+  button.dataset.i18n = loading ? "marketVerifyingAndDiscovering" : "marketVerifyAndDiscover";
+  button.textContent = t(button.dataset.i18n);
+}
+
 function resetMarketWizard() {
   state.marketWizard = freshMarketWizard();
   state.marketGoal = "price";
@@ -3382,6 +3390,7 @@ async function verifyAndDiscoverMarketPools() {
     contract_address: deployment.contract_address,
   }));
   setMarketWizardBusy(true);
+  setMarketVerifyLoading(true);
   $("marketIdentityStatus").textContent = deployments.length > 1
     ? t("marketVerifyingIdentity")
     : t("marketSingleChainVerification");
@@ -3432,6 +3441,7 @@ async function verifyAndDiscoverMarketPools() {
     $("marketIdentityStatus").textContent = t("marketIdentityOrPoolsFailed");
     throw error;
   } finally {
+    setMarketVerifyLoading(false);
     setMarketWizardBusy(false);
   }
 }
