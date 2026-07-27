@@ -712,6 +712,7 @@ function renderSubscription(syncSummary = true) {
       <span>${escapeHtml(t("walletMetric", { used: state.entitlement.wallet_count, limit: plan.wallet_limit }))}</span>
       <span>${escapeHtml(t("ruleMetric", { used: state.entitlement.rule_count, limit: plan.rule_limit }))}</span>
       <span>${escapeHtml(t("groupMetric", { used: state.entitlement.group_count, limit: plan.group_limit }))}</span>
+      <span>${escapeHtml(t("marketProjectMetric", { used: state.entitlement.market_project_count, limit: plan.market_project_limit }))}</span>
     </div>
     <small class="muted">${escapeHtml(
       isFree

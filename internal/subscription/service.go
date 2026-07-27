@@ -24,6 +24,7 @@ type Repository interface {
 	CountUserWatchRules(context.Context, string) (int64, error)
 	CountUserWallets(context.Context, string) (int64, error)
 	CountNotificationGroups(context.Context, string) (int64, error)
+	CountMarketProjects(context.Context, string) (int64, error)
 	ListDailySummaryTargets(context.Context, int64) ([]store.DailySummaryTarget, error)
 	SetFreeWatchRule(context.Context, string, int64) (store.UserPreference, error)
 	CreateWatchRuleWithinQuota(context.Context, store.CreateWatchRuleParams, store.QuotaPolicy) (store.WatchRule, error)
@@ -67,22 +68,23 @@ type SummarySettings struct {
 }
 
 type Entitlement struct {
-	DeBoxUserID     string                    `json:"debox_user_id"`
-	Subscription    *store.Subscription       `json:"subscription"`
-	Plan            plans.Plan                `json:"plan"`
-	Permanent       bool                      `json:"permanent"`
-	PaidHistory     bool                      `json:"paid_history"`
-	FallbackFree    bool                      `json:"fallback_free"`
-	Preferences     store.UserPreference      `json:"preferences"`
-	DaysRemaining   int                       `json:"days_remaining"`
-	RuleCount       int64                     `json:"rule_count"`
-	WalletCount     int64                     `json:"wallet_count"`
-	GroupCount      int64                     `json:"group_count"`
-	Rules           []store.WatchRule         `json:"rules"`
-	ActiveRules     []RuleView                `json:"active_rules"`
-	PausedRules     []RuleView                `json:"paused_rules"`
-	Groups          []store.NotificationGroup `json:"groups"`
-	SummarySettings SummarySettings           `json:"summary_settings"`
+	DeBoxUserID        string                    `json:"debox_user_id"`
+	Subscription       *store.Subscription       `json:"subscription"`
+	Plan               plans.Plan                `json:"plan"`
+	Permanent          bool                      `json:"permanent"`
+	PaidHistory        bool                      `json:"paid_history"`
+	FallbackFree       bool                      `json:"fallback_free"`
+	Preferences        store.UserPreference      `json:"preferences"`
+	DaysRemaining      int                       `json:"days_remaining"`
+	RuleCount          int64                     `json:"rule_count"`
+	WalletCount        int64                     `json:"wallet_count"`
+	GroupCount         int64                     `json:"group_count"`
+	MarketProjectCount int64                     `json:"market_project_count"`
+	Rules              []store.WatchRule         `json:"rules"`
+	ActiveRules        []RuleView                `json:"active_rules"`
+	PausedRules        []RuleView                `json:"paused_rules"`
+	Groups             []store.NotificationGroup `json:"groups"`
+	SummarySettings    SummarySettings           `json:"summary_settings"`
 }
 
 func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlement, error) {
@@ -143,6 +145,10 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 	if err != nil {
 		return Entitlement{}, err
 	}
+	marketProjectCount, err := s.repository.CountMarketProjects(ctx, deboxUserID)
+	if err != nil {
+		return Entitlement{}, err
+	}
 	summaryTargets := []store.DailySummaryTarget{}
 	if activeSubscription != nil {
 		summaryTargets, err = s.repository.ListDailySummaryTargets(ctx, activeSubscription.ID)
@@ -152,22 +158,23 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 	}
 
 	return Entitlement{
-		DeBoxUserID:     deboxUserID,
-		Subscription:    activeSubscription,
-		Plan:            plan,
-		Permanent:       activeSubscription != nil && activeSubscription.IsPermanent == 1,
-		PaidHistory:     paidHistory,
-		FallbackFree:    fallbackFree,
-		Preferences:     preferences,
-		DaysRemaining:   daysRemaining(activeSubscription, s.now()),
-		RuleCount:       ruleCount,
-		WalletCount:     walletCount,
-		GroupCount:      groupCount,
-		Rules:           rules,
-		ActiveRules:     activeRules,
-		PausedRules:     pausedRules,
-		Groups:          groups,
-		SummarySettings: summarySettings(activeSubscription, summaryTargets),
+		DeBoxUserID:        deboxUserID,
+		Subscription:       activeSubscription,
+		Plan:               plan,
+		Permanent:          activeSubscription != nil && activeSubscription.IsPermanent == 1,
+		PaidHistory:        paidHistory,
+		FallbackFree:       fallbackFree,
+		Preferences:        preferences,
+		DaysRemaining:      daysRemaining(activeSubscription, s.now()),
+		RuleCount:          ruleCount,
+		WalletCount:        walletCount,
+		GroupCount:         groupCount,
+		MarketProjectCount: marketProjectCount,
+		Rules:              rules,
+		ActiveRules:        activeRules,
+		PausedRules:        pausedRules,
+		Groups:             groups,
+		SummarySettings:    summarySettings(activeSubscription, summaryTargets),
 	}, nil
 }
 

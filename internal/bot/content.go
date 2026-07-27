@@ -200,12 +200,15 @@ func (s *Service) subscriptionText(
 					"Current plan: %s<br/>"+
 					"Valid through: No expiration<br/>"+
 					"Monitoring rules: %d / %d<br/>"+
-					"Group alerts: %d / %d",
+					"Group alerts: %d / %d<br/>"+
+					"Token monitoring: %d / %d",
 				planName,
 				current.RuleCount,
 				current.Plan.RuleLimit,
 				current.GroupCount,
 				current.Plan.GroupLimit,
+				current.MarketProjectCount,
+				current.Plan.MarketProjectLimit,
 			), nil
 		}
 		return fmt.Sprintf(
@@ -213,12 +216,15 @@ func (s *Service) subscriptionText(
 				"当前方案：%s<br/>"+
 				"有效期：永久有效<br/>"+
 				"监控规则：%d / %d<br/>"+
-				"群通知：%d / %d",
+				"群通知：%d / %d<br/>"+
+				"项目币：%d / %d",
 			planName,
 			current.RuleCount,
 			current.Plan.RuleLimit,
 			current.GroupCount,
 			current.Plan.GroupLimit,
+			current.MarketProjectCount,
+			current.Plan.MarketProjectLimit,
 		), nil
 	}
 	if current.Permanent {
@@ -228,12 +234,15 @@ func (s *Service) subscriptionText(
 					"Current plan: %s<br/>"+
 					"Valid through: No expiration<br/>"+
 					"Monitoring rules: %d / %d<br/>"+
-					"Group alerts: %d / %d",
+					"Group alerts: %d / %d<br/>"+
+					"Token monitoring: %d / %d",
 				planName,
 				current.RuleCount,
 				current.Plan.RuleLimit,
 				current.GroupCount,
 				current.Plan.GroupLimit,
+				current.MarketProjectCount,
+				current.Plan.MarketProjectLimit,
 			), nil
 		}
 		return fmt.Sprintf(
@@ -241,12 +250,15 @@ func (s *Service) subscriptionText(
 				"当前方案：%s<br/>"+
 				"有效期：永久有效<br/>"+
 				"监控规则：%d / %d<br/>"+
-				"群通知：%d / %d",
+				"群通知：%d / %d<br/>"+
+				"项目币：%d / %d",
 			planName,
 			current.RuleCount,
 			current.Plan.RuleLimit,
 			current.GroupCount,
 			current.Plan.GroupLimit,
+			current.MarketProjectCount,
+			current.Plan.MarketProjectLimit,
 		), nil
 	}
 
@@ -261,7 +273,8 @@ func (s *Service) subscriptionText(
 				"Days remaining: %d<br/>"+
 				"Expires at: %s<br/>"+
 				"Monitoring rules: %d / %d<br/>"+
-				"Group alerts: %d / %d",
+				"Group alerts: %d / %d<br/>"+
+				"Token monitoring: %d / %d",
 			planName,
 			current.DaysRemaining,
 			escapeText(expiresAt),
@@ -269,6 +282,8 @@ func (s *Service) subscriptionText(
 			current.Plan.RuleLimit,
 			current.GroupCount,
 			current.Plan.GroupLimit,
+			current.MarketProjectCount,
+			current.Plan.MarketProjectLimit,
 		), nil
 	}
 	return fmt.Sprintf(
@@ -277,7 +292,8 @@ func (s *Service) subscriptionText(
 			"剩余天数：%d 天<br/>"+
 			"到期时间：%s<br/>"+
 			"监控规则：%d / %d<br/>"+
-			"群通知：%d / %d",
+			"群通知：%d / %d<br/>"+
+			"项目币：%d / %d",
 		planName,
 		current.DaysRemaining,
 		escapeText(expiresAt),
@@ -285,6 +301,8 @@ func (s *Service) subscriptionText(
 		current.Plan.RuleLimit,
 		current.GroupCount,
 		current.Plan.GroupLimit,
+		current.MarketProjectCount,
+		current.Plan.MarketProjectLimit,
 	), nil
 }
 

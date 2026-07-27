@@ -73,6 +73,12 @@ assert.ok(
   i18nSource.includes("已创建，请先删除此代币相关监控项目。"),
   "manual duplicate-token guidance is missing",
 );
+assert.ok(
+  app.includes('t("marketProjectMetric"') &&
+    app.includes("state.entitlement.market_project_count") &&
+    app.includes("plan.market_project_limit"),
+  "subscription status must display project-token usage and quota",
+);
 for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
   assert.ok(
     html.includes(`data-market-detail-tab="${tab}"`) &&

@@ -147,6 +147,7 @@ func TestPermanentEntitlementHasNoExpiryCountdown(t *testing.T) {
 	t.Parallel()
 
 	repository := &fakeRepository{
+		marketProjectCount: 3,
 		activeSubscription: &store.Subscription{
 			ID:                12,
 			DeBoxUserID:       "user-1",
@@ -168,6 +169,9 @@ func TestPermanentEntitlementHasNoExpiryCountdown(t *testing.T) {
 	}
 	if result.DaysRemaining != 0 {
 		t.Fatalf("DaysRemaining = %d, want 0 for permanent plan", result.DaysRemaining)
+	}
+	if result.MarketProjectCount != 3 {
+		t.Fatalf("MarketProjectCount = %d, want 3", result.MarketProjectCount)
 	}
 }
 
@@ -228,6 +232,7 @@ type fakeRepository struct {
 	ruleCount          int64
 	walletCount        int64
 	groupCount         int64
+	marketProjectCount int64
 
 	expiryFallbackCalled bool
 	setFreeCalls         int
@@ -320,6 +325,10 @@ func (f *fakeRepository) CountUserWallets(context.Context, string) (int64, error
 
 func (f *fakeRepository) CountNotificationGroups(context.Context, string) (int64, error) {
 	return f.groupCount, nil
+}
+
+func (f *fakeRepository) CountMarketProjects(context.Context, string) (int64, error) {
+	return f.marketProjectCount, nil
 }
 
 func (f *fakeRepository) SetFreeWatchRule(

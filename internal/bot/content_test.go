@@ -110,9 +110,10 @@ func TestPlanCopyExplainsCapabilitiesPaymentAndSwitchingRules(t *testing.T) {
 func TestSubscriptionCopyFormatsExpiryAsReadableUTC(t *testing.T) {
 	service, _, _, _ := newTestService(t)
 	service.deps.Subscriptions = fakeSubscriptions{value: subscription.Entitlement{
-		Plan:          plans.Plan{Code: plans.Standard, Name: "标准版", RuleLimit: 10},
-		Subscription:  &store.Subscription{ExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.FixedZone("test", 8*60*60))},
-		DaysRemaining: 24,
+		Plan:               plans.Plan{Code: plans.Standard, Name: "标准版", RuleLimit: 10, MarketProjectLimit: 1},
+		Subscription:       &store.Subscription{ExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.FixedZone("test", 8*60*60))},
+		DaysRemaining:      24,
+		MarketProjectCount: 1,
 	}}
 
 	chinese, err := service.subscriptionText(context.Background(), "user-id", "zh")
@@ -133,13 +134,18 @@ func TestSubscriptionCopyFormatsExpiryAsReadableUTC(t *testing.T) {
 	if strings.Contains(chinese, "T04:00:00Z") || strings.Contains(english, "T04:00:00Z") {
 		t.Fatal("subscription copy still exposes RFC3339 separators")
 	}
+	if !strings.Contains(chinese, "项目币：1 / 1") ||
+		!strings.Contains(english, "Token monitoring: 1 / 1") {
+		t.Fatalf("subscription copy is missing project-token usage: zh=%q en=%q", chinese, english)
+	}
 }
 
 func TestSubscriptionCopyShowsPermanentProfessionalPlan(t *testing.T) {
 	service, _, _, _ := newTestService(t)
 	service.deps.Subscriptions = fakeSubscriptions{value: subscription.Entitlement{
-		Plan:      plans.Plan{Code: plans.Professional, Name: "专业版", RuleLimit: 50, GroupLimit: 10},
-		Permanent: true,
+		Plan:               plans.Plan{Code: plans.Professional, Name: "专业版", RuleLimit: 50, GroupLimit: 10, MarketProjectLimit: 5},
+		Permanent:          true,
+		MarketProjectCount: 4,
 		Subscription: &store.Subscription{
 			PlanCode:    plans.Professional,
 			IsPermanent: 1,
@@ -163,6 +169,10 @@ func TestSubscriptionCopyShowsPermanentProfessionalPlan(t *testing.T) {
 		strings.Contains(english, "Days remaining") ||
 		strings.Contains(english, "Expires at") {
 		t.Fatalf("English permanent subscription copy = %q", english)
+	}
+	if !strings.Contains(chinese, "项目币：4 / 5") ||
+		!strings.Contains(english, "Token monitoring: 4 / 5") {
+		t.Fatalf("permanent subscription copy is missing project-token usage: zh=%q en=%q", chinese, english)
 	}
 }
 
