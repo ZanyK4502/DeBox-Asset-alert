@@ -44,7 +44,7 @@ func TestMarketRealtimeNotificationEscapesUserAndChainData(t *testing.T) {
 		t.Fatalf("notification is not HTML escaped: %s", text)
 	}
 	for _, expected := range []string{
-		"项目币监控提醒",
+		"代币监控提醒",
 		"链：Base",
 		"合约地址：0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		"DEX：uniswap v3",

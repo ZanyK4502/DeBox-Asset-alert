@@ -576,11 +576,11 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 	case errors.Is(err, store.ErrStageNotificationsDenied):
 		return errors.New("当前套餐不支持阶段提醒。")
 	case errors.Is(err, store.ErrMarketMonitoringDenied):
-		return errors.New("当前套餐不支持持续项目币监控。")
+		return errors.New("当前套餐不支持持续代币监控。")
 	case errors.Is(err, store.ErrMarketRuleTypeDenied):
 		return errors.New("当前套餐不支持该市场规则类型。")
 	case errors.Is(err, store.ErrMarketProjectLimitReached):
-		return fmt.Errorf("当前套餐最多支持 %d 个持续监控项目币。", plan.MarketProjectLimit)
+		return fmt.Errorf("当前套餐最多支持 %d 个持续监控代币。", plan.MarketProjectLimit)
 	case errors.Is(err, store.ErrMarketProjectExists):
 		return errors.New("已创建，请先删除此代币相关监控项目。")
 	case errors.Is(err, store.ErrMarketPoolMismatch):

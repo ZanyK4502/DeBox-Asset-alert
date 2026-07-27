@@ -417,7 +417,7 @@ func buildSummaryText(
 			"运行规则数：%d<br/>"+
 			"资产规则：%d，授权规则：%d，交互规则：%d<br/>"+
 			"事件概览：资产 %d，授权 %d，交互 %d<br/>"+
-			"市场监控：%d 个项目币，%d 条运行规则<br/>"+
+			"市场监控：%d 个代币，%d 条运行规则<br/>"+
 			"市场成交：买入 %d 笔（$%s），卖出 %d 笔（$%s），净买入 $%s<br/>"+
 			"市场事件：共 %d 条，流动性 %d 条，大户变化 %d 条<br/>"+
 			"异常提醒：%s<br/><br/>"+
@@ -461,7 +461,7 @@ func marketProjectSummariesText(
 		if english {
 			return "<b>Token project reports</b><br/>No active token projects."
 		}
-		return "<b>项目币日报</b><br/>暂无启用中的项目币。"
+		return "<b>代币日报</b><br/>暂无启用中的代币。"
 	}
 	lines := make([]string, 0, len(summaries)*5)
 	currentProjectID := int64(0)
@@ -475,7 +475,7 @@ func marketProjectSummariesText(
 			if name == "" {
 				name = item.TokenSymbol
 			}
-			title := name + " 项目币日报"
+			title := name + " 代币日报"
 			if english {
 				title = name + " token report"
 			}

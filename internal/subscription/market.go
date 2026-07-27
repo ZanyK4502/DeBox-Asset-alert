@@ -352,7 +352,7 @@ func (s *Service) RestoreMarketCombination(
 
 func validateMarketRule(params store.CreateMarketRuleParams) error {
 	if strings.TrimSpace(params.DeBoxUserID) == "" || params.MarketProjectID <= 0 {
-		return errors.New("市场规则缺少用户或项目币。")
+		return errors.New("市场规则缺少用户或代币。")
 	}
 	threshold, ok := new(big.Rat).SetString(strings.TrimSpace(params.ThresholdValue))
 	if !ok || threshold.Sign() < 0 {

@@ -17,11 +17,11 @@ import (
 func menuText(language string) string {
 	if normalizeLanguage(language) == "en" {
 		return "🤖 <b>DeBox Asset Alert</b><br/>" +
-			"Monitor on-chain addresses and BNB Chain project-token markets, and receive notifications through DeBox Asset Alert Bot.<br/><br/>" +
+			"Monitor on-chain addresses and BNB Chain token markets, and receive notifications through DeBox Asset Alert Bot.<br/><br/>" +
 			"✨ <b>Core Features:</b><br/><br/>" +
 			"🌐 <b>Multi-chain Monitoring:</b> Covers major blockchains and L2 networks<br/><br/>" +
 			"💰 <b>Balance Alerts:</b> Set custom low and high balance thresholds<br/><br/>" +
-			"📈 <b>Project-token Monitoring:</b> Track price, liquidity, volume, large trades, holders, and Four.meme activity<br/><br/>" +
+			"📈 <b>Token Monitoring:</b> Track price, liquidity, volume, large trades, holders, and Four.meme activity<br/><br/>" +
 			"⚡ <b>Real-time Alerts:</b> Key changes delivered in seconds, with stage alerts<br/><br/>" +
 			"📊 <b>Professional Mode:</b> Supports combination rule configuration<br/><br/>" +
 			"📢 <b>Multi-channel Notifications:</b> Supports group notifications and daily summaries<br/><br/>" +
@@ -29,11 +29,11 @@ func menuText(language string) string {
 			"Open the personal monitoring dashboard and securely sign in with your wallet signature 🔐"
 	}
 	return "🤖 <b>DeBox Asset Alert</b><br/>" +
-		"监控链上地址与 BNB Chain 项目币行情，通过 DeBox Asset Alert Bot 接收通知。<br/><br/>" +
+		"监控链上地址与 BNB Chain 代币行情，通过 DeBox Asset Alert Bot 接收通知。<br/><br/>" +
 		"✨ <b>核心功能支持：</b><br/><br/>" +
 		"🌐 <b>多链监控：</b>覆盖主流公链与 L2<br/><br/>" +
 		"💰 <b>余额预警：</b>自定义低余额与高余额阈值<br/><br/>" +
-		"📈 <b>项目币监控：</b>价格、流动性、成交量、大额买卖、大户与 Four.meme 动态<br/><br/>" +
+		"📈 <b>代币监控：</b>价格、流动性、成交量、大额买卖、大户与 Four.meme 动态<br/><br/>" +
 		"⚡ <b>实时提醒：</b>关键变动秒级推送与阶段提醒<br/><br/>" +
 		"📊 <b>专业模式：</b>支持组合规则配置<br/><br/>" +
 		"📢 <b>多端通知：</b>支持群通知与每日摘要推送<br/><br/>" +
@@ -53,10 +53,10 @@ func featuresText(language string) string {
 			"• High balance threshold: alerts once when the balance reaches or rises above the threshold; it alerts again only after falling below it and another rise<br/>" +
 			"• Approval change<br/>" +
 			"• Specified address interaction (Professional)<br/><br/>" +
-			"- BNB Chain project-token monitoring:<br/>" +
+			"- BNB Chain token monitoring:<br/>" +
 			"• Free users can query token and pool market data<br/>" +
-			"• Standard supports one project token, its primary pool, and price/liquidity/volume rules<br/>" +
-			"• Professional supports five project tokens, multiple pools, large trades, holder changes, Four.meme, group alerts, and combination rules<br/>" +
+			"• Standard supports one token, its primary pool, and price/liquidity/volume rules<br/>" +
+			"• Professional supports five tokens, multiple pools, large trades, holder changes, Four.meme, group alerts, and combination rules<br/>" +
 			"• Supported protocols: PancakeSwap V2/V3/Infinity and Four.meme<br/><br/>" +
 			"- Delivery modes:<br/>" +
 			"• Real-time: sends after each trigger<br/>" +
@@ -76,10 +76,10 @@ func featuresText(language string) string {
 		"• 高余额阈值：余额达到或高于阈值时提醒一次；持续高于不重复，回落至阈值以下后再次突破才重新提醒<br/>" +
 		"• 授权变化<br/>" +
 		"• 指定地址交互（专业版）<br/><br/>" +
-		"- BNB Chain 项目币监控：<br/>" +
+		"- BNB Chain 代币监控：<br/>" +
 		"• 免费版可查询代币与交易池行情<br/>" +
-		"• 标准版可持续监控 1 个项目币、主交易池及价格/流动性/成交量规则<br/>" +
-		"• 专业版可监控 5 个项目币、多交易池、大额买卖、大户变化、Four.meme、群通知和组合规则<br/>" +
+		"• 标准版可持续监控 1 个代币、主交易池及价格/流动性/成交量规则<br/>" +
+		"• 专业版可监控 5 个代币、多交易池、大额买卖、大户变化、Four.meme、群通知和组合规则<br/>" +
 		"• 支持 PancakeSwap V2/V3/Infinity 与 Four.meme<br/><br/>" +
 		"- 通知模式：<br/>" +
 		"• 实时提醒：每次触发后发送<br/>" +
@@ -103,7 +103,7 @@ func (s *Service) plansText(language string) string {
 		return "<b>Plans</b><br/><br/>" +
 			"Free: 1 wallet, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
 			fmt.Sprintf(
-				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 wallets, 10 total rules, real-time or stage alerts, 1 project token with primary-pool price/liquidity/volume monitoring, private delivery, and a unified private daily summary.<br/><br/>",
+				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 wallets, 10 total rules, real-time or stage alerts, 1 token with primary-pool price/liquidity/volume monitoring, private delivery, and a unified private daily summary.<br/><br/>",
 				standardMonthly.Price,
 				standard.Asset,
 				standardMonthly.Days,
@@ -115,7 +115,7 @@ func (s *Service) plansText(language string) string {
 				standardAnnual.Days,
 			) +
 			fmt.Sprintf(
-				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 total rules, 5 project tokens, multi-pool monitoring, large trades, holders and Four.meme, combination rules, alerts to 5 groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
+				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 total rules, 5 tokens, multi-pool monitoring, large trades, holders and Four.meme, combination rules, alerts to 5 groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
 				professionalMonthly.Price,
 				professional.Asset,
 				professionalMonthly.Days,
@@ -133,7 +133,7 @@ func (s *Service) plansText(language string) string {
 	return "<b>订阅方案</b><br/><br/>" +
 		"免费版：1 个钱包，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
 		fmt.Sprintf(
-			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个钱包，10 条总规则，支持实时或阶段提醒、1 个项目币及主交易池的价格/流动性/成交量监控、私聊通知和统一每日摘要。<br/><br/>",
+			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个钱包，10 条总规则，支持实时或阶段提醒、1 个代币及主交易池的价格/流动性/成交量监控、私聊通知和统一每日摘要。<br/><br/>",
 			standardMonthly.Price,
 			standard.Asset,
 			standardMonthly.Days,
@@ -145,7 +145,7 @@ func (s *Service) plansText(language string) string {
 			standardAnnual.Days,
 		) +
 		fmt.Sprintf(
-			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条总规则，支持 5 个项目币、多交易池、大额买卖、大户与 Four.meme、组合规则、5 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
+			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条总规则，支持 5 个代币、多交易池、大额买卖、大户与 Four.meme、组合规则、5 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
 			professionalMonthly.Price,
 			professional.Asset,
 			professionalMonthly.Days,
@@ -217,7 +217,7 @@ func (s *Service) subscriptionText(
 				"有效期：永久有效<br/>"+
 				"监控规则：%d / %d<br/>"+
 				"群通知：%d / %d<br/>"+
-				"项目币：%d / %d",
+				"代币：%d / %d",
 			planName,
 			current.RuleCount,
 			current.Plan.RuleLimit,
@@ -251,7 +251,7 @@ func (s *Service) subscriptionText(
 				"有效期：永久有效<br/>"+
 				"监控规则：%d / %d<br/>"+
 				"群通知：%d / %d<br/>"+
-				"项目币：%d / %d",
+				"代币：%d / %d",
 			planName,
 			current.RuleCount,
 			current.Plan.RuleLimit,
@@ -293,7 +293,7 @@ func (s *Service) subscriptionText(
 			"到期时间：%s<br/>"+
 			"监控规则：%d / %d<br/>"+
 			"群通知：%d / %d<br/>"+
-			"项目币：%d / %d",
+			"代币：%d / %d",
 		planName,
 		current.DaysRemaining,
 		escapeText(expiresAt),
@@ -433,9 +433,9 @@ func (s *Service) callbackText(
 		return "<b>汇总类通知详情</b><br/><br/>单条规则的阶段提醒事件与组合规则中的更多事件详情。", nil
 	case data == "alert:market":
 		if normalizeLanguage(language) == "en" {
-			return "<b>Project-token Monitoring</b><br/><br/>Query a BNB Chain token, choose its pools, and create price, liquidity, volume, large-trade, holder, or Four.meme rules in the dashboard.", nil
+			return "<b>Token Monitoring</b><br/><br/>Query a BNB Chain token, choose its pools, and create price, liquidity, volume, large-trade, holder, or Four.meme rules in the dashboard.", nil
 		}
-		return "<b>项目币监控</b><br/><br/>在监控面板输入 BNB Chain 代币合约，选择交易池后即可创建价格、流动性、成交量、大额买卖、大户或 Four.meme 规则。", nil
+		return "<b>代币监控</b><br/><br/>在监控面板输入 BNB Chain 代币合约，选择交易池后即可创建价格、流动性、成交量、大额买卖、大户或 Four.meme 规则。", nil
 	case data == "alert:swap":
 		if normalizeLanguage(language) == "en" {
 			return "<b>Swap</b><br/>Swap assets for USDT on BSC", nil
@@ -496,12 +496,12 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 		renewButton,
 	))
 	marketButton := buttonData(
-		choice(english, "Project-token Monitor", "项目币监控"),
+		choice(english, "Token Monitor", "代币监控"),
 		localizedCallbackData("market", language),
 	)
 	if s.publicAppURL != "" {
 		marketButton = buttonURL(
-			choice(english, "Project-token Monitor", "项目币监控"),
+			choice(english, "Token Monitor", "代币监控"),
 			s.publicAppURL+"#market",
 		)
 	}

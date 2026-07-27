@@ -60,20 +60,20 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Market Monitor</p>
-            <h2 data-i18n="marketTitle">项目币监控</h2>
+            <h2 data-i18n="marketTitle">代币监控</h2>
           </div>
           <span id="marketCapability" class="badge muted" data-i18n="notConnected">未连接</span>
         </div>
 
         <div id="marketWizard" class="market-wizard">
-          <div class="market-guide" role="list" aria-label="创建项目币监控步骤" data-i18n-aria-label="marketWizardSteps">
+          <div class="market-guide" role="list" aria-label="创建代币监控步骤" data-i18n-aria-label="marketWizardSteps">
             <button type="button" class="market-guide-step active" data-market-wizard-step="1" role="listitem">
               <strong>1</strong>
-              <span><b data-i18n="marketStepAsset">选择项目币</b><small data-i18n="marketStepAssetHint">按名称搜索，未找到选择按链与合约搜索</small></span>
+              <span><b data-i18n="marketStepAsset">选择代币</b><small data-i18n="marketStepAssetHint">按名称搜索，未找到选择按链与合约搜索</small></span>
             </button>
             <button type="button" class="market-guide-step" data-market-wizard-step="2" role="listitem">
               <strong>2</strong>
-              <span><b data-i18n="marketStepChains">确认链与合约</b><small data-i18n="marketStepChainsHint">再次确认需监控的项目币</small></span>
+              <span><b data-i18n="marketStepChains">确认链与合约</b><small data-i18n="marketStepChainsHint">再次确认需监控的代币</small></span>
             </button>
             <button type="button" class="market-guide-step" data-market-wizard-step="3" role="listitem">
               <strong>3</strong>
@@ -89,19 +89,19 @@
             <div class="market-wizard-head">
               <div>
                 <p class="eyebrow">Step 1</p>
-                <h3 data-i18n="marketChooseAsset">先找到要监控的项目币</h3>
+                <h3 data-i18n="marketChooseAsset">先找到要监控的代币</h3>
                 <p data-i18n="marketChooseAssetIntro">推荐直接输入币的名称或简称。候选结果会展示其详细信息（ 图标、所在链及其合约地址）</p>
               </div>
               <button id="marketWizardResetBtn" class="secondary compact" type="button" data-i18n="marketResetWizard">重新开始</button>
             </div>
-            <div class="segmented-control market-source-tabs" role="tablist" aria-label="项目币查找方式" data-i18n-aria-label="marketLookupMode">
+            <div class="segmented-control market-source-tabs" role="tablist" aria-label="代币查找方式" data-i18n-aria-label="marketLookupMode">
               <button id="marketNameModeBtn" class="segment active" type="button" role="tab" aria-selected="true" data-i18n="marketSearchByName">按名称搜索（推荐）</button>
               <button id="marketManualModeBtn" class="segment" type="button" role="tab" aria-selected="false" data-i18n="marketSearchByContract">按链 + 合约添加</button>
             </div>
             <div id="marketNameSearchPanel">
               <form id="marketAssetSearchForm" class="market-search-form">
                 <label data-i18n-label="marketAssetName">
-                  项目币名称或简称
+                  代币名称或简称
                   <div class="market-search-input">
                     <input id="marketAssetSearchInput" placeholder="例如：Cake、USDT" data-i18n-placeholder="marketAssetSearchPlaceholder" autocomplete="off" />
                     <button id="marketAssetSearchBtn" class="secondary" type="submit" data-i18n="search">搜索</button>
@@ -112,7 +112,7 @@
               <div id="marketAssetCandidates" class="market-candidate-list"></div>
             </div>
             <div id="marketManualPanel" hidden>
-              <p class="panel-intro" data-i18n="marketManualIntro">找不到项目币时，可逐条添加“链 + 合约”。每条链只能添加一次，最多添加六条链。</p>
+              <p class="panel-intro" data-i18n="marketManualIntro">找不到代币时，可逐条添加“链 + 合约”。每条链只能添加一次，最多添加六条链。</p>
               <div id="marketManualRows" class="market-manual-rows"></div>
               <div class="form-actions spread">
                 <button id="addMarketManualRowBtn" class="secondary" type="button" data-i18n="marketAddChainContract">添加一条链 + 合约</button>
@@ -126,7 +126,7 @@
             <div class="market-wizard-head">
               <div>
                 <p class="eyebrow">Step 2</p>
-                <h3 data-i18n="marketConfirmDeployments">确认项目币、链和合约</h3>
+                <h3 data-i18n="marketConfirmDeployments">确认代币、链和合约</h3>
                 <p data-i18n="marketConfirmDeploymentsIntro">勾选要监控的链，并逐条核对合约。跨链合并必须通过严格同币验证。</p>
               </div>
             </div>
@@ -279,7 +279,7 @@
                     <h3 data-i18n="marketChainsAndContracts">链与合约</h3>
                   </div>
                 </div>
-                <p class="field-note" data-i18n="marketChainsAndContractsHint">这里用于确认项目币在各条链上的真实合约。</p>
+                <p class="field-note" data-i18n="marketChainsAndContractsHint">这里用于确认代币在各条链上的真实合约。</p>
                 <div id="marketOverviewContracts" class="market-contract-list"></div>
               </article>
               <article class="market-panel">

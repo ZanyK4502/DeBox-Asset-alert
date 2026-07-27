@@ -30,7 +30,7 @@ func marketRealtimeText(delivery store.MarketNotificationDelivery) string {
 		return "⚠️ Market alert"
 	}
 	english := notificationLanguage(delivery.NotificationLanguage) == "en"
-	title := "📊 项目币监控提醒"
+	title := "📊 代币监控提醒"
 	if english {
 		title = "📊 Token market alert"
 	}
@@ -55,7 +55,7 @@ func marketRealtimeText(delivery store.MarketNotificationDelivery) string {
 
 func marketStageText(delivery store.MarketNotificationDelivery) string {
 	english := notificationLanguage(delivery.NotificationLanguage) == "en"
-	title, window, count, recent := "📈 项目币阶段提醒", "统计周期", "触发次数", "最近事件"
+	title, window, count, recent := "📈 代币阶段提醒", "统计周期", "触发次数", "最近事件"
 	if english {
 		title, window, count, recent = "📈 Token stage alert", "Window", "Trigger count", "Recent events"
 	}
@@ -161,7 +161,7 @@ func marketEventDetailLines(
 		project, chain, contract, event, amount, usd, price string
 		dex, pool, wallet, tx, occurred                     string
 	}{
-		project: "项目币", chain: "链", contract: "合约地址", event: "事件",
+		project: "代币", chain: "链", contract: "合约地址", event: "事件",
 		amount: "代币数量", usd: "金额", price: "成交价格", dex: "DEX",
 		pool: "交易池", wallet: "钱包", tx: "交易哈希", occurred: "发生时间",
 	}

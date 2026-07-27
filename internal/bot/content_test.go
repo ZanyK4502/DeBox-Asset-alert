@@ -134,9 +134,9 @@ func TestSubscriptionCopyFormatsExpiryAsReadableUTC(t *testing.T) {
 	if strings.Contains(chinese, "T04:00:00Z") || strings.Contains(english, "T04:00:00Z") {
 		t.Fatal("subscription copy still exposes RFC3339 separators")
 	}
-	if !strings.Contains(chinese, "项目币：1 / 1") ||
+	if !strings.Contains(chinese, "代币：1 / 1") ||
 		!strings.Contains(english, "Token monitoring: 1 / 1") {
-		t.Fatalf("subscription copy is missing project-token usage: zh=%q en=%q", chinese, english)
+		t.Fatalf("subscription copy is missing token usage: zh=%q en=%q", chinese, english)
 	}
 }
 
@@ -170,9 +170,9 @@ func TestSubscriptionCopyShowsPermanentProfessionalPlan(t *testing.T) {
 		strings.Contains(english, "Expires at") {
 		t.Fatalf("English permanent subscription copy = %q", english)
 	}
-	if !strings.Contains(chinese, "项目币：4 / 5") ||
+	if !strings.Contains(chinese, "代币：4 / 5") ||
 		!strings.Contains(english, "Token monitoring: 4 / 5") {
-		t.Fatalf("permanent subscription copy is missing project-token usage: zh=%q en=%q", chinese, english)
+		t.Fatalf("permanent subscription copy is missing token usage: zh=%q en=%q", chinese, english)
 	}
 }
 
@@ -233,8 +233,8 @@ func TestMenuIncludesLocalizedProjectTokenEntry(t *testing.T) {
 		language string
 		label    string
 	}{
-		{language: "zh", label: "项目币监控"},
-		{language: "en", label: "Project-token Monitor"},
+		{language: "zh", label: "代币监控"},
+		{language: "en", label: "Token Monitor"},
 	}
 	for _, test := range tests {
 		t.Run(test.language, func(t *testing.T) {
@@ -248,7 +248,7 @@ func TestMenuIncludesLocalizedProjectTokenEntry(t *testing.T) {
 					}
 				}
 			}
-			t.Fatalf("project-token entry missing from %s menu", test.language)
+			t.Fatalf("token entry missing from %s menu", test.language)
 		})
 	}
 }

@@ -56,7 +56,7 @@ func VerifyPair(
 	}
 	token, err := chain.ValidateAddress(tokenAddress)
 	if err != nil {
-		result.UnsupportedReason = "项目币合约地址无效。"
+		result.UnsupportedReason = "代币合约地址无效。"
 		return result
 	}
 	pool, err := chain.ValidateAddress(pair.PairAddress)
@@ -77,7 +77,7 @@ func VerifyPair(
 	result.Token0Address = token0
 	result.Token1Address = token1
 	if token0 != token && token1 != token {
-		result.UnsupportedReason = "链上交易池不包含当前项目币，已按可疑池处理。"
+		result.UnsupportedReason = "链上交易池不包含当前代币，已按可疑池处理。"
 		return result
 	}
 

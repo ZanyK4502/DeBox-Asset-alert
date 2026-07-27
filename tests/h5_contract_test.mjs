@@ -77,7 +77,7 @@ assert.ok(
   app.includes('t("marketProjectMetric"') &&
     app.includes("state.entitlement.market_project_count") &&
     app.includes("plan.market_project_limit"),
-  "subscription status must display project-token usage and quota",
+  "subscription status must display token usage and quota",
 );
 assert.ok(
   app.includes('currentPlan()?.market_pool_mode === "multiple"') &&

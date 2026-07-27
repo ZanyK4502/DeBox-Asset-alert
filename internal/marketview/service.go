@@ -1247,7 +1247,7 @@ func (s *Service) requireMarketQuery(ctx context.Context, deboxUserID string) er
 		return err
 	}
 	if !plan.MarketQuery {
-		return errors.New("当前套餐不支持项目币行情查询。")
+		return errors.New("当前套餐不支持代币行情查询。")
 	}
 	return nil
 }
@@ -1352,7 +1352,7 @@ func normalizeChain(value string) (string, error) {
 		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
 		return "", errors.New(
-			"项目币市场监控仅支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum 和 Optimism。",
+			"代币市场监控仅支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum 和 Optimism。",
 		)
 	}
 }

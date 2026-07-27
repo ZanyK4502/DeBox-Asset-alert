@@ -526,7 +526,7 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 
 	for _, expected := range []string{
 		"通知失败次数：2",
-		"市场监控：2 个项目币，7 条运行规则",
+		"市场监控：2 个代币，7 条运行规则",
 		"买入 4 笔（$1250.5）",
 		"卖出 3 笔（$400）",
 		"净买入 $+850.5",
@@ -589,7 +589,7 @@ func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
 	)
 
 	for _, expected := range []string{
-		"<b>ABC 项目币日报</b>",
+		"<b>ABC 代币日报</b>",
 		"<b>BNB Chain</b> · 0x1111111111111111111111111111111111111111",
 		"价格变化：$1 → $1.25 (+25.00%)",
 		"成交量：$15000.5（买入 4 笔 / 卖出 2 笔）",
@@ -601,7 +601,7 @@ func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
 			t.Fatalf("multichain summary missing %q:\n%s", expected, text)
 		}
 	}
-	if strings.Count(text, "<b>ABC 项目币日报</b>") != 1 {
+	if strings.Count(text, "<b>ABC 代币日报</b>") != 1 {
 		t.Fatalf("project heading should appear once:\n%s", text)
 	}
 }

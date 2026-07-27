@@ -33,7 +33,7 @@ var (
 	ErrInvalidWebhookDelivery     = errors.New("invalid webhook delivery")
 	ErrInvalidWebhookSubscription = errors.New("invalid webhook subscription")
 	ErrMarketMonitoringDenied     = errors.New("market monitoring is not allowed")
-	ErrMarketPoolMismatch         = errors.New("market pool does not belong to the project token")
+	ErrMarketPoolMismatch         = errors.New("market pool does not belong to the token")
 	ErrMarketProjectExists        = errors.New("market project already exists")
 	ErrMarketProjectLimitReached  = errors.New("market project limit reached")
 	ErrMarketProjectNotArchived   = errors.New("only archived market projects can be deleted")
