@@ -44,6 +44,12 @@ type marketRepository interface {
 		store.CreateMarketCombinationParams,
 		store.QuotaPolicy,
 	) (store.MarketCombinationRule, error)
+	RestoreMarketCombinationWithinQuota(
+		context.Context,
+		int64,
+		string,
+		store.QuotaPolicy,
+	) (store.MarketCombinationRule, error)
 }
 
 func (s *Service) CreateMarketProject(
@@ -265,6 +271,44 @@ func (s *Service) CreateMarketCombination(
 			return store.MarketCombinationRule{}, quotaError(err, plan, false)
 		}
 		return combination, nil
+	}
+	return store.MarketCombinationRule{}, store.ErrSubscriptionChanged
+}
+
+func (s *Service) RestoreMarketCombination(
+	ctx context.Context,
+	deboxUserID string,
+	combinationID int64,
+) (store.MarketCombinationRule, error) {
+	repository, ok := s.repository.(marketRepository)
+	if !ok {
+		return store.MarketCombinationRule{}, errors.New(
+			"market combination repository is unavailable",
+		)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := s.ActivePlan(ctx, deboxUserID)
+		if err != nil {
+			return store.MarketCombinationRule{}, err
+		}
+		if !plan.MarketCombination {
+			return store.MarketCombinationRule{}, errors.New(
+				"市场组合规则仅支持专业版。",
+			)
+		}
+		value, err := repository.RestoreMarketCombinationWithinQuota(
+			ctx,
+			combinationID,
+			deboxUserID,
+			quotaPolicy(plan),
+		)
+		if errors.Is(err, store.ErrSubscriptionChanged) {
+			continue
+		}
+		if err != nil {
+			return store.MarketCombinationRule{}, quotaError(err, plan, true)
+		}
+		return value, nil
 	}
 	return store.MarketCombinationRule{}, store.ErrSubscriptionChanged
 }

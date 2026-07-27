@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0012_multichain_market_collection.sql" {
-		t.Fatalf("latest migration = %q, want multi-chain market collection migration", got)
+	if got := names[len(names)-1]; got != "0013_multichain_market_rules.sql" {
+		t.Fatalf("latest migration = %q, want multi-chain market rules migration", got)
 	}
 
 	requiredTables := []string{
@@ -47,6 +47,7 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"market_rules",
 		"market_rule_deployments",
 		"market_rule_pools",
+		"market_rule_target_states",
 		"market_events",
 		"market_rule_events",
 		"market_holders",

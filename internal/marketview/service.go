@@ -140,27 +140,50 @@ type ProjectDetail struct {
 }
 
 type CreateRuleInput struct {
-	MarketPoolID          *int64 `json:"market_pool_id"`
-	RuleType              string `json:"rule_type"`
-	ThresholdValue        string `json:"threshold_value"`
-	ThresholdUnit         string `json:"threshold_unit"`
-	WindowMinutes         *int32 `json:"window_minutes"`
-	Sensitivity           string `json:"sensitivity"`
-	CooldownSeconds       int32  `json:"cooldown_seconds"`
-	DeliveryMode          string `json:"delivery_mode"`
-	CycleType             string `json:"cycle_type"`
-	CycleMinutes          int32  `json:"cycle_minutes"`
-	TriggerCountThreshold int64  `json:"trigger_count_threshold"`
-	NotificationChatID    string `json:"notification_chat_id"`
-	NotificationChatType  string `json:"notification_chat_type"`
-	NotificationLabel     string `json:"notification_label"`
-	NotificationLanguage  string `json:"notification_language"`
+	MarketPoolID               *int64  `json:"market_pool_id"`
+	DeploymentScope            string  `json:"deployment_scope"`
+	MarketProjectDeploymentIDs []int64 `json:"market_project_deployment_ids"`
+	PoolScope                  string  `json:"pool_scope"`
+	MarketProjectPoolIDs       []int64 `json:"market_project_pool_ids"`
+	CooldownScope              string  `json:"cooldown_scope"`
+	RuleType                   string  `json:"rule_type"`
+	ThresholdValue             string  `json:"threshold_value"`
+	ThresholdUnit              string  `json:"threshold_unit"`
+	WindowMinutes              *int32  `json:"window_minutes"`
+	Sensitivity                string  `json:"sensitivity"`
+	CooldownSeconds            int32   `json:"cooldown_seconds"`
+	DeliveryMode               string  `json:"delivery_mode"`
+	CycleType                  string  `json:"cycle_type"`
+	CycleMinutes               int32   `json:"cycle_minutes"`
+	TriggerCountThreshold      int64   `json:"trigger_count_threshold"`
+	NotificationChatID         string  `json:"notification_chat_id"`
+	NotificationChatType       string  `json:"notification_chat_type"`
+	NotificationLabel          string  `json:"notification_label"`
+	NotificationLanguage       string  `json:"notification_language"`
 }
 
 type PoolSelectionInput struct {
 	MarketPoolID int64 `json:"market_pool_id"`
 	Selected     bool  `json:"selected"`
 	IsPrimary    bool  `json:"is_primary"`
+}
+
+type CreateCombinationInput struct {
+	Note                 string                         `json:"note"`
+	CycleType            string                         `json:"cycle_type"`
+	CycleMinutes         int32                          `json:"cycle_minutes"`
+	NotificationChatID   string                         `json:"notification_chat_id"`
+	NotificationChatType string                         `json:"notification_chat_type"`
+	NotificationLabel    string                         `json:"notification_label"`
+	NotificationLanguage string                         `json:"notification_language"`
+	Members              []CreateCombinationMemberInput `json:"members"`
+}
+
+type CreateCombinationMemberInput struct {
+	SourceType           string `json:"source_type"`
+	WatchRuleID          *int64 `json:"watch_rule_id"`
+	MarketRuleID         *int64 `json:"market_rule_id"`
+	RequiredTriggerCount int64  `json:"required_trigger_count"`
 }
 
 type AddressLabelInput struct {
@@ -566,9 +589,16 @@ func (s *Service) CreateRule(
 		input.TriggerCountThreshold = 1
 	}
 	return s.deps.Entitlements.CreateMarketRule(ctx, store.CreateMarketRuleParams{
-		DeBoxUserID:           deboxUserID,
-		MarketProjectID:       projectID,
-		MarketPoolID:          input.MarketPoolID,
+		DeBoxUserID:     deboxUserID,
+		MarketProjectID: projectID,
+		MarketPoolID:    input.MarketPoolID,
+		DeploymentScope: input.DeploymentScope,
+		MarketProjectDeploymentIDs: append(
+			[]int64(nil), input.MarketProjectDeploymentIDs...,
+		),
+		PoolScope:             input.PoolScope,
+		MarketProjectPoolIDs:  append([]int64(nil), input.MarketProjectPoolIDs...),
+		CooldownScope:         input.CooldownScope,
 		RuleType:              strings.ToLower(strings.TrimSpace(input.RuleType)),
 		ThresholdValue:        strings.TrimSpace(input.ThresholdValue),
 		ThresholdUnit:         strings.ToLower(strings.TrimSpace(input.ThresholdUnit)),
@@ -609,6 +639,105 @@ func (s *Service) RestoreRule(
 	ruleID int64,
 ) (store.MarketRule, error) {
 	return s.deps.Entitlements.RestoreMarketRule(ctx, deboxUserID, ruleID)
+}
+
+func (s *Service) ListCombinations(
+	ctx context.Context,
+	deboxUserID string,
+) ([]store.MarketCombinationRule, error) {
+	repository, ok := s.deps.Repository.(interface {
+		ListMarketCombinationRules(
+			context.Context,
+			string,
+		) ([]store.MarketCombinationRule, error)
+	})
+	if !ok {
+		return nil, errors.New("market combination repository is unavailable")
+	}
+	return repository.ListMarketCombinationRules(ctx, deboxUserID)
+}
+
+func (s *Service) CreateCombination(
+	ctx context.Context,
+	deboxUserID string,
+	input CreateCombinationInput,
+) (store.MarketCombinationRule, error) {
+	chatType := strings.ToLower(strings.TrimSpace(input.NotificationChatType))
+	if chatType != "group" {
+		chatType = "private"
+	}
+	chatID := strings.TrimSpace(input.NotificationChatID)
+	if chatType == "private" {
+		chatID = deboxUserID
+	}
+	members := make([]store.CreateMarketCombinationMemberParams, len(input.Members))
+	for index, member := range input.Members {
+		members[index] = store.CreateMarketCombinationMemberParams{
+			SourceType:           strings.ToLower(strings.TrimSpace(member.SourceType)),
+			WatchRuleID:          member.WatchRuleID,
+			MarketRuleID:         member.MarketRuleID,
+			RequiredTriggerCount: member.RequiredTriggerCount,
+		}
+	}
+	return s.deps.Entitlements.CreateMarketCombination(
+		ctx,
+		store.CreateMarketCombinationParams{
+			DeBoxUserID:          deboxUserID,
+			Note:                 strings.TrimSpace(input.Note),
+			CycleType:            strings.ToLower(strings.TrimSpace(input.CycleType)),
+			CycleMinutes:         input.CycleMinutes,
+			NotificationChatID:   chatID,
+			NotificationChatType: chatType,
+			NotificationLabel:    strings.TrimSpace(input.NotificationLabel),
+			NotificationLanguage: input.NotificationLanguage,
+			Members:              members,
+		},
+	)
+}
+
+func (s *Service) ArchiveCombination(
+	ctx context.Context,
+	deboxUserID string,
+	combinationID int64,
+) error {
+	repository, available := s.deps.Repository.(interface {
+		ArchiveMarketCombinationRule(context.Context, int64, string) (bool, error)
+	})
+	if !available {
+		return errors.New("market combination repository is unavailable")
+	}
+	ok, err := repository.ArchiveMarketCombinationRule(
+		ctx, combinationID, deboxUserID,
+	)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Service) RestoreCombination(
+	ctx context.Context,
+	deboxUserID string,
+	combinationID int64,
+) (store.MarketCombinationRule, error) {
+	entitlements, ok := s.deps.Entitlements.(interface {
+		RestoreMarketCombination(
+			context.Context,
+			string,
+			int64,
+		) (store.MarketCombinationRule, error)
+	})
+	if !ok {
+		return store.MarketCombinationRule{}, errors.New(
+			"market combination entitlements are unavailable",
+		)
+	}
+	return entitlements.RestoreMarketCombination(
+		ctx, deboxUserID, combinationID,
+	)
 }
 
 func (s *Service) Recommendations(

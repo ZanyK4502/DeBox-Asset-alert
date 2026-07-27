@@ -44,6 +44,49 @@ type Repository interface {
 	ListMarketProjectPools(context.Context, int64, string) ([]store.MarketPool, error)
 }
 
+type multiChainRuleRepository interface {
+	ListMarketRuleTargets(
+		context.Context,
+		store.MarketRule,
+		store.MarketProject,
+	) ([]store.MarketRuleTarget, error)
+	LoadMarketRuleTargetState(
+		context.Context,
+		int64,
+		store.MarketRuleTarget,
+	) (store.MarketRuleTarget, bool, error)
+	UpdateMarketRuleTargetState(
+		context.Context,
+		int64,
+		store.MarketRuleTarget,
+		json.RawMessage,
+		bool,
+	) error
+	ListMarketSnapshotsForTarget(
+		context.Context,
+		store.MarketRuleTarget,
+		int,
+	) ([]store.MarketSnapshot, error)
+	ListMarketEventsForTarget(
+		context.Context,
+		store.MarketRuleTarget,
+		int64,
+		bool,
+		int,
+	) ([]store.MarketEvent, error)
+	ListMarketHoldersForTarget(
+		context.Context,
+		store.MarketRuleTarget,
+		int,
+	) ([]store.MarketHolder, error)
+	ListMarketAddressLabelsForTarget(
+		context.Context,
+		int64,
+		string,
+		store.MarketRuleTarget,
+	) ([]store.MarketAddressLabel, error)
+}
+
 type NotificationService interface {
 	SendNotification(chatID, chatType, text string) (string, error)
 }
@@ -236,6 +279,9 @@ func (service *Service) evaluateRule(
 	if project == nil || project.Status != "active" {
 		return 0, nil
 	}
+	if repository, ok := service.repository.(multiChainRuleRepository); ok {
+		return service.evaluateMultiChainRule(ctx, repository, rule, *project)
+	}
 	snapshots, err := service.repository.ListMarketSnapshots(
 		ctx,
 		project.ID,
@@ -394,6 +440,204 @@ func (service *Service) evaluateRule(
 		createdCount > 0,
 	)
 	return createdCount, err
+}
+
+func (service *Service) evaluateMultiChainRule(
+	ctx context.Context,
+	repository multiChainRuleRepository,
+	rule store.MarketRule,
+	project store.MarketProject,
+) (int64, error) {
+	targets, err := repository.ListMarketRuleTargets(ctx, rule, project)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	projectLastTriggeredAt := rule.LastTriggeredAt
+	for _, unresolved := range targets {
+		target, exists, err := repository.LoadMarketRuleTargetState(
+			ctx, rule.ID, unresolved,
+		)
+		if err != nil {
+			return total, err
+		}
+		targetRule := rule
+		targetRule.State = target.State
+		targetRule.MarketPoolID = target.MarketPoolID
+		if rule.CooldownScope == "chain" {
+			targetRule.LastTriggeredAt = target.LastTriggeredAt
+		} else {
+			targetRule.LastTriggeredAt = projectLastTriggeredAt
+		}
+		targetProject := project
+		targetProject.ChainKey = target.ChainKey
+		targetProject.ChainID = target.ChainID
+		targetProject.TokenAddress = target.TokenAddress
+		targetProject.TokenName = target.TokenName
+		targetProject.TokenSymbol = target.TokenSymbol
+		targetProject.TokenDecimals = target.TokenDecimals
+		targetProject.MainPoolID = target.MarketPoolID
+
+		snapshots, err := repository.ListMarketSnapshotsForTarget(ctx, target, 1000)
+		if err != nil {
+			return total, err
+		}
+		state := ruleState{}
+		if len(targetRule.State) > 0 {
+			_ = json.Unmarshal(targetRule.State, &state)
+		}
+		var events []store.MarketEvent
+		if !isSnapshotRule(targetRule.RuleType) {
+			if !exists {
+				latest, err := repository.ListMarketEventsForTarget(
+					ctx, target, 0, false, 1,
+				)
+				if err != nil {
+					return total, err
+				}
+				if len(latest) > 0 {
+					state.LastEventID = latest[0].ID
+				}
+				targetRule.State, _ = json.Marshal(state)
+			} else {
+				historical, err := repository.ListMarketEventsForTarget(
+					ctx, target, 0, false, 500,
+				)
+				if err != nil {
+					return total, err
+				}
+				current, err := repository.ListMarketEventsForTarget(
+					ctx, target, state.LastEventID, true, 2000,
+				)
+				if err != nil {
+					return total, err
+				}
+				events = mergeMarketEvents(state.LastEventID, historical, current)
+			}
+		}
+		var holders []store.MarketHolder
+		var labels []store.MarketAddressLabel
+		if isHolderRule(targetRule.RuleType) {
+			holders, err = repository.ListMarketHoldersForTarget(ctx, target, 100)
+			if err != nil {
+				return total, err
+			}
+			labels, err = repository.ListMarketAddressLabelsForTarget(
+				ctx, project.ID, rule.DeBoxUserID, target,
+			)
+			if err != nil {
+				return total, err
+			}
+		}
+		evaluation, err := Evaluate(EvaluationInput{
+			Rule:      targetRule,
+			Project:   targetProject,
+			Snapshots: snapshots,
+			Events:    events,
+			Holders:   holders,
+			Labels:    labels,
+			Now:       service.now(),
+		})
+		if err != nil {
+			return total, err
+		}
+		created, err := service.persistEvaluation(
+			ctx, targetRule, targetProject, snapshots, evaluation,
+		)
+		if err != nil {
+			return total, err
+		}
+		total += created
+		if created > 0 && rule.CooldownScope == "project" {
+			triggeredAt := service.now()
+			projectLastTriggeredAt = &triggeredAt
+		}
+		if err := repository.UpdateMarketRuleTargetState(
+			ctx, rule.ID, target, evaluation.State, created > 0,
+		); err != nil {
+			return total, err
+		}
+	}
+	_, err = service.repository.UpdateMarketRuleState(
+		ctx, rule.ID, rule.State, total > 0,
+	)
+	return total, err
+}
+
+func (service *Service) persistEvaluation(
+	ctx context.Context,
+	rule store.MarketRule,
+	project store.MarketProject,
+	snapshots []store.MarketSnapshot,
+	evaluation Evaluation,
+) (int64, error) {
+	var createdCount int64
+	for _, trigger := range evaluation.Triggers {
+		event := trigger.Event
+		if event == nil {
+			rawPayload, _ := json.Marshal(map[string]any{
+				"rule_type": rule.RuleType,
+				"current":   trigger.CurrentValue,
+				"previous":  trigger.PreviousValue,
+			})
+			value, _, err := service.repository.CreateMarketEvent(
+				ctx,
+				store.CreateMarketEventParams{
+					MarketPoolID: rule.MarketPoolID,
+					ChainKey:     project.ChainKey, ChainID: project.ChainID,
+					TokenAddress: project.TokenAddress,
+					EventType:    trigger.EventType, EventKey: trigger.EventKey,
+					PriceUSD: snapshotPrice(snapshots),
+					Source:   "market_rule_engine", Confidence: "1.0000",
+					Confirmed: true, OccurredAt: trigger.OccurredAt,
+					RawPayload: rawPayload, Metadata: trigger.Details,
+				},
+			)
+			if err != nil {
+				return createdCount, err
+			}
+			event = &value
+		}
+		status := "pending"
+		if rule.RuleScope == "combination" {
+			status = "combined"
+		} else if rule.DeliveryMode == "stage" {
+			status = "staged"
+		}
+		ruleEvent, inserted, err := service.repository.CreateMarketRuleEvent(
+			ctx,
+			store.CreateMarketRuleEventParams{
+				MarketRuleID: rule.ID, MarketEventID: event.ID,
+				TriggerKey:    trigger.EventKey,
+				PreviousValue: trigger.PreviousValue,
+				CurrentValue:  trigger.CurrentValue,
+				Note:          trigger.Note, Details: trigger.Details,
+				NotificationStatus: status,
+			},
+		)
+		if err != nil {
+			return createdCount, err
+		}
+		if !inserted {
+			continue
+		}
+		createdCount++
+		if status == "staged" {
+			if _, _, err := service.repository.RecordMarketStageTrigger(ctx, ruleEvent.ID); err != nil {
+				return createdCount, err
+			}
+		}
+		if _, err := service.repository.RecordMarketCombinationTrigger(
+			ctx,
+			store.RecordMarketCombinationTriggerParams{
+				SourceType: "market", MarketRuleEventID: &ruleEvent.ID,
+				OccurredAt: trigger.OccurredAt, Note: trigger.Note,
+			},
+		); err != nil {
+			return createdCount, err
+		}
+	}
+	return createdCount, nil
 }
 
 func isHolderRule(ruleType string) bool {

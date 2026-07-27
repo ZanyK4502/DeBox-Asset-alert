@@ -83,6 +83,22 @@ type MarketRulePoolScope struct {
 	CreatedAt           time.Time `db:"created_at" json:"created_at"`
 }
 
+type MarketRuleTarget struct {
+	TargetKey                 string          `db:"target_key" json:"target_key"`
+	MarketProjectDeploymentID *int64          `db:"market_project_deployment_id" json:"market_project_deployment_id,omitempty"`
+	MarketProjectPoolID       *int64          `db:"market_project_pool_id" json:"market_project_pool_id,omitempty"`
+	MarketPoolID              *int64          `db:"market_pool_id" json:"market_pool_id,omitempty"`
+	ChainKey                  string          `db:"chain_key" json:"chain_key"`
+	ChainID                   int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress              string          `db:"token_address" json:"token_address"`
+	TokenName                 string          `db:"token_name" json:"token_name"`
+	TokenSymbol               string          `db:"token_symbol" json:"token_symbol"`
+	TokenDecimals             int32           `db:"token_decimals" json:"token_decimals"`
+	State                     json.RawMessage `db:"state" json:"state"`
+	LastEvaluatedAt           *time.Time      `db:"last_evaluated_at" json:"last_evaluated_at,omitempty"`
+	LastTriggeredAt           *time.Time      `db:"last_triggered_at" json:"last_triggered_at,omitempty"`
+}
+
 type MarketCombinationRuleProject struct {
 	MarketCombinationRuleID int64     `db:"market_combination_rule_id" json:"market_combination_rule_id"`
 	MarketProjectID         int64     `db:"market_project_id" json:"market_project_id"`

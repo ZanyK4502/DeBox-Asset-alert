@@ -53,6 +53,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_rule_deployments",
 		"market_rule_events",
 		"market_rule_pools",
+		"market_rule_target_states",
 		"market_rules",
 		"market_scanned_blocks",
 		"market_snapshots",
@@ -99,7 +100,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 12 || latestName != "0012_multichain_market_collection.sql" {
+	if latestVersion != 13 || latestName != "0013_multichain_market_rules.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
 	}
 }

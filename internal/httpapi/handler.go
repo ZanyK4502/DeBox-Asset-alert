@@ -108,6 +108,10 @@ type MarketManagementService interface {
 	CreateRule(context.Context, string, int64, marketview.CreateRuleInput) (store.MarketRule, error)
 	DeleteRule(context.Context, string, int64) error
 	RestoreRule(context.Context, string, int64) (store.MarketRule, error)
+	ListCombinations(context.Context, string) ([]store.MarketCombinationRule, error)
+	CreateCombination(context.Context, string, marketview.CreateCombinationInput) (store.MarketCombinationRule, error)
+	ArchiveCombination(context.Context, string, int64) error
+	RestoreCombination(context.Context, string, int64) (store.MarketCombinationRule, error)
 	Recommendations(context.Context, string, int64) ([]marketrules.Recommendation, error)
 	Events(context.Context, string, int64, int64, int) ([]store.MarketEvent, error)
 	SaveAddressLabel(context.Context, string, int64, marketview.AddressLabelInput) (store.MarketAddressLabel, error)
@@ -210,6 +214,10 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/market/projects/{project_id}/rules", h.postMarketRule)
 	mux.HandleFunc("DELETE /api/market/rules/{rule_id}", h.deleteMarketRule)
 	mux.HandleFunc("POST /api/market/rules/{rule_id}/restore", h.postRestoreMarketRule)
+	mux.HandleFunc("GET /api/market/combinations", h.getMarketCombinations)
+	mux.HandleFunc("POST /api/market/combinations", h.postMarketCombination)
+	mux.HandleFunc("DELETE /api/market/combinations/{combination_id}", h.deleteMarketCombination)
+	mux.HandleFunc("POST /api/market/combinations/{combination_id}/restore", h.postRestoreMarketCombination)
 	mux.HandleFunc("POST /api/market/projects/{project_id}/labels", h.postMarketAddressLabel)
 	mux.HandleFunc("DELETE /api/market/labels/{label_id}", h.deleteMarketAddressLabel)
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)

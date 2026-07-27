@@ -26,6 +26,7 @@ var (
 	ErrInvalidMarketHolder        = errors.New("invalid market holder")
 	ErrInvalidMarketPool          = errors.New("invalid market pool")
 	ErrInvalidMarketProject       = errors.New("invalid market project")
+	ErrInvalidMarketRule          = errors.New("invalid market rule")
 	ErrInvalidMarketRuleEvent     = errors.New("invalid market rule event")
 	ErrInvalidMarketStatus        = errors.New("invalid market status")
 	ErrInvalidNotificationStatus  = errors.New("invalid notification status")

@@ -301,6 +301,21 @@ func (s *Store) CreateMarketCombinationWithinQuota(
 		if len(params.Members) < 2 {
 			return MarketCombinationRule{}, ErrInvalidCombinationRule
 		}
+		seenMembers := make(map[string]struct{}, len(params.Members))
+		for _, member := range params.Members {
+			key := member.SourceType + ":"
+			if member.SourceType == "watch" && member.WatchRuleID != nil {
+				key += fmt.Sprint(*member.WatchRuleID)
+			} else if member.SourceType == "market" && member.MarketRuleID != nil {
+				key += fmt.Sprint(*member.MarketRuleID)
+			} else {
+				return MarketCombinationRule{}, ErrInvalidCombinationRule
+			}
+			if _, exists := seenMembers[key]; exists {
+				return MarketCombinationRule{}, ErrInvalidCombinationRule
+			}
+			seenMembers[key] = struct{}{}
+		}
 		count, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {
 			return MarketCombinationRule{}, err
@@ -362,7 +377,172 @@ func (s *Store) CreateMarketCombinationWithinQuota(
 		if err != nil {
 			return MarketCombinationRule{}, err
 		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO market_combination_rule_projects (
+				market_combination_rule_id, market_project_id
+			)
+			SELECT DISTINCT $1::bigint, mr.market_project_id
+			FROM market_combination_members mcm
+			JOIN market_rules mr ON mr.id = mcm.market_rule_id
+			WHERE mcm.market_combination_rule_id = $1
+			  AND mcm.source_type = 'market'
+			ON CONFLICT DO NOTHING
+		`, combination.ID); err != nil {
+			return MarketCombinationRule{}, fmt.Errorf(
+				"bind market combination projects: %w",
+				err,
+			)
+		}
 		return combination, nil
+	})
+}
+
+func (s *Store) ListMarketCombinationRules(
+	ctx context.Context,
+	deboxUserID string,
+) ([]MarketCombinationRule, error) {
+	values, err := collectMany[MarketCombinationRule](ctx, s.db, `
+		SELECT `+marketCombinationRuleColumns+`
+		FROM market_combination_rules
+		WHERE debox_user_id = $1 AND enabled = 1
+		ORDER BY created_at DESC, id DESC
+	`, strings.TrimSpace(deboxUserID))
+	if err != nil {
+		return nil, fmt.Errorf("list market combinations: %w", err)
+	}
+	for index := range values {
+		values[index].Members, err = listMarketCombinationMembers(
+			ctx, s.db, values[index].ID,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return values, nil
+}
+
+func (s *Store) ArchiveMarketCombinationRule(
+	ctx context.Context,
+	combinationID int64,
+	deboxUserID string,
+) (bool, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE market_combination_rules
+		SET run_status = 'paused',
+		    pause_reason = 'user_archived',
+		    updated_at = NOW()
+		WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
+	`, combinationID, strings.TrimSpace(deboxUserID))
+	if err != nil {
+		return false, fmt.Errorf("archive market combination: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (s *Store) RestoreMarketCombinationWithinQuota(
+	ctx context.Context,
+	combinationID int64,
+	deboxUserID string,
+	policy QuotaPolicy,
+) (MarketCombinationRule, error) {
+	return withTxValue(ctx, s.db, func(tx DBTX) (MarketCombinationRule, error) {
+		if err := lockUser(ctx, tx, deboxUserID); err != nil {
+			return MarketCombinationRule{}, err
+		}
+		if err := requirePolicyPlan(ctx, tx, deboxUserID, policy); err != nil {
+			return MarketCombinationRule{}, err
+		}
+		if !policy.CombinationRules {
+			return MarketCombinationRule{}, ErrCombinationRulesDenied
+		}
+		value, err := collectOne[MarketCombinationRule](ctx, tx, `
+			SELECT `+marketCombinationRuleColumns+`
+			FROM market_combination_rules
+			WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
+			FOR UPDATE
+		`, combinationID, deboxUserID)
+		if isNoRows(err) {
+			return MarketCombinationRule{}, ErrNotFound
+		}
+		if err != nil {
+			return MarketCombinationRule{}, fmt.Errorf(
+				"lock market combination: %w",
+				err,
+			)
+		}
+		members, err := listMarketCombinationMembers(ctx, tx, combinationID)
+		if err != nil {
+			return MarketCombinationRule{}, err
+		}
+		if len(members) < 2 {
+			return MarketCombinationRule{}, ErrInvalidCombinationRule
+		}
+		for _, member := range members {
+			if err := validateMarketCombinationMember(
+				ctx,
+				tx,
+				deboxUserID,
+				CreateMarketCombinationMemberParams{
+					SourceType:           member.SourceType,
+					WatchRuleID:          member.WatchRuleID,
+					MarketRuleID:         member.MarketRuleID,
+					RequiredTriggerCount: member.RequiredTriggerCount,
+				},
+				policy,
+			); err != nil {
+				return MarketCombinationRule{}, err
+			}
+		}
+		if value.NotificationChatType == "group" && !policy.GroupNotification {
+			return MarketCombinationRule{}, ErrGroupNotificationDenied
+		}
+		if value.RunStatus == "active" {
+			value.Members = members
+			return value, nil
+		}
+		count, err := countActiveRuleSlots(ctx, tx, deboxUserID)
+		if err != nil {
+			return MarketCombinationRule{}, err
+		}
+		if count >= int64(policy.RuleLimit) {
+			return MarketCombinationRule{}, ErrRuleLimitReached
+		}
+		value, err = collectOne[MarketCombinationRule](ctx, tx, `
+			UPDATE market_combination_rules
+			SET run_status = 'active',
+			    pause_reason = '',
+			    aggregation_anchor_at = CASE
+			      WHEN cycle_type = 'fixed' THEN NOW()
+			      ELSE NULL
+			    END,
+			    updated_at = NOW()
+			WHERE id = $1
+			RETURNING `+marketCombinationRuleColumns,
+			combinationID,
+		)
+		if err != nil {
+			return MarketCombinationRule{}, fmt.Errorf(
+				"restore market combination: %w",
+				err,
+			)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE market_combination_windows
+			SET closed_at = NOW(),
+			    notification_status = CASE
+			      WHEN notification_status = 'collecting' THEN 'skipped'
+			      ELSE notification_status
+			    END,
+			    updated_at = NOW()
+			WHERE market_combination_rule_id = $1 AND closed_at IS NULL
+		`, combinationID); err != nil {
+			return MarketCombinationRule{}, fmt.Errorf(
+				"reset market combination window: %w",
+				err,
+			)
+		}
+		value.Members = members
+		return value, nil
 	})
 }
 
@@ -407,14 +587,16 @@ func validateMarketCombinationMember(
 		if member.WatchRuleID == nil || member.MarketRuleID != nil {
 			return ErrInvalidCombinationRule
 		}
-		var ruleType, chatType string
+		var ruleType, chatType, runStatus string
 		var enabled int32
 		err := db.QueryRow(ctx, `
-			SELECT rule_type, notification_chat_type, enabled
+			SELECT rule_type, notification_chat_type, enabled, run_status
 			FROM watch_rules
 			WHERE id = $1 AND debox_user_id = $2
-		`, *member.WatchRuleID, deboxUserID).Scan(&ruleType, &chatType, &enabled)
-		if isNoRows(err) || enabled != 1 {
+		`, *member.WatchRuleID, deboxUserID).Scan(
+			&ruleType, &chatType, &enabled, &runStatus,
+		)
+		if isNoRows(err) || enabled != 1 || runStatus != "active" {
 			return ErrInvalidCombinationRule
 		}
 		if err != nil {
@@ -427,14 +609,16 @@ func validateMarketCombinationMember(
 		if member.MarketRuleID == nil || member.WatchRuleID != nil {
 			return ErrInvalidCombinationRule
 		}
-		var ruleType string
+		var ruleType, runStatus string
 		var enabled int32
 		err := db.QueryRow(ctx, `
-			SELECT rule_type, enabled
+			SELECT rule_type, enabled, run_status
 			FROM market_rules
 			WHERE id = $1 AND debox_user_id = $2
-		`, *member.MarketRuleID, deboxUserID).Scan(&ruleType, &enabled)
-		if isNoRows(err) || enabled != 1 {
+		`, *member.MarketRuleID, deboxUserID).Scan(
+			&ruleType, &enabled, &runStatus,
+		)
+		if isNoRows(err) || enabled != 1 || runStatus != "active" {
 			return ErrInvalidCombinationRule
 		}
 		if err != nil {
@@ -551,9 +735,23 @@ func (s *Store) recordMarketCombinationMemberTrigger(
 		if err := tx.QueryRow(ctx, "SELECT NOW()").Scan(&now); err != nil {
 			return false, fmt.Errorf("get market combination time: %w", err)
 		}
-		window, err := currentMarketCombinationWindow(ctx, tx, config, now)
+		occurredAt := params.OccurredAt.UTC()
+		if occurredAt.After(now) {
+			occurredAt = now
+		}
+		if config.CycleType == "follow" &&
+			!occurredAt.Add(time.Duration(config.CycleMinutes)*time.Minute).After(now) {
+			return false, nil
+		}
+		window, err := currentMarketCombinationWindow(
+			ctx, tx, config, now, occurredAt,
+		)
 		if err != nil {
 			return false, err
+		}
+		if params.OccurredAt.Before(window.StartsAt) ||
+			!params.OccurredAt.Before(window.EndsAt) {
+			return false, nil
 		}
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO market_combination_trigger_events (
@@ -631,6 +829,7 @@ func currentMarketCombinationWindow(
 	tx DBTX,
 	config MarketCombinationRule,
 	now time.Time,
+	firstOccurredAt time.Time,
 ) (MarketCombinationWindow, error) {
 	window, err := collectOptional[MarketCombinationWindow](ctx, tx, `
 		SELECT `+marketCombinationWindowColumns+`
@@ -659,11 +858,15 @@ func currentMarketCombinationWindow(
 	if window != nil {
 		return *window, nil
 	}
+	windowReference := now
+	if config.CycleType == "follow" && !firstOccurredAt.IsZero() {
+		windowReference = firstOccurredAt
+	}
 	startsAt, endsAt := marketWindowBounds(
 		config.CycleType,
 		config.CycleMinutes,
 		config.AggregationAnchorAt,
-		now,
+		windowReference,
 	)
 	created, err := collectOne[MarketCombinationWindow](ctx, tx, `
 		INSERT INTO market_combination_windows (
@@ -715,6 +918,7 @@ func (s *Store) ProcessPendingWatchCombinationTriggers(
 		  ON mcr.id = mcm.market_combination_rule_id
 		 AND mcr.debox_user_id = rte.debox_user_id
 		WHERE mcr.enabled = 1 AND mcr.run_status = 'active'
+		  AND COALESCE(rte.occurred_at, rte.detected_at) >= mcr.created_at
 		  AND NOT EXISTS (
 			SELECT 1
 			FROM market_combination_trigger_events mcte

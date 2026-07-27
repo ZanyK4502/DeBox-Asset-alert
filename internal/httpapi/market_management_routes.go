@@ -252,6 +252,70 @@ func (h handler) postRestoreMarketRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rule": rule})
 }
 
+func (h handler) getMarketCombinations(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireMarketSession(w, r)
+	if !ok {
+		return
+	}
+	values, err := h.deps.Market.ListCombinations(r.Context(), session.DeBoxUserID)
+	if err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"combinations": values})
+}
+
+func (h handler) postMarketCombination(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireMarketSession(w, r)
+	if !ok {
+		return
+	}
+	var input marketview.CreateCombinationInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	value, err := h.deps.Market.CreateCombination(
+		r.Context(), session.DeBoxUserID, input,
+	)
+	if err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"combination": value})
+}
+
+func (h handler) deleteMarketCombination(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.marketResourceRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	if err := h.deps.Market.ArchiveCombination(
+		r.Context(), session.DeBoxUserID, combinationID,
+	); err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h handler) postRestoreMarketCombination(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.marketResourceRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	value, err := h.deps.Market.RestoreCombination(
+		r.Context(), session.DeBoxUserID, combinationID,
+	)
+	if err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "combination": value,
+	})
+}
+
 func (h handler) postMarketAddressLabel(w http.ResponseWriter, r *http.Request) {
 	session, projectID, ok := h.marketResourceRequest(w, r, "project_id")
 	if !ok {

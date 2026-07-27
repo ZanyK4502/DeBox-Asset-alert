@@ -44,25 +44,30 @@ const marketRuleEventColumns = `
 `
 
 type CreateMarketRuleParams struct {
-	DeBoxUserID           string
-	MarketProjectID       int64
-	MarketPoolID          *int64
-	RuleType              string
-	ThresholdValue        string
-	ThresholdUnit         string
-	WindowMinutes         *int32
-	Sensitivity           string
-	CooldownSeconds       int32
-	RuleScope             string
-	DeliveryMode          string
-	CycleType             string
-	CycleMinutes          int32
-	TriggerCountThreshold int64
-	NotificationChatID    string
-	NotificationChatType  string
-	NotificationLabel     string
-	NotificationLanguage  string
-	State                 json.RawMessage
+	DeBoxUserID                string
+	MarketProjectID            int64
+	MarketPoolID               *int64
+	DeploymentScope            string
+	MarketProjectDeploymentIDs []int64
+	PoolScope                  string
+	MarketProjectPoolIDs       []int64
+	CooldownScope              string
+	RuleType                   string
+	ThresholdValue             string
+	ThresholdUnit              string
+	WindowMinutes              *int32
+	Sensitivity                string
+	CooldownSeconds            int32
+	RuleScope                  string
+	DeliveryMode               string
+	CycleType                  string
+	CycleMinutes               int32
+	TriggerCountThreshold      int64
+	NotificationChatID         string
+	NotificationChatType       string
+	NotificationLabel          string
+	NotificationLanguage       string
+	State                      json.RawMessage
 }
 
 type CreateMarketEventParams struct {
@@ -157,6 +162,9 @@ func (s *Store) CreateMarketRuleWithinQuota(
 		if projectStatus == "archived" {
 			return MarketRule{}, ErrInvalidMarketStatus
 		}
+		if err := validateMarketRuleScopes(ctx, tx, params, policy); err != nil {
+			return MarketRule{}, err
+		}
 		if params.MarketPoolID != nil {
 			var linked, primary bool
 			if err := tx.QueryRow(ctx, `
@@ -203,7 +211,14 @@ func (s *Store) CreateMarketRuleWithinQuota(
 			}
 			params.State, _ = json.Marshal(map[string]int64{"last_event_id": lastEventID})
 		}
-		return createMarketRule(ctx, tx, params)
+		rule, err := createMarketRule(ctx, tx, params)
+		if err != nil {
+			return MarketRule{}, err
+		}
+		if err := createMarketRuleScopes(ctx, tx, rule.ID, params); err != nil {
+			return MarketRule{}, err
+		}
+		return rule, nil
 	})
 }
 
@@ -217,15 +232,16 @@ func createMarketRule(
 			debox_user_id, market_project_id, market_pool_id, rule_type,
 			threshold_value, threshold_unit, window_minutes, sensitivity,
 			cooldown_seconds, rule_scope, delivery_mode, cycle_type,
-			cycle_minutes, trigger_count_threshold, notification_chat_id,
+			cycle_minutes, trigger_count_threshold,
+			deployment_scope, pool_scope, cooldown_scope, notification_chat_id,
 			notification_chat_type, notification_label, notification_language,
 			aggregation_anchor_at, state
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18,
+			$13, $14, $15, $16, $17, $18, $19, $20, $21,
 			CASE WHEN $11 = 'stage' AND $12 = 'fixed' THEN NOW() ELSE NULL END,
-			$19
+			$22
 		)
 		RETURNING `+marketRuleColumns,
 		params.DeBoxUserID,
@@ -242,6 +258,9 @@ func createMarketRule(
 		params.CycleType,
 		params.CycleMinutes,
 		params.TriggerCountThreshold,
+		params.DeploymentScope,
+		params.PoolScope,
+		params.CooldownScope,
 		params.NotificationChatID,
 		params.NotificationChatType,
 		params.NotificationLabel,
@@ -252,6 +271,126 @@ func createMarketRule(
 		return MarketRule{}, fmt.Errorf("create market rule: %w", err)
 	}
 	return rule, nil
+}
+
+func validateMarketRuleScopes(
+	ctx context.Context,
+	db DBTX,
+	params CreateMarketRuleParams,
+	policy QuotaPolicy,
+) error {
+	if params.DeploymentScope == "selected" && len(params.MarketProjectDeploymentIDs) == 0 {
+		return ErrInvalidMarketRule
+	}
+	if params.PoolScope == "selected" && len(params.MarketProjectPoolIDs) == 0 &&
+		params.MarketPoolID == nil {
+		return ErrInvalidMarketRule
+	}
+	for _, deploymentID := range params.MarketProjectDeploymentIDs {
+		if deploymentID <= 0 {
+			return ErrInvalidMarketRule
+		}
+	}
+	for _, projectPoolID := range params.MarketProjectPoolIDs {
+		if projectPoolID <= 0 {
+			return ErrInvalidMarketRule
+		}
+	}
+	if !policy.MultiPoolMonitoring && params.PoolScope == "all" {
+		return ErrMarketPoolMismatch
+	}
+	for _, deploymentID := range uniquePositiveIDs(params.MarketProjectDeploymentIDs) {
+		var exists bool
+		if err := db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM market_project_deployments
+				WHERE id = $1 AND market_project_id = $2 AND status = 'active'
+			)
+		`, deploymentID, params.MarketProjectID).Scan(&exists); err != nil {
+			return fmt.Errorf("validate market rule deployment scope: %w", err)
+		}
+		if !exists {
+			return ErrInvalidMarketRule
+		}
+	}
+	for _, projectPoolID := range uniquePositiveIDs(params.MarketProjectPoolIDs) {
+		var selected, primary bool
+		if err := db.QueryRow(ctx, `
+			SELECT selected = 1, is_primary = 1
+			FROM market_project_pools
+			WHERE id = $1 AND market_project_id = $2
+		`, projectPoolID, params.MarketProjectID).Scan(&selected, &primary); err != nil {
+			if isNoRows(err) {
+				return ErrMarketPoolMismatch
+			}
+			return fmt.Errorf("validate market rule pool scope: %w", err)
+		}
+		if !selected || (!policy.MultiPoolMonitoring && !primary) {
+			return ErrMarketPoolMismatch
+		}
+	}
+	return nil
+}
+
+func createMarketRuleScopes(
+	ctx context.Context,
+	db DBTX,
+	ruleID int64,
+	params CreateMarketRuleParams,
+) error {
+	for _, deploymentID := range uniquePositiveIDs(params.MarketProjectDeploymentIDs) {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO market_rule_deployments (
+				market_rule_id, market_project_deployment_id
+			)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, ruleID, deploymentID); err != nil {
+			return fmt.Errorf("create market rule deployment scope: %w", err)
+		}
+	}
+	projectPoolIDs := append([]int64(nil), params.MarketProjectPoolIDs...)
+	if params.MarketPoolID != nil && len(projectPoolIDs) == 0 {
+		var projectPoolID int64
+		if err := db.QueryRow(ctx, `
+			SELECT id
+			FROM market_project_pools
+			WHERE market_project_id = $1 AND market_pool_id = $2
+		`, params.MarketProjectID, *params.MarketPoolID).Scan(&projectPoolID); err != nil {
+			if !isNoRows(err) {
+				return fmt.Errorf("resolve legacy market rule pool scope: %w", err)
+			}
+		} else {
+			projectPoolIDs = append(projectPoolIDs, projectPoolID)
+		}
+	}
+	for _, projectPoolID := range uniquePositiveIDs(projectPoolIDs) {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO market_rule_pools (market_rule_id, market_project_pool_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, ruleID, projectPoolID); err != nil {
+			return fmt.Errorf("create market rule pool scope: %w", err)
+		}
+	}
+	return nil
+}
+
+func uniquePositiveIDs(values []int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (s *Store) GetMarketRule(
@@ -353,6 +492,27 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		if rule.DeliveryMode == "stage" && !policy.StageNotifications {
 			return MarketRule{}, ErrStageNotificationsDenied
 		}
+		if !policy.MultiPoolMonitoring && rule.PoolScope == "all" {
+			return MarketRule{}, ErrMarketPoolMismatch
+		}
+		if !policy.MultiPoolMonitoring && rule.PoolScope == "selected" {
+			var nonPrimary bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					FROM market_rule_pools mrp
+					JOIN market_project_pools mpp
+					  ON mpp.id = mrp.market_project_pool_id
+					WHERE mrp.market_rule_id = $1
+					  AND mpp.is_primary <> 1
+				)
+			`, rule.ID).Scan(&nonPrimary); err != nil {
+				return MarketRule{}, fmt.Errorf("validate restored market pool scope: %w", err)
+			}
+			if nonPrimary {
+				return MarketRule{}, ErrMarketPoolMismatch
+			}
+		}
 		if rule.RunStatus == "active" {
 			return rule, nil
 		}
@@ -423,6 +583,7 @@ func (s *Store) ListEnabledMarketRules(
 			mr.threshold_unit, mr.window_minutes, mr.sensitivity,
 			mr.cooldown_seconds, mr.rule_scope, mr.delivery_mode,
 			mr.cycle_type, mr.cycle_minutes, mr.trigger_count_threshold,
+			mr.deployment_scope, mr.pool_scope, mr.cooldown_scope,
 			mr.notification_chat_id, mr.notification_chat_type,
 			mr.notification_label, mr.notification_language,
 			mr.enabled, mr.run_status, mr.pause_reason, mr.aggregation_anchor_at,
@@ -755,8 +916,28 @@ func (s *Store) CreateMarketRuleEvent(
 		JOIN market_projects mp ON mp.id = mr.market_project_id
 		JOIN market_events me ON me.id = $2
 		WHERE mr.id = $1
-		  AND mp.chain_id = me.chain_id
-		  AND mp.token_address = me.token_address
+		  AND (
+			(mp.chain_id = me.chain_id AND mp.token_address = me.token_address)
+			OR EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status = 'active'
+				  AND mad.chain_id = me.chain_id
+				  AND mad.token_address = me.token_address
+				  AND (
+					mr.deployment_scope = 'all'
+					OR EXISTS (
+						SELECT 1
+						FROM market_rule_deployments mrd
+						WHERE mrd.market_rule_id = mr.id
+						  AND mrd.market_project_deployment_id = mpd.id
+					)
+				  )
+			)
+		  )
 		  AND me.reorged = 0
 		ON CONFLICT DO NOTHING
 		RETURNING `+marketRuleEventColumns,
@@ -841,6 +1022,24 @@ func (s *Store) UpdateMarketRuleEventNotification(
 
 func normalizeMarketRuleParams(params *CreateMarketRuleParams) {
 	params.DeBoxUserID = strings.TrimSpace(params.DeBoxUserID)
+	params.DeploymentScope = strings.ToLower(strings.TrimSpace(params.DeploymentScope))
+	if params.DeploymentScope != "selected" {
+		params.DeploymentScope = "all"
+	}
+	params.PoolScope = strings.ToLower(strings.TrimSpace(params.PoolScope))
+	switch params.PoolScope {
+	case "primary", "all", "selected":
+	default:
+		if params.MarketPoolID != nil || len(params.MarketProjectPoolIDs) > 0 {
+			params.PoolScope = "selected"
+		} else {
+			params.PoolScope = "primary"
+		}
+	}
+	params.CooldownScope = strings.ToLower(strings.TrimSpace(params.CooldownScope))
+	if params.CooldownScope != "project" {
+		params.CooldownScope = "chain"
+	}
 	params.RuleType = strings.ToLower(strings.TrimSpace(params.RuleType))
 	if strings.TrimSpace(params.ThresholdValue) == "" {
 		params.ThresholdValue = "0"

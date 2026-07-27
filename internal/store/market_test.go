@@ -41,6 +41,9 @@ func TestNormalizeMarketRuleParamsUsesStableDefaults(t *testing.T) {
 	normalizeMarketRuleParams(&params)
 
 	if params.RuleType != "market_price_above" ||
+		params.DeploymentScope != "all" ||
+		params.PoolScope != "primary" ||
+		params.CooldownScope != "chain" ||
 		params.ThresholdValue != "0" ||
 		params.ThresholdUnit != "usd" ||
 		params.Sensitivity != "balanced" ||
