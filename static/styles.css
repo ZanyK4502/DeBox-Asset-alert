@@ -1645,6 +1645,11 @@ select:focus {
   border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
 }
 
+.market-candidate-card.created {
+  filter: none;
+  border-color: var(--line);
+}
+
 .market-token-logo {
   display: grid;
   place-items: center;

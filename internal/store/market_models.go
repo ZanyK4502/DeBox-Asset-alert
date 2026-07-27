@@ -118,6 +118,8 @@ type MarketProject struct {
 	ID                        int64           `db:"id" json:"id"`
 	DeBoxUserID               string          `db:"debox_user_id" json:"debox_user_id"`
 	MarketAssetID             *int64          `db:"market_asset_id" json:"market_asset_id,omitempty"`
+	IdentitySource            string          `db:"identity_source" json:"identity_source,omitempty"`
+	CanonicalAssetID          string          `db:"canonical_asset_id" json:"canonical_asset_id,omitempty"`
 	MarketAssetDeploymentID   *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
 	MarketProjectDeploymentID *int64          `db:"market_project_deployment_id" json:"market_project_deployment_id,omitempty"`
 	ChainKey                  string          `db:"chain_key" json:"chain_key"`

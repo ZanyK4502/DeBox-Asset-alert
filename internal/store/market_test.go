@@ -180,6 +180,45 @@ func marketProjectRowsForDelete(projectID int64, userID, status string) *pgxmock
 	)
 }
 
+func TestListMarketProjectsIncludesCanonicalIdentityForDuplicateDetection(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "market-list-user"
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT listed\\.\\*").
+		WithArgs(userID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "debox_user_id", "market_asset_id", "chain_key", "chain_id",
+			"token_address", "token_name", "token_symbol", "token_decimals",
+			"total_supply_raw", "status", "pause_reason", "four_meme_status",
+			"main_pool_id", "metadata", "last_discovered_at", "created_at", "updated_at",
+			"identity_source", "canonical_asset_id",
+		}).AddRow(
+			int64(9), userID, nil, "bsc", int64(56),
+			"0x1111111111111111111111111111111111111111", "Token", "TKN", int32(18),
+			nil, "archived", "", "not_applicable", nil, []byte(`{}`), nil, now, now,
+			"coingecko", "token-id",
+		))
+
+	projects, err := newWithDB(mock).ListMarketProjects(context.Background(), userID, true)
+	if err != nil {
+		t.Fatalf("ListMarketProjects(): %v", err)
+	}
+	if len(projects) != 1 || projects[0].IdentitySource != "coingecko" ||
+		projects[0].CanonicalAssetID != "token-id" || projects[0].Status != "archived" {
+		t.Fatalf("projects = %+v", projects)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestNormalizedJSONRejectsInvalidPayload(t *testing.T) {
 	t.Parallel()
 

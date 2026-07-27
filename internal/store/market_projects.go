@@ -226,14 +226,22 @@ func (s *Store) ListMarketProjects(
 	includeArchived bool,
 ) ([]MarketProject, error) {
 	query := `
-		SELECT ` + marketProjectColumns + `
-		FROM market_projects
-		WHERE debox_user_id = $1
+		SELECT listed.*,
+		       COALESCE(asset.identity_source, '') AS identity_source,
+		       COALESCE(asset.canonical_asset_id, '') AS canonical_asset_id
+		FROM (
+			SELECT ` + marketProjectColumns + `
+			FROM market_projects
+			WHERE debox_user_id = $1
 	`
 	if !includeArchived {
 		query += " AND status <> 'archived'"
 	}
-	query += " ORDER BY created_at DESC, id DESC"
+	query += `
+		) listed
+		LEFT JOIN market_assets asset ON asset.id = listed.market_asset_id
+		ORDER BY listed.created_at DESC, listed.id DESC
+	`
 	projects, err := collectMany[MarketProject](ctx, s.db, query, deboxUserID)
 	if err != nil {
 		return nil, fmt.Errorf("list market projects: %w", err)

@@ -96,18 +96,6 @@ func (s *Store) CreateMultiChainMarketProjectWithinQuota(
 		if policy.MarketProjectLimit <= 0 {
 			return MarketProject{}, ErrMarketMonitoringDenied
 		}
-		count, err := queryCount(ctx, tx, `
-			SELECT COUNT(*)
-			FROM market_projects
-			WHERE debox_user_id = $1 AND status <> 'archived'
-		`, params.DeBoxUserID)
-		if err != nil {
-			return MarketProject{}, fmt.Errorf("count market projects: %w", err)
-		}
-		if count >= int64(policy.MarketProjectLimit) {
-			return MarketProject{}, ErrMarketProjectLimitReached
-		}
-
 		asset, err := upsertMarketAsset(ctx, tx, params)
 		if err != nil {
 			return MarketProject{}, err
@@ -124,6 +112,17 @@ func (s *Store) CreateMultiChainMarketProjectWithinQuota(
 		}
 		if exists {
 			return MarketProject{}, ErrMarketProjectExists
+		}
+		count, err := queryCount(ctx, tx, `
+			SELECT COUNT(*)
+			FROM market_projects
+			WHERE debox_user_id = $1 AND status <> 'archived'
+		`, params.DeBoxUserID)
+		if err != nil {
+			return MarketProject{}, fmt.Errorf("count market projects: %w", err)
+		}
+		if count >= int64(policy.MarketProjectLimit) {
+			return MarketProject{}, ErrMarketProjectLimitReached
 		}
 
 		primaryDeployment := params.Deployments[0]

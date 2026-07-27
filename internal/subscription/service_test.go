@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,22 @@ import (
 )
 
 const allowlistedWallet = "0xcba3fce9d49ce5d7870443f324a8dd56a5788bfc"
+
+func TestQuotaErrorPrefersExistingMarketProjectMessage(t *testing.T) {
+	t.Parallel()
+
+	err := quotaError(
+		store.ErrMarketProjectExists,
+		plans.Plan{MarketProjectLimit: 1},
+		false,
+	)
+	if err == nil || err.Error() != "已创建，请先删除此代币相关监控项目。" {
+		t.Fatalf("quotaError() = %v", err)
+	}
+	if errors.Is(err, store.ErrMarketProjectLimitReached) {
+		t.Fatalf("existing project was reported as a quota limit: %v", err)
+	}
+}
 
 func TestEntitlementPausesExpiredPaidRulesButKeepsSelectedFreeRule(t *testing.T) {
 	t.Parallel()

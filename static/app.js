@@ -2308,10 +2308,11 @@ function renderMarketAssetCandidates() {
     return;
   }
   list.innerHTML = candidates.map((candidate, index) => {
+    const existingProject = existingMarketProjectForCandidate(candidate);
     const selected = state.marketWizard.selectedAsset?.canonical_asset_id ===
       candidate.canonical_asset_id;
     return `
-      <button type="button" class="market-candidate-card${selected ? " selected" : ""}" data-market-candidate="${index}">
+      <button type="button" class="market-candidate-card${selected ? " selected" : ""}${existingProject ? " created" : ""}" data-market-candidate="${index}" ${existingProject ? "disabled" : ""}>
         <span class="market-token-logo">
           ${candidate.logo_url
             ? `<img src="${escapeHtml(candidate.logo_url)}" alt="" loading="lazy" />`
@@ -2328,7 +2329,9 @@ function renderMarketAssetCandidates() {
             `).join("")}
           </span>
         </span>
-        <span class="market-candidate-chains">${escapeHtml(t("marketChainsCount", { count: candidate.deployments?.length || 0 }))}</span>
+        <span class="market-candidate-chains">${escapeHtml(existingProject
+          ? t("marketAlreadyCreated")
+          : t("marketChainsCount", { count: candidate.deployments?.length || 0 }))}</span>
       </button>
     `;
   }).join("");
@@ -2341,6 +2344,26 @@ function renderMarketAssetCandidates() {
       selectMarketCandidate(Number(button.dataset.marketCandidate));
     });
   });
+}
+
+function existingMarketProjectForCandidate(candidate) {
+  if (!candidate) return null;
+  const source = String(candidate.identity_source || "").toLowerCase();
+  const canonicalID = String(candidate.canonical_asset_id || "").toLowerCase();
+  const deployments = candidate.deployments || [];
+  return state.marketProjects.find((project) => {
+    if (source && canonicalID &&
+        String(project.identity_source || "").toLowerCase() === source &&
+        String(project.canonical_asset_id || "").toLowerCase() === canonicalID) {
+      return true;
+    }
+    return deployments.some((deployment) =>
+      String(project.chain_key || "").toLowerCase() ===
+        String(deployment.chain_key || "").toLowerCase() &&
+      String(project.token_address || "").toLowerCase() ===
+        String(deployment.contract_address || "").toLowerCase()
+    );
+  }) || null;
 }
 
 function renderMarketManualRows() {
@@ -3349,6 +3372,10 @@ async function searchMarketAssets(event) {
 function selectMarketCandidate(index) {
   const candidate = state.marketWizard.searchResult?.candidates?.[index];
   if (!candidate) return;
+  if (existingMarketProjectForCandidate(candidate)) {
+    toast(t("marketAlreadyCreatedDeleteFirst"));
+    return;
+  }
   state.marketWizard.selectedAsset = {
     ...candidate,
     deployments: (candidate.deployments || []).map((deployment) => ({ ...deployment })),
@@ -3404,6 +3431,11 @@ async function resolveMarketManualContracts() {
       item.canonical_asset_id === result.contracts?.[0]?.canonical_asset_id
     ) || result.candidates?.[0];
     if (!candidate) throw new Error(t("marketQueryFailed"));
+    if (existingMarketProjectForCandidate(candidate)) {
+      $("marketManualStatus").textContent = t("marketAlreadyCreatedDeleteFirst");
+      toast(t("marketAlreadyCreatedDeleteFirst"));
+      return;
+    }
     const deploymentsByChain = new Map(
       (candidate.deployments || []).map((item) => [item.chain_key, item]),
     );

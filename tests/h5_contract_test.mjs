@@ -64,6 +64,15 @@ assert.ok(
     app.includes('cooldown_scope: "chain"'),
   "market wizard must create the first rule with explicit multi-chain scopes",
 );
+assert.ok(
+  app.includes("existingMarketProjectForCandidate(candidate)") &&
+    app.includes('t("marketAlreadyCreatedDeleteFirst")'),
+  "market wizard must block tokens that already have active or archived monitoring",
+);
+assert.ok(
+  i18nSource.includes("已创建，请先删除此代币相关监控项目。"),
+  "manual duplicate-token guidance is missing",
+);
 for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
   assert.ok(
     html.includes(`data-market-detail-tab="${tab}"`) &&
