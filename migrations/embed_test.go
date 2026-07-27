@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0010_remove_complimentary_grants.sql" {
-		t.Fatalf("latest migration = %q, want complimentary grant cleanup migration", got)
+	if got := names[len(names)-1]; got != "0011_multichain_market_domain.sql" {
+		t.Fatalf("latest migration = %q, want multi-chain market domain migration", got)
 	}
 
 	requiredTables := []string{
@@ -37,10 +37,16 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"rule_trigger_events",
 		"aggregate_notifications",
 		"market_projects",
+		"market_assets",
+		"market_asset_deployments",
+		"market_asset_identity_evidence",
+		"market_project_deployments",
 		"market_pools",
 		"market_project_pools",
 		"market_snapshots",
 		"market_rules",
+		"market_rule_deployments",
+		"market_rule_pools",
 		"market_events",
 		"market_rule_events",
 		"market_holders",
@@ -55,17 +61,20 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"market_stage_windows",
 		"market_stage_window_events",
 		"market_combination_rules",
+		"market_combination_rule_projects",
 		"market_combination_members",
 		"market_combination_windows",
 		"market_combination_window_members",
 		"market_combination_trigger_events",
 	}
 	destructive := regexp.MustCompile(
-		`(?im)^\s*(drop\s+(table|column)|truncate|delete|update|rename)\b`,
+		`(?im)^\s*(drop\s+(table|column)|truncate|delete|rename)\b`,
 	)
+	dataUpdate := regexp.MustCompile(`(?im)^\s*update\b`)
 	destructiveAlter := regexp.MustCompile(
 		`(?im)^\s*alter\s+table\b.*\b(drop\s+(column|table)|rename)\b`,
 	)
+	alterStatement := regexp.MustCompile(`(?ims)^\s*alter\s+table\b.*?;`)
 
 	combined := ""
 	for _, name := range names {
@@ -77,17 +86,26 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		removesEmptyComplimentaryTable := name == "0010_remove_complimentary_grants.sql" &&
 			strings.Contains(sql, "if exists (select 1 from complimentary_grants)") &&
 			strings.Contains(sql, "drop table complimentary_grants")
+		repeatsSafeComplimentaryCleanup := name == "0011_multichain_market_domain.sql" &&
+			strings.Contains(sql, "if exists (select 1 from complimentary_grants)") &&
+			strings.Contains(sql, "drop table complimentary_grants")
 		if (destructive.MatchString(sql) || destructiveAlter.MatchString(sql)) &&
-			!removesEmptyComplimentaryTable {
+			!removesEmptyComplimentaryTable &&
+			!repeatsSafeComplimentaryCleanup {
 			t.Fatalf("migration %q contains a destructive statement", name)
 		}
-		for _, line := range strings.Split(sql, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "alter table") &&
-				!strings.Contains(line, "add column if not exists") &&
-				!strings.Contains(line, "drop constraint if exists") &&
-				!strings.Contains(line, "add constraint") {
-				t.Fatalf("migration %q has a non-additive ALTER TABLE: %s", name, line)
+		if dataUpdate.MatchString(sql) && name != "0011_multichain_market_domain.sql" {
+			t.Fatalf("migration %q contains an unreviewed data update", name)
+		}
+		for _, statement := range alterStatement.FindAllString(sql, -1) {
+			if !strings.Contains(statement, "add column if not exists") &&
+				!strings.Contains(statement, "drop constraint if exists") &&
+				!strings.Contains(statement, "add constraint") {
+				t.Fatalf(
+					"migration %q has a non-additive ALTER TABLE: %s",
+					name,
+					strings.TrimSpace(statement),
+				)
 			}
 		}
 		combined += "\n" + sql
@@ -101,6 +119,30 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if strings.Contains(combined, " double precision") ||
 		strings.Contains(combined, " real ") {
 		t.Fatal("financial market data must not use floating-point PostgreSQL types")
+	}
+
+	multichainMigration, err := Files.ReadFile("0011_multichain_market_domain.sql")
+	if err != nil {
+		t.Fatalf("read multi-chain migration: %v", err)
+	}
+	multichainSQL := strings.ToLower(string(multichainMigration))
+	for _, required := range []string{
+		"insert into market_assets",
+		"update market_projects",
+		"insert into market_asset_deployments",
+		"insert into market_project_deployments",
+		"update market_project_pools",
+		"insert into market_rule_deployments",
+		"insert into market_rule_pools",
+		"update market_snapshots",
+		"update market_events",
+		"update market_holders",
+		"update market_holder_snapshots",
+		"update market_address_labels",
+	} {
+		if !strings.Contains(multichainSQL, required) {
+			t.Errorf("multi-chain migration is missing %q", required)
+		}
 	}
 
 	for _, wallet := range []string{

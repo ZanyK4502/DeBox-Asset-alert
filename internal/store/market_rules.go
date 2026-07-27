@@ -12,7 +12,8 @@ const marketRuleColumns = `
 	id, debox_user_id, market_project_id, market_pool_id, rule_type,
 	threshold_value::text AS threshold_value, threshold_unit, window_minutes,
 	sensitivity, cooldown_seconds, rule_scope, delivery_mode, cycle_type,
-	cycle_minutes, trigger_count_threshold, notification_chat_id,
+	cycle_minutes, trigger_count_threshold,
+	deployment_scope, pool_scope, cooldown_scope, notification_chat_id,
 	notification_chat_type, notification_label, notification_language,
 	enabled, run_status, pause_reason, aggregation_anchor_at,
 	state, last_evaluated_at, last_triggered_at,
@@ -20,7 +21,8 @@ const marketRuleColumns = `
 `
 
 const marketEventColumns = `
-	id, market_pool_id, chain_key, chain_id, token_address,
+	id, market_pool_id, market_asset_deployment_id,
+	chain_key, chain_id, token_address,
 	event_type, event_key, transaction_hash, transaction_index, log_index,
 	block_number, block_hash, wallet_address,
 	token_amount_raw::text AS token_amount_raw,

@@ -12,7 +12,7 @@ import (
 var marketAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
 const marketProjectColumns = `
-	id, debox_user_id, chain_key, chain_id, token_address,
+	id, debox_user_id, market_asset_id, chain_key, chain_id, token_address,
 	token_name, token_symbol, token_decimals,
 	total_supply_raw::text AS total_supply_raw,
 	status, pause_reason, four_meme_status, main_pool_id,
@@ -30,12 +30,14 @@ const marketPoolColumns = `
 `
 
 const marketProjectPoolColumns = `
-	id, market_project_id, market_pool_id, selected, is_primary,
+	id, market_project_id, market_project_deployment_id,
+	market_pool_id, selected, is_primary,
 	discovery_source, created_at, updated_at
 `
 
 const marketSnapshotColumns = `
-	id, chain_key, chain_id, token_address, market_pool_id,
+	id, market_asset_deployment_id,
+	chain_key, chain_id, token_address, market_pool_id,
 	price_usd::text AS price_usd,
 	liquidity_usd::text AS liquidity_usd,
 	fdv_usd::text AS fdv_usd,

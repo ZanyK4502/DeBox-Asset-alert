@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,8 +31,12 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"daily_summary_deliveries",
 		"daily_summary_targets",
 		"market_address_labels",
+		"market_asset_deployments",
+		"market_asset_identity_evidence",
+		"market_assets",
 		"market_chain_cursors",
 		"market_combination_members",
+		"market_combination_rule_projects",
 		"market_combination_rules",
 		"market_combination_trigger_events",
 		"market_combination_window_members",
@@ -40,11 +45,14 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_holder_snapshots",
 		"market_holders",
 		"market_pools",
+		"market_project_deployments",
 		"market_project_pools",
 		"market_projects",
 		"market_provider_health",
 		"market_provider_usage",
+		"market_rule_deployments",
 		"market_rule_events",
+		"market_rule_pools",
 		"market_rules",
 		"market_scanned_blocks",
 		"market_snapshots",
@@ -53,6 +61,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"nodit_webhook_subscriptions",
 		"notification_groups",
 		"orders",
+		"permanent_plan_allowlist",
 		"rule_trigger_events",
 		"schema_migrations",
 		"subscriptions",
@@ -90,8 +99,264 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 8 || latestName != "0008_market_rules_notifications.sql" {
+	if latestVersion != 11 || latestName != "0011_multichain_market_domain.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
+	}
+}
+
+func TestPostgresMultichainMigrationBackfillsLegacyMarketData(t *testing.T) {
+	store, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	tokenAddress := "0x1111111111111111111111111111111111111111"
+	quoteAddress := "0x2222222222222222222222222222222222222222"
+	holderAddress := "0x3333333333333333333333333333333333333333"
+
+	var poolID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO market_pools (
+			chain_key, chain_id, protocol, protocol_version, pool_key,
+			pool_address, token0_address, token0_symbol,
+			token1_address, token1_symbol,
+			supports_event_parsing, parser_adapter, verification_status
+		)
+		VALUES (
+			'bsc', 56, 'pancakeswap', 'v2', $1,
+			$1, $2, 'LEGACY', $3, 'USDT',
+			1, 'evm_v2', 'verified'
+		)
+		RETURNING id
+	`, "0x4444444444444444444444444444444444444444",
+		tokenAddress, quoteAddress).Scan(&poolID); err != nil {
+		t.Fatalf("create legacy pool: %v", err)
+	}
+
+	var projectID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO market_projects (
+			debox_user_id, chain_key, chain_id, token_address,
+			token_name, token_symbol, token_decimals, total_supply_raw,
+			main_pool_id
+		)
+		VALUES (
+			'multichain-migration-user', 'bsc', 56, $1,
+			'Legacy Token', 'LEGACY', 18, 1000000000000000000, $2
+		)
+		RETURNING id
+	`, tokenAddress, poolID).Scan(&projectID); err != nil {
+		t.Fatalf("create legacy project: %v", err)
+	}
+
+	var projectPoolID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO market_project_pools (
+			market_project_id, market_pool_id, selected, is_primary,
+			discovery_source
+		)
+		VALUES ($1, $2, 1, 1, 'integration')
+		RETURNING id
+	`, projectID, poolID).Scan(&projectPoolID); err != nil {
+		t.Fatalf("link legacy project pool: %v", err)
+	}
+
+	var ruleID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO market_rules (
+			debox_user_id, market_project_id, market_pool_id,
+			rule_type, threshold_value, threshold_unit,
+			notification_chat_id
+		)
+		VALUES (
+			'multichain-migration-user', $1, $2,
+			'market_price_above', 1, 'usd',
+			'multichain-migration-user'
+		)
+		RETURNING id
+	`, projectID, poolID).Scan(&ruleID); err != nil {
+		t.Fatalf("create legacy market rule: %v", err)
+	}
+
+	insertLegacy := func(name, statement string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("create legacy %s: %v", name, err)
+		}
+	}
+	insertLegacy("snapshot", `
+		INSERT INTO market_snapshots (
+			chain_key, chain_id, token_address, market_pool_id,
+			price_usd, source
+		)
+		VALUES ('bsc', 56, $1, $2, 1, 'integration')
+	`, tokenAddress, poolID)
+	insertLegacy("event", `
+		INSERT INTO market_events (
+			market_pool_id, chain_key, chain_id, token_address,
+			event_type, event_key, source, occurred_at
+		)
+		VALUES (
+			$2, 'bsc', 56, $1,
+			'buy', 'integration:legacy-event', 'integration', NOW()
+		)
+	`, tokenAddress, poolID)
+	insertLegacy("holder", `
+		INSERT INTO market_holders (
+			chain_key, chain_id, token_address, holder_address,
+			balance_raw, balance, source
+		)
+		VALUES ('bsc', 56, $1, $2, 10, 10, 'integration')
+	`, tokenAddress, holderAddress)
+	insertLegacy("holder snapshot", `
+		INSERT INTO market_holder_snapshots (
+			chain_key, chain_id, token_address, holder_address,
+			balance_raw, balance, source
+		)
+		VALUES ('bsc', 56, $1, $2, 10, 10, 'integration')
+	`, tokenAddress, holderAddress)
+	insertLegacy("address label", `
+		INSERT INTO market_address_labels (
+			debox_user_id, market_project_id, chain_key, chain_id,
+			address, label_type, label
+		)
+		VALUES (
+			'multichain-migration-user', $1, 'bsc', 56,
+			$2, 'custom', 'legacy holder'
+		)
+	`, projectID, holderAddress)
+
+	body, err := migrations.Files.ReadFile("0011_multichain_market_domain.sql")
+	if err != nil {
+		t.Fatalf("read multi-chain migration: %v", err)
+	}
+	for attempt := range 2 {
+		if _, err := pool.Exec(ctx, string(body)); err != nil {
+			t.Fatalf("apply multi-chain migration attempt %d: %v", attempt+1, err)
+		}
+	}
+
+	var (
+		projectCount                  int64
+		projectPoolCount              int64
+		assetCount                    int64
+		deploymentCount               int64
+		projectDeploymentCount        int64
+		evidenceCount                 int64
+		ruleDeploymentScopeCount      int64
+		rulePoolScopeCount            int64
+		attributedSnapshotCount       int64
+		attributedEventCount          int64
+		attributedHolderCount         int64
+		attributedHolderSnapshotCount int64
+		attributedLabelCount          int64
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM market_projects
+			 WHERE id = $1 AND market_asset_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_project_pools
+			 WHERE id = $2 AND market_project_deployment_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_assets),
+			(SELECT COUNT(*) FROM market_asset_deployments),
+			(SELECT COUNT(*) FROM market_project_deployments),
+			(SELECT COUNT(*) FROM market_asset_identity_evidence),
+			(SELECT COUNT(*)
+			 FROM market_rule_deployments mrd
+			 JOIN market_rules mr ON mr.id = mrd.market_rule_id
+			 WHERE mrd.market_rule_id = $3
+			   AND mr.deployment_scope = 'selected'
+			   AND mr.cooldown_scope = 'chain'),
+			(SELECT COUNT(*)
+			 FROM market_rule_pools mrp
+			 JOIN market_rules mr ON mr.id = mrp.market_rule_id
+			 WHERE mrp.market_rule_id = $3 AND mr.pool_scope = 'selected'),
+			(SELECT COUNT(*) FROM market_snapshots
+			 WHERE market_asset_deployment_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_events
+			 WHERE market_asset_deployment_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_holders
+			 WHERE market_asset_deployment_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_holder_snapshots
+			 WHERE market_asset_deployment_id IS NOT NULL),
+			(SELECT COUNT(*) FROM market_address_labels
+			 WHERE market_project_deployment_id IS NOT NULL)
+	`, projectID, projectPoolID, ruleID).Scan(
+		&projectCount,
+		&projectPoolCount,
+		&assetCount,
+		&deploymentCount,
+		&projectDeploymentCount,
+		&evidenceCount,
+		&ruleDeploymentScopeCount,
+		&rulePoolScopeCount,
+		&attributedSnapshotCount,
+		&attributedEventCount,
+		&attributedHolderCount,
+		&attributedHolderSnapshotCount,
+		&attributedLabelCount,
+	); err != nil {
+		t.Fatalf("read migrated legacy data: %v", err)
+	}
+
+	got := []int64{
+		projectCount,
+		projectPoolCount,
+		assetCount,
+		deploymentCount,
+		projectDeploymentCount,
+		evidenceCount,
+		ruleDeploymentScopeCount,
+		rulePoolScopeCount,
+		attributedSnapshotCount,
+		attributedEventCount,
+		attributedHolderCount,
+		attributedHolderSnapshotCount,
+		attributedLabelCount,
+	}
+	for index, count := range got {
+		if count != 1 {
+			t.Fatalf("migrated count[%d] = %d, want 1; all counts = %v", index, count, got)
+		}
+	}
+
+	project, err := store.GetMarketProject(
+		ctx,
+		projectID,
+		"multichain-migration-user",
+	)
+	if err != nil || project == nil || project.MarketAssetID == nil {
+		t.Fatalf("read migrated project: project=%#v error=%v", project, err)
+	}
+	asset, err := store.GetMarketAsset(ctx, *project.MarketAssetID)
+	if err != nil || asset == nil ||
+		asset.CanonicalAssetID !=
+			"eip155:56/erc20:0x1111111111111111111111111111111111111111" ||
+		asset.VerificationStatus != "single_chain" {
+		t.Fatalf("read migrated asset: asset=%#v error=%v", asset, err)
+	}
+	deployments, err := store.ListMarketAssetDeployments(ctx, asset.ID)
+	if err != nil || len(deployments) != 1 ||
+		deployments[0].ChainKey != "bsc" ||
+		deployments[0].ChainID != 56 ||
+		deployments[0].TokenAddress != tokenAddress {
+		t.Fatalf("read migrated deployments: deployments=%#v error=%v", deployments, err)
+	}
+	projectDeployments, err := store.ListMarketProjectDeployments(
+		ctx,
+		projectID,
+		"multichain-migration-user",
+	)
+	if err != nil || len(projectDeployments) != 1 ||
+		projectDeployments[0].MarketAssetDeploymentID != deployments[0].ID {
+		t.Fatalf(
+			"read project deployments: deployments=%#v error=%v",
+			projectDeployments,
+			err,
+		)
+	}
+	evidence, err := store.ListMarketAssetIdentityEvidence(ctx, asset.ID)
+	if err != nil || len(evidence) != 1 ||
+		evidence[0].Verdict != "supports" ||
+		evidence[0].Source != "legacy_migration" {
+		t.Fatalf("read identity evidence: evidence=%#v error=%v", evidence, err)
 	}
 }
 

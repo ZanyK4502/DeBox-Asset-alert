@@ -8,7 +8,8 @@ import (
 )
 
 const marketHolderColumns = `
-	id, chain_key, chain_id, token_address, holder_address,
+	id, market_asset_deployment_id,
+	chain_key, chain_id, token_address, holder_address,
 	balance_raw::text AS balance_raw,
 	balance::text AS balance,
 	supply_percent::text AS supply_percent,
@@ -17,7 +18,8 @@ const marketHolderColumns = `
 `
 
 const marketHolderSnapshotColumns = `
-	id, chain_key, chain_id, token_address, holder_address,
+	id, market_asset_deployment_id,
+	chain_key, chain_id, token_address, holder_address,
 	balance_raw::text AS balance_raw,
 	balance::text AS balance,
 	supply_percent::text AS supply_percent,
@@ -25,7 +27,8 @@ const marketHolderSnapshotColumns = `
 `
 
 const marketAddressLabelColumns = `
-	id, debox_user_id, market_project_id, chain_key, chain_id,
+	id, debox_user_id, market_project_id, market_project_deployment_id,
+	chain_key, chain_id,
 	address, label_type, label, excluded, created_at, updated_at
 `
 

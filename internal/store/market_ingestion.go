@@ -9,7 +9,8 @@ import (
 )
 
 const marketChainCursorColumns = `
-	id, chain_key, chain_id, cursor_key, next_block_number,
+	id, market_asset_deployment_id,
+	chain_key, chain_id, cursor_key, next_block_number,
 	safe_block_number, last_block_hash, status, last_error,
 	last_scanned_at, created_at, updated_at
 `

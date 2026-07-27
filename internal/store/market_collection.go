@@ -16,13 +16,15 @@ import (
 var marketHashPattern = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
 
 const marketScannedBlockColumns = `
-	id, chain_key, chain_id, cursor_key, block_number, block_hash,
+	id, market_asset_deployment_id,
+	chain_key, chain_id, cursor_key, block_number, block_hash,
 	parent_hash, block_timestamp, canonical, scanned_at,
 	created_at, updated_at
 `
 
 const marketProviderHealthColumns = `
-	id, provider, component, chain_key, chain_id, status,
+	id, market_asset_deployment_id,
+	provider, component, chain_key, chain_id, status,
 	consecutive_failures, latency_ms, last_success_at, last_failure_at,
 	last_checked_at, last_error, metadata, created_at, updated_at
 `

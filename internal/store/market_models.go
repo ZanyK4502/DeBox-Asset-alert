@@ -5,9 +5,94 @@ import (
 	"time"
 )
 
+type MarketAsset struct {
+	ID                 int64           `db:"id" json:"id"`
+	CanonicalName      string          `db:"canonical_name" json:"canonical_name"`
+	Symbol             string          `db:"symbol" json:"symbol"`
+	LogoURL            string          `db:"logo_url" json:"logo_url"`
+	IdentitySource     string          `db:"identity_source" json:"identity_source"`
+	CanonicalAssetID   string          `db:"canonical_asset_id" json:"canonical_asset_id"`
+	VerificationStatus string          `db:"verification_status" json:"verification_status"`
+	Metadata           json.RawMessage `db:"metadata" json:"metadata"`
+	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type MarketAssetDeployment struct {
+	ID                   int64           `db:"id" json:"id"`
+	MarketAssetID        int64           `db:"market_asset_id" json:"market_asset_id"`
+	ChainKey             string          `db:"chain_key" json:"chain_key"`
+	ChainID              int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress         string          `db:"token_address" json:"token_address"`
+	TokenName            string          `db:"token_name" json:"token_name"`
+	TokenSymbol          string          `db:"token_symbol" json:"token_symbol"`
+	TokenDecimals        int32           `db:"token_decimals" json:"token_decimals"`
+	TotalSupplyRaw       *string         `db:"total_supply_raw" json:"total_supply_raw"`
+	VerificationStatus   string          `db:"verification_status" json:"verification_status"`
+	VerificationSource   string          `db:"verification_source" json:"verification_source"`
+	VerificationEvidence json.RawMessage `db:"verification_evidence" json:"verification_evidence"`
+	DefaultMarketPoolID  *int64          `db:"default_market_pool_id" json:"default_market_pool_id"`
+	Metadata             json.RawMessage `db:"metadata" json:"metadata"`
+	VerifiedAt           *time.Time      `db:"verified_at" json:"verified_at"`
+	CreatedAt            time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type MarketAssetIdentityEvidence struct {
+	ID                      int64           `db:"id" json:"id"`
+	MarketAssetID           int64           `db:"market_asset_id" json:"market_asset_id"`
+	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id"`
+	EvidenceKey             string          `db:"evidence_key" json:"evidence_key"`
+	Source                  string          `db:"source" json:"source"`
+	EvidenceType            string          `db:"evidence_type" json:"evidence_type"`
+	ExternalAssetID         string          `db:"external_asset_id" json:"external_asset_id"`
+	Verdict                 string          `db:"verdict" json:"verdict"`
+	Confidence              string          `db:"confidence" json:"confidence"`
+	Payload                 json.RawMessage `db:"payload" json:"payload"`
+	ObservedAt              time.Time       `db:"observed_at" json:"observed_at"`
+	CreatedAt               time.Time       `db:"created_at" json:"created_at"`
+}
+
+type MarketProjectDeployment struct {
+	ID                      int64           `db:"id" json:"id"`
+	MarketProjectID         int64           `db:"market_project_id" json:"market_project_id"`
+	MarketAssetID           int64           `db:"market_asset_id" json:"market_asset_id"`
+	MarketAssetDeploymentID int64           `db:"market_asset_deployment_id" json:"market_asset_deployment_id"`
+	Status                  string          `db:"status" json:"status"`
+	PauseReason             string          `db:"pause_reason" json:"pause_reason"`
+	DefaultMarketPoolID     *int64          `db:"default_market_pool_id" json:"default_market_pool_id"`
+	Metadata                json.RawMessage `db:"metadata" json:"metadata"`
+	CreatedAt               time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt               time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type MarketProjectDeploymentView struct {
+	MarketProjectDeployment
+	Deployment MarketAssetDeployment `db:"-" json:"deployment"`
+}
+
+type MarketRuleDeploymentScope struct {
+	MarketRuleID              int64     `db:"market_rule_id" json:"market_rule_id"`
+	MarketProjectDeploymentID int64     `db:"market_project_deployment_id" json:"market_project_deployment_id"`
+	CreatedAt                 time.Time `db:"created_at" json:"created_at"`
+}
+
+type MarketRulePoolScope struct {
+	MarketRuleID        int64     `db:"market_rule_id" json:"market_rule_id"`
+	MarketProjectPoolID int64     `db:"market_project_pool_id" json:"market_project_pool_id"`
+	CreatedAt           time.Time `db:"created_at" json:"created_at"`
+}
+
+type MarketCombinationRuleProject struct {
+	MarketCombinationRuleID int64     `db:"market_combination_rule_id" json:"market_combination_rule_id"`
+	MarketProjectID         int64     `db:"market_project_id" json:"market_project_id"`
+	CreatedAt               time.Time `db:"created_at" json:"created_at"`
+}
+
 type MarketProject struct {
 	ID               int64           `db:"id" json:"id"`
 	DeBoxUserID      string          `db:"debox_user_id" json:"debox_user_id"`
+	MarketAssetID    *int64          `db:"market_asset_id" json:"market_asset_id,omitempty"`
 	ChainKey         string          `db:"chain_key" json:"chain_key"`
 	ChainID          int64           `db:"chain_id" json:"chain_id"`
 	TokenAddress     string          `db:"token_address" json:"token_address"`
@@ -53,14 +138,15 @@ type MarketPool struct {
 }
 
 type MarketProjectPool struct {
-	ID              int64     `db:"id" json:"id"`
-	MarketProjectID int64     `db:"market_project_id" json:"market_project_id"`
-	MarketPoolID    int64     `db:"market_pool_id" json:"market_pool_id"`
-	Selected        int32     `db:"selected" json:"selected"`
-	IsPrimary       int32     `db:"is_primary" json:"is_primary"`
-	DiscoverySource string    `db:"discovery_source" json:"discovery_source"`
-	CreatedAt       time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time `db:"updated_at" json:"updated_at"`
+	ID                        int64     `db:"id" json:"id"`
+	MarketProjectID           int64     `db:"market_project_id" json:"market_project_id"`
+	MarketProjectDeploymentID *int64    `db:"market_project_deployment_id" json:"market_project_deployment_id,omitempty"`
+	MarketPoolID              int64     `db:"market_pool_id" json:"market_pool_id"`
+	Selected                  int32     `db:"selected" json:"selected"`
+	IsPrimary                 int32     `db:"is_primary" json:"is_primary"`
+	DiscoverySource           string    `db:"discovery_source" json:"discovery_source"`
+	CreatedAt                 time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type MarketPoolView struct {
@@ -71,30 +157,31 @@ type MarketPoolView struct {
 }
 
 type MarketSnapshot struct {
-	ID              int64           `db:"id" json:"id"`
-	ChainKey        string          `db:"chain_key" json:"chain_key"`
-	ChainID         int64           `db:"chain_id" json:"chain_id"`
-	TokenAddress    string          `db:"token_address" json:"token_address"`
-	MarketPoolID    int64           `db:"market_pool_id" json:"market_pool_id"`
-	PriceUSD        *string         `db:"price_usd" json:"price_usd"`
-	LiquidityUSD    *string         `db:"liquidity_usd" json:"liquidity_usd"`
-	FDVUSD          *string         `db:"fdv_usd" json:"fdv_usd"`
-	MarketCapUSD    *string         `db:"market_cap_usd" json:"market_cap_usd"`
-	Volume5mUSD     *string         `db:"volume_5m_usd" json:"volume_5m_usd"`
-	Volume15mUSD    *string         `db:"volume_15m_usd" json:"volume_15m_usd"`
-	Volume1hUSD     *string         `db:"volume_1h_usd" json:"volume_1h_usd"`
-	Volume6hUSD     *string         `db:"volume_6h_usd" json:"volume_6h_usd"`
-	Volume24hUSD    *string         `db:"volume_24h_usd" json:"volume_24h_usd"`
-	Buys5m          *int64          `db:"buys_5m" json:"buys_5m"`
-	Sells5m         *int64          `db:"sells_5m" json:"sells_5m"`
-	Buys1h          *int64          `db:"buys_1h" json:"buys_1h"`
-	Sells1h         *int64          `db:"sells_1h" json:"sells_1h"`
-	Buys24h         *int64          `db:"buys_24h" json:"buys_24h"`
-	Sells24h        *int64          `db:"sells_24h" json:"sells_24h"`
-	Source          string          `db:"source" json:"source"`
-	SourceTimestamp *time.Time      `db:"source_timestamp" json:"source_timestamp"`
-	CapturedAt      time.Time       `db:"captured_at" json:"captured_at"`
-	RawPayload      json.RawMessage `db:"raw_payload" json:"raw_payload"`
+	ID                      int64           `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string          `db:"chain_key" json:"chain_key"`
+	ChainID                 int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress            string          `db:"token_address" json:"token_address"`
+	MarketPoolID            int64           `db:"market_pool_id" json:"market_pool_id"`
+	PriceUSD                *string         `db:"price_usd" json:"price_usd"`
+	LiquidityUSD            *string         `db:"liquidity_usd" json:"liquidity_usd"`
+	FDVUSD                  *string         `db:"fdv_usd" json:"fdv_usd"`
+	MarketCapUSD            *string         `db:"market_cap_usd" json:"market_cap_usd"`
+	Volume5mUSD             *string         `db:"volume_5m_usd" json:"volume_5m_usd"`
+	Volume15mUSD            *string         `db:"volume_15m_usd" json:"volume_15m_usd"`
+	Volume1hUSD             *string         `db:"volume_1h_usd" json:"volume_1h_usd"`
+	Volume6hUSD             *string         `db:"volume_6h_usd" json:"volume_6h_usd"`
+	Volume24hUSD            *string         `db:"volume_24h_usd" json:"volume_24h_usd"`
+	Buys5m                  *int64          `db:"buys_5m" json:"buys_5m"`
+	Sells5m                 *int64          `db:"sells_5m" json:"sells_5m"`
+	Buys1h                  *int64          `db:"buys_1h" json:"buys_1h"`
+	Sells1h                 *int64          `db:"sells_1h" json:"sells_1h"`
+	Buys24h                 *int64          `db:"buys_24h" json:"buys_24h"`
+	Sells24h                *int64          `db:"sells_24h" json:"sells_24h"`
+	Source                  string          `db:"source" json:"source"`
+	SourceTimestamp         *time.Time      `db:"source_timestamp" json:"source_timestamp"`
+	CapturedAt              time.Time       `db:"captured_at" json:"captured_at"`
+	RawPayload              json.RawMessage `db:"raw_payload" json:"raw_payload"`
 }
 
 type MarketRule struct {
@@ -109,6 +196,9 @@ type MarketRule struct {
 	Sensitivity           string          `db:"sensitivity" json:"sensitivity"`
 	CooldownSeconds       int32           `db:"cooldown_seconds" json:"cooldown_seconds"`
 	RuleScope             string          `db:"rule_scope" json:"rule_scope"`
+	DeploymentScope       string          `db:"deployment_scope" json:"deployment_scope"`
+	PoolScope             string          `db:"pool_scope" json:"pool_scope"`
+	CooldownScope         string          `db:"cooldown_scope" json:"cooldown_scope"`
 	DeliveryMode          string          `db:"delivery_mode" json:"delivery_mode"`
 	CycleType             string          `db:"cycle_type" json:"cycle_type"`
 	CycleMinutes          int32           `db:"cycle_minutes" json:"cycle_minutes"`
@@ -129,33 +219,34 @@ type MarketRule struct {
 }
 
 type MarketEvent struct {
-	ID               int64           `db:"id" json:"id"`
-	MarketPoolID     *int64          `db:"market_pool_id" json:"market_pool_id"`
-	ChainKey         string          `db:"chain_key" json:"chain_key"`
-	ChainID          int64           `db:"chain_id" json:"chain_id"`
-	TokenAddress     string          `db:"token_address" json:"token_address"`
-	EventType        string          `db:"event_type" json:"event_type"`
-	EventKey         string          `db:"event_key" json:"event_key"`
-	TransactionHash  *string         `db:"transaction_hash" json:"transaction_hash"`
-	TransactionIndex *int32          `db:"transaction_index" json:"transaction_index"`
-	LogIndex         *int32          `db:"log_index" json:"log_index"`
-	BlockNumber      *int64          `db:"block_number" json:"block_number"`
-	BlockHash        *string         `db:"block_hash" json:"block_hash"`
-	WalletAddress    *string         `db:"wallet_address" json:"wallet_address"`
-	TokenAmountRaw   *string         `db:"token_amount_raw" json:"token_amount_raw"`
-	QuoteAmountRaw   *string         `db:"quote_amount_raw" json:"quote_amount_raw"`
-	TokenAmount      *string         `db:"token_amount" json:"token_amount"`
-	QuoteAmount      *string         `db:"quote_amount" json:"quote_amount"`
-	USDValue         *string         `db:"usd_value" json:"usd_value"`
-	PriceUSD         *string         `db:"price_usd" json:"price_usd"`
-	Source           string          `db:"source" json:"source"`
-	Confidence       string          `db:"confidence" json:"confidence"`
-	Confirmed        int32           `db:"confirmed" json:"confirmed"`
-	Reorged          int32           `db:"reorged" json:"reorged"`
-	OccurredAt       time.Time       `db:"occurred_at" json:"occurred_at"`
-	ObservedAt       time.Time       `db:"observed_at" json:"observed_at"`
-	RawPayload       json.RawMessage `db:"raw_payload" json:"raw_payload"`
-	Metadata         json.RawMessage `db:"metadata" json:"metadata"`
+	ID                      int64           `db:"id" json:"id"`
+	MarketPoolID            *int64          `db:"market_pool_id" json:"market_pool_id"`
+	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string          `db:"chain_key" json:"chain_key"`
+	ChainID                 int64           `db:"chain_id" json:"chain_id"`
+	TokenAddress            string          `db:"token_address" json:"token_address"`
+	EventType               string          `db:"event_type" json:"event_type"`
+	EventKey                string          `db:"event_key" json:"event_key"`
+	TransactionHash         *string         `db:"transaction_hash" json:"transaction_hash"`
+	TransactionIndex        *int32          `db:"transaction_index" json:"transaction_index"`
+	LogIndex                *int32          `db:"log_index" json:"log_index"`
+	BlockNumber             *int64          `db:"block_number" json:"block_number"`
+	BlockHash               *string         `db:"block_hash" json:"block_hash"`
+	WalletAddress           *string         `db:"wallet_address" json:"wallet_address"`
+	TokenAmountRaw          *string         `db:"token_amount_raw" json:"token_amount_raw"`
+	QuoteAmountRaw          *string         `db:"quote_amount_raw" json:"quote_amount_raw"`
+	TokenAmount             *string         `db:"token_amount" json:"token_amount"`
+	QuoteAmount             *string         `db:"quote_amount" json:"quote_amount"`
+	USDValue                *string         `db:"usd_value" json:"usd_value"`
+	PriceUSD                *string         `db:"price_usd" json:"price_usd"`
+	Source                  string          `db:"source" json:"source"`
+	Confidence              string          `db:"confidence" json:"confidence"`
+	Confirmed               int32           `db:"confirmed" json:"confirmed"`
+	Reorged                 int32           `db:"reorged" json:"reorged"`
+	OccurredAt              time.Time       `db:"occurred_at" json:"occurred_at"`
+	ObservedAt              time.Time       `db:"observed_at" json:"observed_at"`
+	RawPayload              json.RawMessage `db:"raw_payload" json:"raw_payload"`
+	Metadata                json.RawMessage `db:"metadata" json:"metadata"`
 }
 
 type MarketRuleEvent struct {
@@ -277,65 +368,69 @@ type MarketCombinationProgress struct {
 }
 
 type MarketHolder struct {
-	ID              int64     `db:"id" json:"id"`
-	ChainKey        string    `db:"chain_key" json:"chain_key"`
-	ChainID         int64     `db:"chain_id" json:"chain_id"`
-	TokenAddress    string    `db:"token_address" json:"token_address"`
-	HolderAddress   string    `db:"holder_address" json:"holder_address"`
-	BalanceRaw      string    `db:"balance_raw" json:"balance_raw"`
-	Balance         string    `db:"balance" json:"balance"`
-	SupplyPercent   *string   `db:"supply_percent" json:"supply_percent"`
-	Rank            *int32    `db:"rank" json:"rank"`
-	AddressKind     string    `db:"address_kind" json:"address_kind"`
-	Excluded        int32     `db:"excluded" json:"excluded"`
-	ExclusionReason string    `db:"exclusion_reason" json:"exclusion_reason"`
-	Source          string    `db:"source" json:"source"`
-	FirstSeenAt     time.Time `db:"first_seen_at" json:"first_seen_at"`
-	LastSeenAt      time.Time `db:"last_seen_at" json:"last_seen_at"`
-	UpdatedAt       time.Time `db:"updated_at" json:"updated_at"`
+	ID                      int64     `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64    `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string    `db:"chain_key" json:"chain_key"`
+	ChainID                 int64     `db:"chain_id" json:"chain_id"`
+	TokenAddress            string    `db:"token_address" json:"token_address"`
+	HolderAddress           string    `db:"holder_address" json:"holder_address"`
+	BalanceRaw              string    `db:"balance_raw" json:"balance_raw"`
+	Balance                 string    `db:"balance" json:"balance"`
+	SupplyPercent           *string   `db:"supply_percent" json:"supply_percent"`
+	Rank                    *int32    `db:"rank" json:"rank"`
+	AddressKind             string    `db:"address_kind" json:"address_kind"`
+	Excluded                int32     `db:"excluded" json:"excluded"`
+	ExclusionReason         string    `db:"exclusion_reason" json:"exclusion_reason"`
+	Source                  string    `db:"source" json:"source"`
+	FirstSeenAt             time.Time `db:"first_seen_at" json:"first_seen_at"`
+	LastSeenAt              time.Time `db:"last_seen_at" json:"last_seen_at"`
+	UpdatedAt               time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type MarketHolderSnapshot struct {
-	ID            int64     `db:"id" json:"id"`
-	ChainKey      string    `db:"chain_key" json:"chain_key"`
-	ChainID       int64     `db:"chain_id" json:"chain_id"`
-	TokenAddress  string    `db:"token_address" json:"token_address"`
-	HolderAddress string    `db:"holder_address" json:"holder_address"`
-	BalanceRaw    string    `db:"balance_raw" json:"balance_raw"`
-	Balance       string    `db:"balance" json:"balance"`
-	SupplyPercent *string   `db:"supply_percent" json:"supply_percent"`
-	Rank          *int32    `db:"rank" json:"rank"`
-	Source        string    `db:"source" json:"source"`
-	CapturedAt    time.Time `db:"captured_at" json:"captured_at"`
+	ID                      int64     `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64    `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string    `db:"chain_key" json:"chain_key"`
+	ChainID                 int64     `db:"chain_id" json:"chain_id"`
+	TokenAddress            string    `db:"token_address" json:"token_address"`
+	HolderAddress           string    `db:"holder_address" json:"holder_address"`
+	BalanceRaw              string    `db:"balance_raw" json:"balance_raw"`
+	Balance                 string    `db:"balance" json:"balance"`
+	SupplyPercent           *string   `db:"supply_percent" json:"supply_percent"`
+	Rank                    *int32    `db:"rank" json:"rank"`
+	Source                  string    `db:"source" json:"source"`
+	CapturedAt              time.Time `db:"captured_at" json:"captured_at"`
 }
 
 type MarketAddressLabel struct {
-	ID              int64     `db:"id" json:"id"`
-	DeBoxUserID     string    `db:"debox_user_id" json:"debox_user_id"`
-	MarketProjectID int64     `db:"market_project_id" json:"market_project_id"`
-	ChainKey        string    `db:"chain_key" json:"chain_key"`
-	ChainID         int64     `db:"chain_id" json:"chain_id"`
-	Address         string    `db:"address" json:"address"`
-	LabelType       string    `db:"label_type" json:"label_type"`
-	Label           string    `db:"label" json:"label"`
-	Excluded        int32     `db:"excluded" json:"excluded"`
-	CreatedAt       time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time `db:"updated_at" json:"updated_at"`
+	ID                        int64     `db:"id" json:"id"`
+	DeBoxUserID               string    `db:"debox_user_id" json:"debox_user_id"`
+	MarketProjectID           int64     `db:"market_project_id" json:"market_project_id"`
+	MarketProjectDeploymentID *int64    `db:"market_project_deployment_id" json:"market_project_deployment_id,omitempty"`
+	ChainKey                  string    `db:"chain_key" json:"chain_key"`
+	ChainID                   int64     `db:"chain_id" json:"chain_id"`
+	Address                   string    `db:"address" json:"address"`
+	LabelType                 string    `db:"label_type" json:"label_type"`
+	Label                     string    `db:"label" json:"label"`
+	Excluded                  int32     `db:"excluded" json:"excluded"`
+	CreatedAt                 time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt                 time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type MarketChainCursor struct {
-	ID              int64      `db:"id" json:"id"`
-	ChainKey        string     `db:"chain_key" json:"chain_key"`
-	ChainID         int64      `db:"chain_id" json:"chain_id"`
-	CursorKey       string     `db:"cursor_key" json:"cursor_key"`
-	NextBlockNumber int64      `db:"next_block_number" json:"next_block_number"`
-	SafeBlockNumber int64      `db:"safe_block_number" json:"safe_block_number"`
-	LastBlockHash   *string    `db:"last_block_hash" json:"last_block_hash"`
-	Status          string     `db:"status" json:"status"`
-	LastError       string     `db:"last_error" json:"last_error"`
-	LastScannedAt   *time.Time `db:"last_scanned_at" json:"last_scanned_at"`
-	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time  `db:"updated_at" json:"updated_at"`
+	ID                      int64      `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64     `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string     `db:"chain_key" json:"chain_key"`
+	ChainID                 int64      `db:"chain_id" json:"chain_id"`
+	CursorKey               string     `db:"cursor_key" json:"cursor_key"`
+	NextBlockNumber         int64      `db:"next_block_number" json:"next_block_number"`
+	SafeBlockNumber         int64      `db:"safe_block_number" json:"safe_block_number"`
+	LastBlockHash           *string    `db:"last_block_hash" json:"last_block_hash"`
+	Status                  string     `db:"status" json:"status"`
+	LastError               string     `db:"last_error" json:"last_error"`
+	LastScannedAt           *time.Time `db:"last_scanned_at" json:"last_scanned_at"`
+	CreatedAt               time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt               time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type NoditWebhookSubscription struct {
@@ -405,36 +500,38 @@ type MarketCollectionTarget struct {
 }
 
 type MarketScannedBlock struct {
-	ID             int64      `db:"id" json:"id"`
-	ChainKey       string     `db:"chain_key" json:"chain_key"`
-	ChainID        int64      `db:"chain_id" json:"chain_id"`
-	CursorKey      string     `db:"cursor_key" json:"cursor_key"`
-	BlockNumber    int64      `db:"block_number" json:"block_number"`
-	BlockHash      string     `db:"block_hash" json:"block_hash"`
-	ParentHash     string     `db:"parent_hash" json:"parent_hash"`
-	BlockTimestamp *time.Time `db:"block_timestamp" json:"block_timestamp"`
-	Canonical      int32      `db:"canonical" json:"canonical"`
-	ScannedAt      time.Time  `db:"scanned_at" json:"scanned_at"`
-	CreatedAt      time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt      time.Time  `db:"updated_at" json:"updated_at"`
+	ID                      int64      `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64     `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string     `db:"chain_key" json:"chain_key"`
+	ChainID                 int64      `db:"chain_id" json:"chain_id"`
+	CursorKey               string     `db:"cursor_key" json:"cursor_key"`
+	BlockNumber             int64      `db:"block_number" json:"block_number"`
+	BlockHash               string     `db:"block_hash" json:"block_hash"`
+	ParentHash              string     `db:"parent_hash" json:"parent_hash"`
+	BlockTimestamp          *time.Time `db:"block_timestamp" json:"block_timestamp"`
+	Canonical               int32      `db:"canonical" json:"canonical"`
+	ScannedAt               time.Time  `db:"scanned_at" json:"scanned_at"`
+	CreatedAt               time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt               time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type MarketProviderHealth struct {
-	ID                  int64           `db:"id" json:"id"`
-	Provider            string          `db:"provider" json:"provider"`
-	Component           string          `db:"component" json:"component"`
-	ChainKey            string          `db:"chain_key" json:"chain_key"`
-	ChainID             int64           `db:"chain_id" json:"chain_id"`
-	Status              string          `db:"status" json:"status"`
-	ConsecutiveFailures int32           `db:"consecutive_failures" json:"consecutive_failures"`
-	LatencyMS           *int64          `db:"latency_ms" json:"latency_ms"`
-	LastSuccessAt       *time.Time      `db:"last_success_at" json:"last_success_at"`
-	LastFailureAt       *time.Time      `db:"last_failure_at" json:"last_failure_at"`
-	LastCheckedAt       time.Time       `db:"last_checked_at" json:"last_checked_at"`
-	LastError           string          `db:"last_error" json:"last_error"`
-	Metadata            json.RawMessage `db:"metadata" json:"metadata"`
-	CreatedAt           time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt           time.Time       `db:"updated_at" json:"updated_at"`
+	ID                      int64           `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	Provider                string          `db:"provider" json:"provider"`
+	Component               string          `db:"component" json:"component"`
+	ChainKey                string          `db:"chain_key" json:"chain_key"`
+	ChainID                 int64           `db:"chain_id" json:"chain_id"`
+	Status                  string          `db:"status" json:"status"`
+	ConsecutiveFailures     int32           `db:"consecutive_failures" json:"consecutive_failures"`
+	LatencyMS               *int64          `db:"latency_ms" json:"latency_ms"`
+	LastSuccessAt           *time.Time      `db:"last_success_at" json:"last_success_at"`
+	LastFailureAt           *time.Time      `db:"last_failure_at" json:"last_failure_at"`
+	LastCheckedAt           time.Time       `db:"last_checked_at" json:"last_checked_at"`
+	LastError               string          `db:"last_error" json:"last_error"`
+	Metadata                json.RawMessage `db:"metadata" json:"metadata"`
+	CreatedAt               time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt               time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type MarketProviderUsage struct {
