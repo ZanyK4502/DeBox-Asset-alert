@@ -8,31 +8,65 @@ import (
 )
 
 type Runner struct {
-	service *Service
+	services []*Service
 }
 
-func NewRunner(service *Service) *Runner {
-	return &Runner{service: service}
+func NewRunner(services ...*Service) *Runner {
+	return &Runner{services: append([]*Service(nil), services...)}
 }
 
 func (runner *Runner) Run(ctx context.Context, logger *slog.Logger) {
-	if runner == nil || runner.service == nil || !runner.service.Enabled() {
+	if runner == nil {
 		return
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var services []*Service
+	for _, service := range runner.services {
+		if service != nil && service.Enabled() {
+			services = append(services, service)
+		}
+	}
+	if len(services) == 0 {
+		return
+	}
+	var workers sync.WaitGroup
+	workers.Add(len(services))
+	for index, service := range services {
+		service := service
+		includeGlobalTasks := index == 0
+		go func() {
+			defer workers.Done()
+			runService(ctx, logger, service, includeGlobalTasks)
+		}()
+	}
+	workers.Wait()
+}
+
+func runService(
+	ctx context.Context,
+	logger *slog.Logger,
+	service *Service,
+	includeGlobalTasks bool,
+) {
 	tasks := []struct {
 		name     string
 		interval time.Duration
 		run      func(context.Context) error
 	}{
-		{"webhook-inbox", runner.service.settings.InboxInterval, runner.service.ProcessInbox},
-		{"market-data", runner.service.settings.SnapshotInterval, runner.service.RefreshMarketData},
-		{"log-scanner", runner.service.settings.ScanInterval, runner.service.ScanLogs},
-		{"webhook-sync", runner.service.settings.DiscoveryInterval, runner.service.SyncWebhookSubscriptions},
-		{"health", runner.service.settings.HealthInterval, runner.service.CheckHealth},
-		{"cleanup", runner.service.settings.CleanupInterval, runner.service.Cleanup},
+		{"webhook-inbox", service.settings.InboxInterval, service.ProcessInbox},
+		{"market-data", service.settings.SnapshotInterval, service.RefreshMarketData},
+		{"log-scanner", service.settings.ScanInterval, service.ScanLogs},
+		{"webhook-sync", service.settings.DiscoveryInterval, service.SyncWebhookSubscriptions},
+		{"health", service.settings.HealthInterval, service.CheckHealth},
+	}
+	if includeGlobalTasks {
+		tasks = append(tasks, struct {
+			name     string
+			interval time.Duration
+			run      func(context.Context) error
+		}{"cleanup", service.settings.CleanupInterval, service.Cleanup})
 	}
 	var background sync.WaitGroup
 	background.Add(len(tasks))
@@ -40,7 +74,13 @@ func (runner *Runner) Run(ctx context.Context, logger *slog.Logger) {
 		task := task
 		go func() {
 			defer background.Done()
-			runScheduledTask(ctx, logger, task.name, task.interval, task.run)
+			runScheduledTask(
+				ctx,
+				logger,
+				service.settings.ChainKey+":"+task.name,
+				task.interval,
+				task.run,
+			)
 		}()
 	}
 	background.Wait()

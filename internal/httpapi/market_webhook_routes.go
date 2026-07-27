@@ -24,8 +24,9 @@ func (h handler) postMarketWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, marketcollector.ErrInvalidWebhook)
 		return
 	}
-	result, err := h.deps.MarketWebhook.AcceptWebhook(
+	result, err := h.deps.MarketWebhook.AcceptWebhookForChain(
 		r.Context(),
+		r.PathValue("chain_key"),
 		r.PathValue("category"),
 		map[string][]string(r.Header),
 		body,
@@ -35,6 +36,8 @@ func (h handler) postMarketWebhook(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, marketcollector.ErrCollectorDisabled),
 			errors.Is(err, marketcollector.ErrWebhookUnavailable):
 			writeError(w, http.StatusServiceUnavailable, err)
+		case errors.Is(err, marketcollector.ErrUnsupportedChain):
+			writeError(w, http.StatusNotFound, err)
 		case errors.Is(err, marketcollector.ErrInvalidSignature),
 			errors.Is(err, marketcollector.ErrExpiredWebhook):
 			writeError(w, http.StatusUnauthorized, err)

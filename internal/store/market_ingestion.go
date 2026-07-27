@@ -22,7 +22,8 @@ const noditWebhookSubscriptionColumns = `
 `
 
 const webhookInboxColumns = `
-	id, webhook_subscription_id, provider, delivery_id, dedupe_key,
+	id, webhook_subscription_id, provider, chain_key, chain_id,
+	delivery_id, dedupe_key,
 	signature_valid, headers, raw_body, payload, processing_status,
 	attempts, next_attempt_at, locked_at, processed_at, last_error,
 	received_at, created_at
@@ -58,6 +59,8 @@ type UpsertNoditWebhookSubscriptionParams struct {
 type CreateWebhookInboxParams struct {
 	WebhookSubscriptionID *int64
 	Provider              string
+	ChainKey              string
+	ChainID               int64
 	DeliveryID            string
 	DedupeKey             string
 	SignatureValid        bool
@@ -262,9 +265,11 @@ func (s *Store) CreateWebhookInboxMessage(
 	params CreateWebhookInboxParams,
 ) (WebhookInboxMessage, bool, error) {
 	params.Provider = strings.ToLower(strings.TrimSpace(params.Provider))
+	params.ChainKey = strings.ToLower(strings.TrimSpace(params.ChainKey))
 	params.DeliveryID = strings.TrimSpace(params.DeliveryID)
 	params.DedupeKey = strings.TrimSpace(params.DedupeKey)
-	if params.Provider == "" || params.DedupeKey == "" || len(params.RawBody) == 0 {
+	if params.Provider == "" || params.ChainKey == "" || params.ChainID <= 0 ||
+		params.DedupeKey == "" || len(params.RawBody) == 0 {
 		return WebhookInboxMessage{}, false, ErrInvalidWebhookDelivery
 	}
 	receivedAt := params.ReceivedAt.UTC()
@@ -273,14 +278,17 @@ func (s *Store) CreateWebhookInboxMessage(
 	}
 	value, err := collectOne[WebhookInboxMessage](ctx, s.db, `
 		INSERT INTO webhook_inbox (
-			webhook_subscription_id, provider, delivery_id, dedupe_key,
+			webhook_subscription_id, provider, chain_key, chain_id,
+			delivery_id, dedupe_key,
 			signature_valid, headers, raw_body, payload, received_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (provider, dedupe_key) DO NOTHING
 		RETURNING `+webhookInboxColumns,
 		params.WebhookSubscriptionID,
 		params.Provider,
+		params.ChainKey,
+		params.ChainID,
 		params.DeliveryID,
 		params.DedupeKey,
 		boolInt(params.SignatureValid),
@@ -311,21 +319,25 @@ func (s *Store) CreateWebhookInboxMessage(
 		replayed, replayErr := collectOne[WebhookInboxMessage](ctx, s.db, `
 			UPDATE webhook_inbox
 			SET webhook_subscription_id = COALESCE($1, webhook_subscription_id),
-			    delivery_id = $2,
+			    chain_key = $2,
+			    chain_id = $3,
+			    delivery_id = $4,
 			    signature_valid = 1,
-			    headers = $3,
-			    raw_body = $4,
-			    payload = $5,
+			    headers = $5,
+			    raw_body = $6,
+			    payload = $7,
 			    processing_status = 'pending',
 			    attempts = 0,
 			    next_attempt_at = NOW(),
 			    locked_at = NULL,
 			    processed_at = NULL,
 			    last_error = '',
-			    received_at = $6
-			WHERE id = $7 AND processing_status IN ('failed', 'dead')
+			    received_at = $8
+			WHERE id = $9 AND processing_status IN ('failed', 'dead')
 			RETURNING `+webhookInboxColumns,
 			params.WebhookSubscriptionID,
+			params.ChainKey,
+			params.ChainID,
 			params.DeliveryID,
 			normalizedJSON(params.Headers),
 			params.RawBody,
@@ -348,18 +360,23 @@ func (s *Store) CreateWebhookInboxMessage(
 
 func (s *Store) ClaimWebhookInboxMessages(
 	ctx context.Context,
+	chainID int64,
 	limit int,
 ) ([]WebhookInboxMessage, error) {
+	if chainID <= 0 {
+		return nil, ErrInvalidWebhookDelivery
+	}
 	limit = clamp(limit, 1, 500)
 	values, err := collectMany[WebhookInboxMessage](ctx, s.db, `
 		WITH picked AS (
 			SELECT id
 			FROM webhook_inbox
-			WHERE processing_status IN ('pending', 'failed')
+			WHERE chain_id = $1
+			  AND processing_status IN ('pending', 'failed')
 			  AND next_attempt_at <= NOW()
 			ORDER BY next_attempt_at, id
 			FOR UPDATE SKIP LOCKED
-			LIMIT $1
+			LIMIT $2
 		)
 		UPDATE webhook_inbox wi
 		SET processing_status = 'processing',
@@ -368,12 +385,13 @@ func (s *Store) ClaimWebhookInboxMessages(
 		FROM picked
 		WHERE wi.id = picked.id
 		RETURNING
-			wi.id, wi.webhook_subscription_id, wi.provider, wi.delivery_id,
+			wi.id, wi.webhook_subscription_id, wi.provider,
+			wi.chain_key, wi.chain_id, wi.delivery_id,
 			wi.dedupe_key, wi.signature_valid, wi.headers, wi.raw_body,
 			wi.payload, wi.processing_status, wi.attempts, wi.next_attempt_at,
 			wi.locked_at, wi.processed_at, wi.last_error, wi.received_at,
 			wi.created_at
-	`, limit)
+	`, chainID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim webhook inbox messages: %w", err)
 	}

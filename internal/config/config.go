@@ -61,6 +61,7 @@ type Config struct {
 	PaymentRecipientAddress     string
 	PaymentMode                 string
 	MarketCollectorEnabled      bool
+	MarketChainKeys             []string
 	MarketRuleEngineEnabled     bool
 	MarketRuleInterval          time.Duration
 	MarketHolderRefreshInterval time.Duration
@@ -72,6 +73,7 @@ type Config struct {
 	NoditWebhookSigningKeys     map[string]string
 	MarketWebhookAutoRepair     bool
 	MarketConfirmationDepth     int64
+	MarketConfirmationDepths    map[string]int64
 	MarketScanBatchSize         int64
 	MarketInitialLookback       int64
 	MarketReorgLookback         int
@@ -126,6 +128,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	confirmationDepth, err := parseInt64Env("MARKET_CONFIRMATION_DEPTH", 15)
+	if err != nil {
+		return Config{}, err
+	}
+	marketChainKeys, err := parseMarketChainKeys(os.Getenv("MARKET_CHAIN_KEYS"))
+	if err != nil {
+		return Config{}, err
+	}
+	confirmationDepths, err := parsePositiveInt64MapEnv(
+		"MARKET_CONFIRMATION_DEPTHS_JSON",
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -210,6 +222,7 @@ func Load() (Config, error) {
 		PaymentRecipientAddress:     strings.TrimSpace(os.Getenv("PAYMENT_RECIPIENT_ADDRESS")),
 		PaymentMode:                 strings.ToLower(firstNonEmpty(os.Getenv("PAYMENT_MODE"), defaultPaymentMode)),
 		MarketCollectorEnabled:      collectorEnabled,
+		MarketChainKeys:             marketChainKeys,
 		MarketRuleEngineEnabled:     ruleEngineEnabled,
 		MarketRuleInterval:          ruleInterval,
 		MarketHolderRefreshInterval: holderRefreshInterval,
@@ -221,6 +234,7 @@ func Load() (Config, error) {
 		NoditWebhookSigningKeys:     webhookSigningKeys,
 		MarketWebhookAutoRepair:     webhookAutoRepair,
 		MarketConfirmationDepth:     confirmationDepth,
+		MarketConfirmationDepths:    confirmationDepths,
 		MarketScanBatchSize:         scanBatchSize,
 		MarketInitialLookback:       initialLookback,
 		MarketReorgLookback:         reorgLookback,
@@ -279,6 +293,14 @@ func (c Config) Validate() error {
 	if c.MarketCollectorEnabled {
 		if _, err := chain.ChainProfile(c.ChainKey, ""); err != nil {
 			return fmt.Errorf("market collector chain: %w", err)
+		}
+		if len(c.MarketChainKeys) == 0 {
+			return fmt.Errorf("MARKET_CHAIN_KEYS must contain at least one supported chain")
+		}
+		for _, chainKey := range c.MarketChainKeys {
+			if _, err := chain.ChainProfile(chainKey, ""); err != nil {
+				return fmt.Errorf("market collector chain list: %w", err)
+			}
 		}
 		if c.MarketConfirmationDepth < 1 || c.MarketScanBatchSize < 1 ||
 			c.MarketInitialLookback < 1 || c.MarketReorgLookback < 1 {
@@ -385,19 +407,102 @@ func parseSecretMapEnv(name string) (map[string]string, error) {
 	}
 	result := make(map[string]string, len(decoded))
 	for key, secret := range decoded {
-		key = strings.ToLower(strings.TrimSpace(key))
+		key, err := normalizeSecretMapKey(key)
+		if err != nil {
+			return nil, fmt.Errorf("%s contains an invalid category: %w", name, err)
+		}
 		secret = strings.TrimSpace(secret)
 		if key == "" || secret == "" {
 			return nil, fmt.Errorf("%s must not contain empty categories or secrets", name)
 		}
-		for _, character := range key {
-			if (character < 'a' || character > 'z') &&
-				(character < '0' || character > '9') &&
-				character != '_' && character != '-' {
-				return nil, fmt.Errorf("%s contains an invalid category", name)
-			}
-		}
 		result[key] = secret
 	}
 	return result, nil
+}
+
+func normalizeSecretMapKey(value string) (string, error) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), ":")
+	if len(parts) < 1 || len(parts) > 2 {
+		return "", fmt.Errorf("invalid webhook key scope")
+	}
+	category := parts[len(parts)-1]
+	if category == "" {
+		return "", fmt.Errorf("empty webhook category")
+	}
+	for _, character := range category {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '_' && character != '-' {
+			return "", fmt.Errorf("invalid webhook category")
+		}
+	}
+	if len(parts) == 1 {
+		return category, nil
+	}
+	profile, err := chain.ChainProfile(parts[0], "")
+	if err != nil {
+		return "", err
+	}
+	return profile.Key + ":" + category, nil
+}
+
+func parseMarketChainKeys(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		profiles := chain.SupportedChains()
+		result := make([]string, 0, len(profiles))
+		for _, profile := range profiles {
+			result = append(result, profile.Key)
+		}
+		return result, nil
+	}
+	seen := make(map[string]struct{})
+	result := make([]string, 0, 6)
+	for _, raw := range strings.Split(value, ",") {
+		profile, err := chain.ChainProfile(raw, "")
+		if err != nil {
+			return nil, fmt.Errorf("MARKET_CHAIN_KEYS: %w", err)
+		}
+		if _, exists := seen[profile.Key]; exists {
+			continue
+		}
+		seen[profile.Key] = struct{}{}
+		result = append(result, profile.Key)
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("MARKET_CHAIN_KEYS must contain at least one supported chain")
+	}
+	return result, nil
+}
+
+func parsePositiveInt64MapEnv(name string) (map[string]int64, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return nil, nil
+	}
+	var decoded map[string]int64
+	if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON object of integer values", name)
+	}
+	result := make(map[string]int64, len(decoded))
+	for rawKey, number := range decoded {
+		profile, err := chain.ChainProfile(rawKey, "")
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		if number < 1 {
+			return nil, fmt.Errorf("%s values must be greater than zero", name)
+		}
+		result[profile.Key] = number
+	}
+	return result, nil
+}
+
+func (c Config) MarketConfirmationDepthFor(chainKey string) int64 {
+	profile, err := chain.ChainProfile(chainKey, "")
+	if err == nil {
+		if depth := c.MarketConfirmationDepths[profile.Key]; depth > 0 {
+			return depth
+		}
+	}
+	return c.MarketConfirmationDepth
 }

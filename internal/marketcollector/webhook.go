@@ -85,7 +85,12 @@ func (service *Service) AcceptWebhook(
 		"x-request-id",
 		"x-event-id",
 	)
-	dedupe := webhookDedupeKey(category, deliveryID, rawBody)
+	dedupe := webhookDedupeKey(
+		service.settings.ChainKey,
+		category,
+		deliveryID,
+		rawBody,
+	)
 	subscription, err := service.repository.GetNoditWebhookSubscriptionByCategory(
 		ctx,
 		"nodit",
@@ -104,6 +109,8 @@ func (service *Service) AcceptWebhook(
 		store.CreateWebhookInboxParams{
 			WebhookSubscriptionID: subscriptionID,
 			Provider:              "nodit",
+			ChainKey:              service.settings.ChainKey,
+			ChainID:               service.settings.ChainID,
 			DeliveryID:            deliveryID,
 			DedupeKey:             dedupe,
 			SignatureValid:        signatureValid,
@@ -135,6 +142,7 @@ func (service *Service) ProcessInbox(ctx context.Context) error {
 		now := service.now().UTC()
 		if _, err := service.repository.RecoverStaleWebhookInbox(
 			ctx,
+			service.settings.ChainID,
 			now.Add(-service.settings.WebhookLease),
 			service.settings.WebhookMaxAttempts,
 		); err != nil {
@@ -142,6 +150,7 @@ func (service *Service) ProcessInbox(ctx context.Context) error {
 		}
 		messages, err := service.repository.ClaimWebhookInboxMessages(
 			ctx,
+			service.settings.ChainID,
 			service.settings.InboxBatchSize,
 		)
 		if err != nil {
@@ -177,6 +186,14 @@ func (service *Service) processInboxMessage(
 	ctx context.Context,
 	message store.WebhookInboxMessage,
 ) error {
+	if message.ChainID != 0 && message.ChainID != service.settings.ChainID {
+		return fmt.Errorf(
+			"%w: inbox chain %d does not match worker chain %d",
+			ErrInvalidWebhook,
+			message.ChainID,
+			service.settings.ChainID,
+		)
+	}
 	if message.SignatureValid != 1 {
 		return ErrInvalidSignature
 	}
@@ -308,8 +325,15 @@ func webhookTimestamp(headers map[string][]string) (time.Time, bool, error) {
 	return parsed.UTC(), true, nil
 }
 
-func webhookDedupeKey(category, deliveryID string, rawBody []byte) string {
+func webhookDedupeKey(chainKey, category, deliveryID string, rawBody []byte) string {
 	hasher := sha256.New()
+	// Preserve the historical BNB key so a delivery retried across the
+	// multi-chain rollout is not processed twice. Other chains include their
+	// key, preventing identical provider delivery IDs from colliding.
+	if normalizedChain := chain.NormalizeChainKey(chainKey, ""); normalizedChain != "bsc" {
+		_, _ = hasher.Write([]byte(normalizedChain))
+		_, _ = hasher.Write([]byte{0})
+	}
 	_, _ = hasher.Write([]byte(category))
 	_, _ = hasher.Write([]byte{0})
 	if deliveryID != "" {
@@ -348,6 +372,23 @@ func normalizeCategory(value string) string {
 		}
 	}
 	return value
+}
+
+func normalizeWebhookKeyScope(value string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), ":")
+	switch len(parts) {
+	case 1:
+		return normalizeCategory(parts[0])
+	case 2:
+		profile, err := chain.ChainProfile(parts[0], "")
+		category := normalizeCategory(parts[1])
+		if err != nil || category == "" {
+			return ""
+		}
+		return profile.Key + ":" + category
+	default:
+		return ""
+	}
 }
 
 func sortStrings(values []string) {

@@ -132,11 +132,11 @@ func (settings Settings) normalized() Settings {
 	}
 	if len(settings.WebhookSigningKeys) > 0 {
 		keys := make(map[string]string, len(settings.WebhookSigningKeys))
-		for category, secret := range settings.WebhookSigningKeys {
-			category = normalizeCategory(category)
+		for scope, secret := range settings.WebhookSigningKeys {
+			scope = normalizeWebhookKeyScope(scope)
 			secret = strings.TrimSpace(secret)
-			if category != "" && secret != "" {
-				keys[category] = secret
+			if scope != "" && secret != "" {
+				keys[scope] = secret
 			}
 		}
 		settings.WebhookSigningKeys = keys
@@ -145,10 +145,19 @@ func (settings Settings) normalized() Settings {
 }
 
 func (settings Settings) webhookSigningKey(category string) string {
-	if key := settings.WebhookSigningKeys[category]; key != "" {
+	if key := settings.WebhookSigningKeys[settings.ChainKey+":"+category]; key != "" {
 		return key
 	}
-	return settings.WebhookSigningKey
+	// Unscoped keys predate multi-chain callbacks and belong to the legacy BNB
+	// subscriptions. Reusing them on another chain would allow a valid BNB
+	// delivery to authenticate against the wrong route.
+	if settings.ChainKey == "bsc" {
+		if key := settings.WebhookSigningKeys[category]; key != "" {
+			return key
+		}
+		return settings.WebhookSigningKey
+	}
+	return ""
 }
 
 type Repository interface {
@@ -160,10 +169,10 @@ type Repository interface {
 	LatestMarketSnapshot(context.Context, int64, string, *int64) (*store.MarketSnapshot, error)
 
 	CreateWebhookInboxMessage(context.Context, store.CreateWebhookInboxParams) (store.WebhookInboxMessage, bool, error)
-	ClaimWebhookInboxMessages(context.Context, int) ([]store.WebhookInboxMessage, error)
+	ClaimWebhookInboxMessages(context.Context, int64, int) ([]store.WebhookInboxMessage, error)
 	MarkWebhookInboxProcessed(context.Context, int64) (store.WebhookInboxMessage, error)
 	MarkWebhookInboxFailed(context.Context, int64, string, time.Time, bool) (store.WebhookInboxMessage, error)
-	RecoverStaleWebhookInbox(context.Context, time.Time, int) (int64, error)
+	RecoverStaleWebhookInbox(context.Context, int64, time.Time, int) (int64, error)
 	GetNoditWebhookSubscriptionByCategory(context.Context, string, int64, string) (*store.NoditWebhookSubscription, error)
 	ListNoditWebhookSubscriptions(context.Context, *int64) ([]store.NoditWebhookSubscription, error)
 	UpsertNoditWebhookSubscription(context.Context, store.UpsertNoditWebhookSubscriptionParams) (store.NoditWebhookSubscription, error)
@@ -260,7 +269,10 @@ func (service *Service) withTaskLock(
 	if service.tryLock == nil {
 		return fn(ctx)
 	}
-	lock, acquired, err := service.tryLock(ctx, task)
+	lock, acquired, err := service.tryLock(
+		ctx,
+		"market:"+service.settings.ChainKey+":"+task,
+	)
 	if err != nil || !acquired {
 		return err
 	}

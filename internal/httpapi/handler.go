@@ -86,8 +86,9 @@ type BotService interface {
 }
 
 type MarketWebhookService interface {
-	AcceptWebhook(
+	AcceptWebhookForChain(
 		context.Context,
+		string,
 		string,
 		map[string][]string,
 		[]byte,
@@ -189,6 +190,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/bot/webhook-status", h.getBotWebhookStatus)
 	mux.HandleFunc("POST /bot/webhook", h.postBotWebhook)
 	mux.HandleFunc("POST /api/market/webhook/{category}", h.postMarketWebhook)
+	mux.HandleFunc("POST /api/market/webhook/{chain_key}/{category}", h.postMarketWebhook)
 	mux.HandleFunc("GET /api/market/catalog", h.getMarketCatalog)
 	mux.HandleFunc("GET /api/market/assets/search", h.getMarketAssetSearch)
 	mux.HandleFunc("GET /api/market/assets/resolve", h.getMarketAssetResolve)

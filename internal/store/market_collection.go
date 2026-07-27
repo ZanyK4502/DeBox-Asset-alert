@@ -437,23 +437,29 @@ func (s *Store) ReconcileMarketReorg(
 
 func (s *Store) RecoverStaleWebhookInbox(
 	ctx context.Context,
+	chainID int64,
 	staleBefore time.Time,
 	maxAttempts int,
 ) (int64, error) {
+	if chainID <= 0 {
+		return 0, ErrInvalidWebhookDelivery
+	}
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
 	tag, err := s.db.Exec(ctx, `
 		UPDATE webhook_inbox
-		SET processing_status = CASE WHEN attempts >= $2 THEN 'dead' ELSE 'failed' END,
+		SET processing_status = CASE WHEN attempts >= $3 THEN 'dead' ELSE 'failed' END,
 		    next_attempt_at = NOW(),
 		    locked_at = NULL,
 		    last_error = CASE
-		        WHEN attempts >= $2 THEN 'processing lease expired; retry limit reached'
+		        WHEN attempts >= $3 THEN 'processing lease expired; retry limit reached'
 		        ELSE 'processing lease expired; recovered after worker interruption'
 		    END
-		WHERE processing_status = 'processing' AND locked_at < $1
-	`, staleBefore.UTC(), maxAttempts)
+		WHERE chain_id = $1
+		  AND processing_status = 'processing'
+		  AND locked_at < $2
+	`, chainID, staleBefore.UTC(), maxAttempts)
 	if err != nil {
 		return 0, fmt.Errorf("recover stale webhook inbox: %w", err)
 	}

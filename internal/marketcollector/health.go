@@ -47,6 +47,28 @@ func (service *Service) CheckHealth(ctx context.Context) error {
 
 func (service *Service) checkWebhookStatus(ctx context.Context) error {
 	chainID := service.settings.ChainID
+	projects, err := service.repository.ListActiveMarketProjectsForCollection(
+		ctx,
+		chainID,
+		1,
+	)
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		metadata, _ := json.Marshal(map[string]any{
+			"configured": 0,
+			"required":   false,
+		})
+		return service.recordHealth(
+			ctx,
+			"nodit",
+			"webhook_status",
+			time.Now(),
+			nil,
+			metadata,
+		)
+	}
 	subscriptions, err := service.repository.ListNoditWebhookSubscriptions(ctx, &chainID)
 	if err != nil {
 		return err
@@ -92,7 +114,11 @@ func (service *Service) checkWebhookStatus(ctx context.Context) error {
 	for _, subscription := range subscriptions {
 		status := "pending"
 		checkError := ""
-		if subscription.ExternalID == nil || strings.TrimSpace(*subscription.ExternalID) == "" {
+		if service.settings.webhookSigningKey(subscription.EventCategory) == "" {
+			status = "error"
+			checkError = "chain-scoped webhook signing key is not configured"
+			driftCount++
+		} else if subscription.ExternalID == nil || strings.TrimSpace(*subscription.ExternalID) == "" {
 			checkError = "webhook has not been provisioned"
 			driftCount++
 		} else if current, exists := remoteByID[*subscription.ExternalID]; !exists {
@@ -188,6 +214,7 @@ func (service *Service) repairWebhook(
 		return fmt.Errorf("webhook external ID is unavailable")
 	}
 	update := chain.WebhookUpdateRequest{}
+	callbackURL := ""
 	if inactive {
 		active := true
 		update.IsActive = &active
@@ -196,21 +223,46 @@ func (service *Service) repairWebhook(
 		if strings.TrimSpace(service.settings.PublicAppURL) == "" {
 			return fmt.Errorf("public app URL is unavailable")
 		}
+		callbackURL = strings.TrimRight(service.settings.PublicAppURL, "/") +
+			"/api/market/webhook/" + service.settings.ChainKey +
+			"/" + subscription.EventCategory
 		update.Notification = &chain.WebhookNotification{
-			WebhookURL: strings.TrimRight(service.settings.PublicAppURL, "/") +
-				"/api/market/webhook/" + subscription.EventCategory,
+			WebhookURL: callbackURL,
 		}
 	}
 	if condition != nil {
 		update.Condition = condition
 	}
-	return service.chain.UpdateWebhook(
+	if err := service.chain.UpdateWebhook(
 		ctx,
 		service.settings.ChainKey,
 		service.settings.ChainFallback,
 		*subscription.ExternalID,
 		update,
+	); err != nil {
+		return err
+	}
+	if callbackURL == "" {
+		return nil
+	}
+	now := service.now().UTC()
+	_, err := service.repository.UpsertNoditWebhookSubscription(
+		ctx,
+		store.UpsertNoditWebhookSubscriptionParams{
+			Provider:        subscription.Provider,
+			ExternalID:      subscription.ExternalID,
+			ChainKey:        subscription.ChainKey,
+			ChainID:         subscription.ChainID,
+			EventCategory:   subscription.EventCategory,
+			CallbackURLHash: callbackURLHash(callbackURL),
+			SecretReference: subscription.SecretReference,
+			Status:          "active",
+			Configuration:   subscription.Configuration,
+			LastSyncedAt:    &now,
+			LastCheckedAt:   subscription.LastCheckedAt,
+		},
 	)
+	return err
 }
 
 func webhookConditionDrift(

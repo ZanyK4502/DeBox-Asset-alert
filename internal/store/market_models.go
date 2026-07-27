@@ -455,6 +455,8 @@ type WebhookInboxMessage struct {
 	ID                    int64           `db:"id" json:"id"`
 	WebhookSubscriptionID *int64          `db:"webhook_subscription_id" json:"webhook_subscription_id"`
 	Provider              string          `db:"provider" json:"provider"`
+	ChainKey              string          `db:"chain_key" json:"chain_key"`
+	ChainID               int64           `db:"chain_id" json:"chain_id"`
 	DeliveryID            string          `db:"delivery_id" json:"delivery_id"`
 	DedupeKey             string          `db:"dedupe_key" json:"dedupe_key"`
 	SignatureValid        int32           `db:"signature_valid" json:"signature_valid"`

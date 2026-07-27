@@ -35,6 +35,7 @@ func TestLoadDefaults(t *testing.T) {
 		"PAYMENT_RECIPIENT_ADDRESS",
 		"PAYMENT_MODE",
 		"MARKET_COLLECTOR_ENABLED",
+		"MARKET_CHAIN_KEYS",
 		"MARKET_RULE_ENGINE_ENABLED",
 		"MARKET_RULE_INTERVAL",
 		"MARKET_HOLDER_REFRESH_INTERVAL",
@@ -46,6 +47,7 @@ func TestLoadDefaults(t *testing.T) {
 		"NODIT_WEBHOOK_SIGNING_KEYS_JSON",
 		"MARKET_WEBHOOK_AUTO_REPAIR",
 		"MARKET_CONFIRMATION_DEPTH",
+		"MARKET_CONFIRMATION_DEPTHS_JSON",
 		"MARKET_SCAN_BATCH_SIZE",
 		"MARKET_INITIAL_LOOKBACK",
 		"MARKET_REORG_LOOKBACK",
@@ -87,6 +89,11 @@ func TestLoadDefaults(t *testing.T) {
 			cfg.MarketRuleInterval,
 			cfg.MarketHolderRefreshInterval,
 		)
+	}
+	if len(cfg.MarketChainKeys) != 6 ||
+		cfg.MarketChainKeys[0] != "bsc" ||
+		cfg.MarketChainKeys[5] != "optimism" {
+		t.Fatalf("market chain defaults = %#v", cfg.MarketChainKeys)
 	}
 	if cfg.DeBoxOpenAPIBase != defaultDeBoxAPI || cfg.ChainKey != defaultChainKey || cfg.NoditBaseURL != defaultNoditAPI {
 		t.Fatalf("external API defaults = %q/%q/%q", cfg.DeBoxOpenAPIBase, cfg.ChainKey, cfg.NoditBaseURL)
@@ -132,6 +139,34 @@ func TestLoadReadsPerWebhookSigningKeys(t *testing.T) {
 	if cfg.NoditWebhookSigningKeys["v2-v3"] != "first" ||
 		cfg.NoditWebhookSigningKeys["infinity"] != "second" {
 		t.Fatalf("unexpected webhook signing keys")
+	}
+}
+
+func TestLoadReadsChainScopedWebhookKeysAndCollectorSettings(t *testing.T) {
+	t.Setenv("NODIT_WEBHOOK_SIGNING_KEYS_JSON", `{"BNB:transfer":"bsc-key","base:transfer":"base-key"}`)
+	t.Setenv("MARKET_CHAIN_KEYS", "base,bnb,base,optimism")
+	t.Setenv("MARKET_CONFIRMATION_DEPTH", "15")
+	t.Setenv("MARKET_CONFIRMATION_DEPTHS_JSON", `{"base":24,"optimism":30}`)
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.MarketChainKeys) != 3 ||
+		cfg.MarketChainKeys[0] != "base" ||
+		cfg.MarketChainKeys[1] != "bsc" ||
+		cfg.MarketChainKeys[2] != "optimism" {
+		t.Fatalf("market chains = %#v", cfg.MarketChainKeys)
+	}
+	if cfg.NoditWebhookSigningKeys["bsc:transfer"] != "bsc-key" ||
+		cfg.NoditWebhookSigningKeys["base:transfer"] != "base-key" {
+		t.Fatalf("chain-scoped webhook keys = %#v", cfg.NoditWebhookSigningKeys)
+	}
+	if cfg.MarketConfirmationDepthFor("base") != 24 ||
+		cfg.MarketConfirmationDepthFor("optimism") != 30 ||
+		cfg.MarketConfirmationDepthFor("bsc") != 15 {
+		t.Fatal("per-chain confirmation depth was not applied")
 	}
 }
 

@@ -106,49 +106,63 @@ func buildDependencies(
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create asset catalog: %w", err)
 	}
-	marketChain, err := chain.ChainProfile(cfg.ChainKey, "")
+	marketDependencies := marketcollector.Dependencies{
+		Repository:       repository,
+		Chain:            chainClient,
+		Market:           marketDataClient,
+		EstimatedCUMilli: noditCUMeter,
+		TryLock: func(
+			ctx context.Context,
+			task string,
+		) (marketcollector.Lock, bool, error) {
+			lock, acquired, lockErr := repository.TryMarketTaskLock(ctx, task)
+			if lockErr != nil || !acquired {
+				return nil, acquired, lockErr
+			}
+			return lock, true, nil
+		},
+	}
+	marketServices := make([]*marketcollector.Service, 0, len(cfg.MarketChainKeys))
+	for _, marketChainKey := range cfg.MarketChainKeys {
+		marketChain, profileErr := chain.ChainProfile(marketChainKey, "")
+		if profileErr != nil {
+			closeDependencies()
+			return dependencies{}, func() {}, fmt.Errorf(
+				"create market chain profile: %w",
+				profileErr,
+			)
+		}
+		marketServices = append(marketServices, marketcollector.New(
+			marketDependencies,
+			marketcollector.Settings{
+				Enabled:            cfg.MarketCollectorEnabled,
+				ChainKey:           marketChain.Key,
+				ChainID:            marketChain.ChainID,
+				WebhookSigningKey:  cfg.NoditWebhookSigningKey,
+				WebhookSigningKeys: cfg.NoditWebhookSigningKeys,
+				WebhookAutoRepair:  cfg.MarketWebhookAutoRepair,
+				PublicAppURL:       cfg.PublicAppURL,
+				ConfirmationDepth:  cfg.MarketConfirmationDepthFor(marketChain.Key),
+				ScanBatchSize:      cfg.MarketScanBatchSize,
+				InitialLookback:    cfg.MarketInitialLookback,
+				ReorgLookback:      cfg.MarketReorgLookback,
+				InboxInterval:      cfg.MarketInboxInterval,
+				ScanInterval:       cfg.MarketScanInterval,
+				SnapshotInterval:   cfg.MarketSnapshotInterval,
+				DiscoveryInterval:  cfg.MarketDiscoveryInterval,
+				HealthInterval:     cfg.MarketHealthInterval,
+				CleanupInterval:    cfg.MarketCleanupInterval,
+				MonthlyCULimit:     cfg.NoditMonthlyCULimit,
+			},
+		))
+	}
+	// The legacy callback path was provisioned for BNB Chain before callbacks
+	// became chain-scoped. Keep it pinned to BNB regardless of wallet defaults.
+	marketCluster, err := marketcollector.NewCluster(marketServices, "bsc")
 	if err != nil {
 		closeDependencies()
-		return dependencies{}, func() {}, fmt.Errorf("create market chain profile: %w", err)
+		return dependencies{}, func() {}, fmt.Errorf("create market collector cluster: %w", err)
 	}
-	marketService := marketcollector.New(
-		marketcollector.Dependencies{
-			Repository:       repository,
-			Chain:            chainClient,
-			Market:           marketDataClient,
-			EstimatedCUMilli: noditCUMeter,
-			TryLock: func(
-				ctx context.Context,
-				task string,
-			) (marketcollector.Lock, bool, error) {
-				lock, acquired, lockErr := repository.TryMarketTaskLock(ctx, task)
-				if lockErr != nil || !acquired {
-					return nil, acquired, lockErr
-				}
-				return lock, true, nil
-			},
-		},
-		marketcollector.Settings{
-			Enabled:            cfg.MarketCollectorEnabled,
-			ChainKey:           marketChain.Key,
-			ChainID:            marketChain.ChainID,
-			WebhookSigningKey:  cfg.NoditWebhookSigningKey,
-			WebhookSigningKeys: cfg.NoditWebhookSigningKeys,
-			WebhookAutoRepair:  cfg.MarketWebhookAutoRepair,
-			PublicAppURL:       cfg.PublicAppURL,
-			ConfirmationDepth:  cfg.MarketConfirmationDepth,
-			ScanBatchSize:      cfg.MarketScanBatchSize,
-			InitialLookback:    cfg.MarketInitialLookback,
-			ReorgLookback:      cfg.MarketReorgLookback,
-			InboxInterval:      cfg.MarketInboxInterval,
-			ScanInterval:       cfg.MarketScanInterval,
-			SnapshotInterval:   cfg.MarketSnapshotInterval,
-			DiscoveryInterval:  cfg.MarketDiscoveryInterval,
-			HealthInterval:     cfg.MarketHealthInterval,
-			CleanupInterval:    cfg.MarketCleanupInterval,
-			MonthlyCULimit:     cfg.NoditMonthlyCULimit,
-		},
-	)
 	messenger, err := debox.NewMessenger(
 		cfg.DeBoxBotAPIKey,
 		cfg.DeBoxBotAPISecret,
@@ -275,7 +289,7 @@ func buildDependencies(
 			Management:    managementService,
 			Payments:      paymentService,
 			Bot:           botService,
-			MarketWebhook: marketService,
+			MarketWebhook: marketCluster,
 			Market:        marketViewService,
 			Assets:        assetCatalog,
 			Catalog:       catalog,
@@ -285,7 +299,7 @@ func buildDependencies(
 		monitor: monitorRunner,
 		payment: paymentRunner,
 		summary: summary.NewRunner(summaryExecutor, summary.DefaultInterval),
-		market:  marketcollector.NewRunner(marketService),
+		market:  marketcollector.NewRunner(marketCluster.Services()...),
 		rules:   marketrules.NewRunner(marketRuleService),
 	}, closeDependencies, nil
 }

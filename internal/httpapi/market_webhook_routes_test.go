@@ -12,19 +12,45 @@ import (
 )
 
 type marketWebhookStub struct {
+	chain    string
 	category string
 	body     string
 }
 
-func (stub *marketWebhookStub) AcceptWebhook(
+func (stub *marketWebhookStub) AcceptWebhookForChain(
 	_ context.Context,
+	chainKey string,
 	category string,
 	_ map[string][]string,
 	body []byte,
 ) (marketcollector.WebhookAcceptance, error) {
+	stub.chain = chainKey
 	stub.category = category
 	stub.body = string(body)
 	return marketcollector.WebhookAcceptance{InboxID: 42, Created: true}, nil
+}
+
+func TestMarketWebhookRoutesExplicitChain(t *testing.T) {
+	stub := &marketWebhookStub{}
+	handler := New(config.Config{}, Dependencies{MarketWebhook: stub})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/market/webhook/base/transfer",
+		strings.NewReader(`{"ok":true}`),
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || stub.chain != "base" ||
+		stub.category != "transfer" {
+		t.Fatalf(
+			"explicit-chain webhook = status:%d chain:%q category:%q",
+			response.Code,
+			stub.chain,
+			stub.category,
+		)
+	}
 }
 
 func TestMarketWebhookReturnsNoditCompatibleOK(t *testing.T) {

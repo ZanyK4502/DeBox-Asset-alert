@@ -69,6 +69,9 @@ func (service *Service) SyncWebhookSubscriptions(ctx context.Context) error {
 			strings.TrimSpace(*subscription.ExternalID) == "" {
 			return fmt.Errorf("transfer webhook subscription is not provisioned")
 		}
+		if service.settings.webhookSigningKey(transferWebhookCategory) == "" {
+			return ErrWebhookUnavailable
+		}
 
 		condition := tokenTransferCondition(tokens)
 		configuration, err := webhookConfiguration("TOKEN_TRANSFER", condition)

@@ -99,7 +99,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 11 || latestName != "0011_multichain_market_domain.sql" {
+	if latestVersion != 12 || latestName != "0012_multichain_market_collection.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
 	}
 }
@@ -855,6 +855,8 @@ func TestPostgresMarketIngestionStateIsIdempotent(t *testing.T) {
 	params := CreateWebhookInboxParams{
 		WebhookSubscriptionID: &webhook.ID,
 		Provider:              "nodit",
+		ChainKey:              "bsc",
+		ChainID:               56,
 		DeliveryID:            "delivery-1",
 		DedupeKey:             "delivery-1",
 		SignatureValid:        true,
@@ -870,7 +872,17 @@ func TestPostgresMarketIngestionStateIsIdempotent(t *testing.T) {
 	if err != nil || inserted || duplicate.ID != message.ID {
 		t.Fatalf("duplicate webhook inbox = %#v inserted:%v err:%v", duplicate, inserted, err)
 	}
-	claimed, err := database.ClaimWebhookInboxMessages(ctx, 10)
+	baseParams := params
+	baseParams.WebhookSubscriptionID = nil
+	baseParams.ChainKey = "base"
+	baseParams.ChainID = 8453
+	baseParams.DeliveryID = "delivery-base-1"
+	baseParams.DedupeKey = "base:delivery-1"
+	baseMessage, inserted, err := database.CreateWebhookInboxMessage(ctx, baseParams)
+	if err != nil || !inserted {
+		t.Fatalf("create Base webhook inbox = %#v inserted:%v err:%v", baseMessage, inserted, err)
+	}
+	claimed, err := database.ClaimWebhookInboxMessages(ctx, 56, 10)
 	if err != nil || len(claimed) != 1 ||
 		claimed[0].ID != message.ID ||
 		claimed[0].ProcessingStatus != "processing" ||
@@ -881,6 +893,10 @@ func TestPostgresMarketIngestionStateIsIdempotent(t *testing.T) {
 	if err != nil || processed.ProcessingStatus != "processed" ||
 		processed.ProcessedAt == nil {
 		t.Fatalf("processed webhook inbox = %#v err:%v", processed, err)
+	}
+	baseClaimed, err := database.ClaimWebhookInboxMessages(ctx, 8453, 10)
+	if err != nil || len(baseClaimed) != 1 || baseClaimed[0].ID != baseMessage.ID {
+		t.Fatalf("claimed Base webhook inbox = %#v err:%v", baseClaimed, err)
 	}
 
 	blockHashA := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

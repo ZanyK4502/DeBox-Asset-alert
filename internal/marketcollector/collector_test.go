@@ -78,6 +78,8 @@ type fakeRepository struct {
 	activeProjects    []store.MarketProject
 	subscriptions     []store.NoditWebhookSubscription
 	lastWebhookUpsert *store.UpsertNoditWebhookSubscriptionParams
+	lastClaimChain    int64
+	lastRecoveryChain int64
 }
 
 func (repository *fakeRepository) ListActiveMarketProjectsForCollection(context.Context, int64, int) ([]store.MarketProject, error) {
@@ -109,6 +111,8 @@ func (repository *fakeRepository) CreateWebhookInboxMessage(_ context.Context, p
 	}
 	message := store.WebhookInboxMessage{
 		ID:             int64(len(repository.inboxByKey) + 1),
+		ChainKey:       params.ChainKey,
+		ChainID:        params.ChainID,
 		DedupeKey:      params.DedupeKey,
 		SignatureValid: boolInt32(params.SignatureValid),
 		Payload:        params.Payload,
@@ -116,7 +120,8 @@ func (repository *fakeRepository) CreateWebhookInboxMessage(_ context.Context, p
 	repository.inboxByKey[params.DedupeKey] = message
 	return message, true, nil
 }
-func (repository *fakeRepository) ClaimWebhookInboxMessages(context.Context, int) ([]store.WebhookInboxMessage, error) {
+func (repository *fakeRepository) ClaimWebhookInboxMessages(_ context.Context, chainID int64, _ int) ([]store.WebhookInboxMessage, error) {
+	repository.lastClaimChain = chainID
 	return repository.claims, nil
 }
 func (repository *fakeRepository) MarkWebhookInboxProcessed(context.Context, int64) (store.WebhookInboxMessage, error) {
@@ -126,7 +131,8 @@ func (repository *fakeRepository) MarkWebhookInboxFailed(_ context.Context, _ in
 	repository.failedDead = dead
 	return store.WebhookInboxMessage{}, nil
 }
-func (repository *fakeRepository) RecoverStaleWebhookInbox(context.Context, time.Time, int) (int64, error) {
+func (repository *fakeRepository) RecoverStaleWebhookInbox(_ context.Context, chainID int64, _ time.Time, _ int) (int64, error) {
+	repository.lastRecoveryChain = chainID
 	return 0, nil
 }
 func (repository *fakeRepository) GetNoditWebhookSubscriptionByCategory(_ context.Context, provider string, chainID int64, category string) (*store.NoditWebhookSubscription, error) {
@@ -342,6 +348,9 @@ func TestSyncWebhookSubscriptionsMergesActiveProjectTokens(t *testing.T) {
 		WebhookAutoRepair: true,
 		ChainKey:          "bsc",
 		ChainID:           56,
+		WebhookSigningKeys: map[string]string{
+			"transfer": "legacy-bsc-key",
+		},
 	})
 
 	if err := service.SyncWebhookSubscriptions(context.Background()); err != nil {
@@ -388,6 +397,7 @@ func TestAcceptWebhookRejectsExpiredTimestampButAuditsDelivery(t *testing.T) {
 func TestProcessInboxPermanentlyRejectsInvalidSignature(t *testing.T) {
 	repository := &fakeRepository{claims: []store.WebhookInboxMessage{{
 		ID:             9,
+		ChainID:        DefaultChainID,
 		SignatureValid: 0,
 		Attempts:       1,
 	}}}
@@ -401,6 +411,14 @@ func TestProcessInboxPermanentlyRejectsInvalidSignature(t *testing.T) {
 	}
 	if !repository.failedDead {
 		t.Fatal("invalid signature was scheduled for retry")
+	}
+	if repository.lastClaimChain != DefaultChainID ||
+		repository.lastRecoveryChain != DefaultChainID {
+		t.Fatalf(
+			"inbox recovery crossed chains: claim=%d recovery=%d",
+			repository.lastClaimChain,
+			repository.lastRecoveryChain,
+		)
 	}
 }
 
