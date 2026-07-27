@@ -142,6 +142,39 @@ func TestDexScreenerDiscoversPoolsOnAllSupportedEVMChains(t *testing.T) {
 	}
 }
 
+func TestDexScreenerDiscoverySkipsUnsupportedPoolIdentifiers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		valid := strings.TrimSuffix(strings.TrimPrefix(
+			pairArrayJSON(marketPairA, marketTokenA, marketTokenB),
+			"[",
+		), "]")
+		invalid := strings.Replace(
+			valid,
+			`"pairAddress":"`+marketPairA+`"`,
+			`"pairAddress":"0x`+strings.Repeat("f", 64)+`"`,
+			1,
+		)
+		_, _ = fmt.Fprintf(writer, `[%s,%s]`, invalid, valid)
+	}))
+	defer server.Close()
+	client := newTestDexScreenerClient(t, server)
+
+	pairs, err := client.DiscoverPools(
+		context.Background(),
+		"bsc",
+		marketTokenA,
+	)
+	if err != nil {
+		t.Fatalf("DiscoverPools() error = %v", err)
+	}
+	if len(pairs) != 1 || pairs[0].PairAddress != marketPairA {
+		t.Fatalf("DiscoverPools() = %#v, want the valid EVM pool only", pairs)
+	}
+}
+
 func TestDexScreenerBatchesTokensAndPairs(t *testing.T) {
 	var tokenRequests atomic.Int32
 	var pairRequests atomic.Int32

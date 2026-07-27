@@ -334,7 +334,19 @@ func (c *DexScreenerClient) getPairsOnce(
 	} else if err := decodeJSON(body, &pairs); err != nil {
 		return nil, fmt.Errorf("decode DexScreener response: %w", err)
 	}
-	return normalizePairs(pairs)
+	// A token can have a mixture of ordinary EVM pools and provider-specific
+	// pool identifiers (for example a bytes32 Uniswap v4 pool id). One
+	// unsupported row must not hide every valid EVM pool returned in the same
+	// response. Keep normalizePairs strict for trusted/internal callers, but
+	// treat each untrusted provider row independently at this boundary.
+	result := make([]Pair, 0, len(pairs))
+	for _, pair := range pairs {
+		normalized, normalizeErr := normalizePairs([]Pair{pair})
+		if normalizeErr == nil && len(normalized) == 1 {
+			result = append(result, normalized[0])
+		}
+	}
+	return deduplicatePairs(result), nil
 }
 
 func (c *DexScreenerClient) getSearchPairs(
