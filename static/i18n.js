@@ -25,7 +25,7 @@ window.H5_I18N = Object.freeze({
     marketTitle: "项目币监控",
     marketWizardSteps: "创建项目币监控步骤",
     marketStepAsset: "选择项目币",
-    marketStepAssetHint: "按名称搜索，找不到再用合约",
+    marketStepAssetHint: "按名称搜索，未找到选择按链与合约搜索",
     marketStepChains: "确认链与合约",
     marketStepChainsHint: "再次确认需监控的项目币",
     marketStepPools: "选择交易池",
