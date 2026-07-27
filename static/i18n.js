@@ -74,7 +74,7 @@ window.H5_I18N = Object.freeze({
     marketSelectChainRequired: "请至少选择一条链。",
     marketVerifyingIdentity: "正在用权威资产身份逐链验证这些合约是否属于同一个币…",
     marketSingleChainVerification: "单链项目无需跨链合并，正在读取交易池…",
-    marketIdentityVerified: "严格同币验证通过：{count} 条链属于同一个项目币。",
+    marketIdentityVerified: "严格同币验证通过，{count} 条链属于同一个项目币。",
     marketSingleChainVerified: "单链合约已确认。",
     marketIdentityOrPoolsFailed: "同币验证或交易池查询失败，请检查所选链后重试。",
     marketChoosePools: "按链选择要监控的交易池",
