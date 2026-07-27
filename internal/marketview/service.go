@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketdata"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
@@ -60,11 +61,35 @@ type ChainService interface {
 	PoolFactory(context.Context, string, string, string) (string, error)
 }
 
+type AssetIdentityService interface {
+	ResolveContract(context.Context, string, string) (*assetcatalog.Candidate, error)
+	VerifyCrossChainIdentity(
+		context.Context,
+		assetcatalog.CrossChainVerifyInput,
+	) (assetcatalog.CrossChainVerificationResult, error)
+}
+
+type multiChainProjectRepository interface {
+	ListMarketProjectDeployments(
+		context.Context,
+		int64,
+		string,
+	) ([]store.MarketProjectDeployment, error)
+}
+
+type multiChainProjectEntitlements interface {
+	CreateMultiChainMarketProject(
+		context.Context,
+		store.CreateMultiChainMarketProjectParams,
+	) (store.MarketProject, error)
+}
+
 type Dependencies struct {
 	Repository   Repository
 	Entitlements Entitlements
 	Chain        ChainService
 	Market       marketdata.Provider
+	Assets       AssetIdentityService
 	Catalog      *plans.Catalog
 }
 
@@ -124,19 +149,31 @@ type MultiTokenQueryResult struct {
 }
 
 type CreateProjectInput struct {
-	ChainKey      string   `json:"chain_key"`
-	TokenAddress  string   `json:"token_address"`
-	PoolAddresses []string `json:"pool_addresses"`
+	ChainKey         string                         `json:"chain_key"`
+	TokenAddress     string                         `json:"token_address"`
+	PoolAddresses    []string                       `json:"pool_addresses"`
+	CanonicalAssetID string                         `json:"canonical_asset_id"`
+	IdentitySource   string                         `json:"identity_source"`
+	LogoURL          string                         `json:"logo_url"`
+	Deployments      []CreateProjectDeploymentInput `json:"deployments"`
+}
+
+type CreateProjectDeploymentInput struct {
+	ChainKey           string   `json:"chain_key"`
+	TokenAddress       string   `json:"token_address"`
+	PoolAddresses      []string `json:"pool_addresses"`
+	PrimaryPoolAddress string   `json:"primary_pool_address"`
 }
 
 type ProjectDetail struct {
-	Project        store.MarketProject          `json:"project"`
-	Pools          []store.MarketPoolView       `json:"pools"`
-	LatestSnapshot *store.MarketSnapshot        `json:"latest_snapshot"`
-	Rules          []store.MarketRule           `json:"rules"`
-	Holders        []store.MarketHolder         `json:"holders"`
-	Labels         []store.MarketAddressLabel   `json:"labels"`
-	ProviderHealth []store.MarketProviderHealth `json:"provider_health"`
+	Project        store.MarketProject             `json:"project"`
+	Pools          []store.MarketPoolView          `json:"pools"`
+	LatestSnapshot *store.MarketSnapshot           `json:"latest_snapshot"`
+	Rules          []store.MarketRule              `json:"rules"`
+	Holders        []store.MarketHolder            `json:"holders"`
+	Labels         []store.MarketAddressLabel      `json:"labels"`
+	ProviderHealth []store.MarketProviderHealth    `json:"provider_health"`
+	Deployments    []store.MarketProjectDeployment `json:"deployments"`
 }
 
 type CreateRuleInput struct {
@@ -375,6 +412,9 @@ func (s *Service) CreateProject(
 	deboxUserID string,
 	input CreateProjectInput,
 ) (ProjectDetail, error) {
+	if len(input.Deployments) > 0 {
+		return s.createMultiChainProject(ctx, deboxUserID, input)
+	}
 	query, err := s.QueryToken(ctx, deboxUserID, TokenQueryInput{
 		ChainKey: input.ChainKey, TokenAddress: input.TokenAddress,
 	})
@@ -459,6 +499,231 @@ func (s *Service) CreateProject(
 	return s.Project(ctx, deboxUserID, project.ID)
 }
 
+func (s *Service) createMultiChainProject(
+	ctx context.Context,
+	deboxUserID string,
+	input CreateProjectInput,
+) (ProjectDetail, error) {
+	if s.deps.Assets == nil {
+		return ProjectDetail{}, errors.New("资产身份校验服务不可用。")
+	}
+	if len(input.Deployments) == 0 ||
+		len(input.Deployments) > len(chain.SupportedChains()) {
+		return ProjectDetail{}, errors.New("请选择 1 到 6 条链上的代币合约。")
+	}
+	queryInput := MultiTokenQueryInput{
+		Deployments: make([]TokenQueryInput, len(input.Deployments)),
+	}
+	contracts := make([]assetcatalog.ManualContractInput, len(input.Deployments))
+	for index, deployment := range input.Deployments {
+		queryInput.Deployments[index] = TokenQueryInput{
+			ChainKey: deployment.ChainKey, TokenAddress: deployment.TokenAddress,
+		}
+		contracts[index] = assetcatalog.ManualContractInput{
+			ChainKey: deployment.ChainKey, ContractAddress: deployment.TokenAddress,
+		}
+	}
+	query, err := s.QueryTokens(ctx, deboxUserID, queryInput)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	requestByChain := make(map[string]CreateProjectDeploymentInput, len(input.Deployments))
+	for _, deployment := range input.Deployments {
+		profile, profileErr := chain.ChainProfile(deployment.ChainKey, "")
+		if profileErr != nil {
+			return ProjectDetail{}, profileErr
+		}
+		requestByChain[profile.Key] = deployment
+	}
+
+	identitySource := strings.ToLower(strings.TrimSpace(input.IdentitySource))
+	canonicalAssetID := strings.ToLower(strings.TrimSpace(input.CanonicalAssetID))
+	logoURL := strings.TrimSpace(input.LogoURL)
+	if !strings.HasPrefix(logoURL, "/api/market/assets/logo?source=") {
+		logoURL = ""
+	}
+	verificationStatus := assetcatalog.IdentitySingleChain
+	canonicalName := ""
+	canonicalSymbol := ""
+	verifiedAt := time.Now().UTC()
+	evidenceByChain := make(map[string]assetcatalog.IdentityEvidenceRecord)
+	if len(input.Deployments) > 1 {
+		if identitySource != assetcatalog.SourceCoinGecko || canonicalAssetID == "" {
+			return ProjectDetail{}, assetcatalog.ErrCrossChainIdentityUnverified
+		}
+		verification, verifyErr := s.deps.Assets.VerifyCrossChainIdentity(
+			ctx,
+			assetcatalog.CrossChainVerifyInput{
+				CanonicalAssetID: canonicalAssetID,
+				Contracts:        contracts,
+			},
+		)
+		if verifyErr != nil {
+			return ProjectDetail{}, verifyErr
+		}
+		canonicalName = verification.CanonicalName
+		canonicalSymbol = verification.Symbol
+		identitySource = verification.IdentitySource
+		verificationStatus = verification.VerificationStatus
+		verifiedAt = verification.VerifiedAt
+		for _, evidence := range verification.Evidence {
+			evidenceByChain[evidence.ChainKey] = evidence
+		}
+	} else {
+		group := query.Groups[0]
+		canonicalName = group.Token.Name
+		canonicalSymbol = group.Token.Symbol
+		if canonicalAssetID != "" && identitySource == assetcatalog.SourceCoinGecko {
+			candidate, resolveErr := s.deps.Assets.ResolveContract(
+				ctx, group.ChainKey, group.Token.Address,
+			)
+			if resolveErr != nil {
+				return ProjectDetail{}, resolveErr
+			}
+			if candidate.CanonicalAssetID != canonicalAssetID ||
+				!candidateHasContract(*candidate, group.ChainKey, group.Token.Address) {
+				return ProjectDetail{}, assetcatalog.ErrCrossChainIdentityConflict
+			}
+			canonicalName = candidate.Name
+			canonicalSymbol = candidate.Symbol
+			logoURL = candidate.LogoURL
+		} else {
+			identitySource = assetcatalog.SourceOnChain
+			canonicalAssetID = fmt.Sprintf(
+				"eip155:%d/erc20:%s", group.ChainID, group.Token.Address,
+			)
+		}
+	}
+
+	createParams := store.CreateMultiChainMarketProjectParams{
+		DeBoxUserID:        deboxUserID,
+		CanonicalName:      canonicalName,
+		Symbol:             canonicalSymbol,
+		LogoURL:            logoURL,
+		IdentitySource:     identitySource,
+		CanonicalAssetID:   canonicalAssetID,
+		VerificationStatus: verificationStatus,
+		Metadata: mustJSON(map[string]any{
+			"creation_source":  "h5_four_step_wizard",
+			"deployment_count": len(query.Groups),
+		}),
+		Deployments: make(
+			[]store.CreateMultiChainMarketDeploymentParams, 0, len(query.Groups),
+		),
+	}
+	for _, group := range query.Groups {
+		if group.Error != "" {
+			return ProjectDetail{}, errors.New(group.Error)
+		}
+		request, exists := requestByChain[group.ChainKey]
+		if !exists {
+			return ProjectDetail{}, errors.New("交易池查询结果与所选链不一致。")
+		}
+		selectedAddresses := normalizedAddressSet(request.PoolAddresses)
+		if len(selectedAddresses) == 0 {
+			return ProjectDetail{}, fmt.Errorf(
+				"%s 至少选择一个完整监控交易池。", group.ChainName,
+			)
+		}
+		allPools := append(
+			append([]PoolPreview(nil), group.FullMonitoring...),
+			group.QuoteOnly...,
+		)
+		poolParams := make(
+			[]store.CreateMultiChainMarketPoolParams, 0, len(allPools),
+		)
+		selectedCount := 0
+		primaryAddress := strings.ToLower(strings.TrimSpace(request.PrimaryPoolAddress))
+		if _, exists := selectedAddresses[primaryAddress]; !exists {
+			return ProjectDetail{}, fmt.Errorf(
+				"%s 的主池必须属于已选择的完整监控交易池。", group.ChainName,
+			)
+		}
+		for _, preview := range allPools {
+			pairAddress := strings.ToLower(strings.TrimSpace(preview.Pair.PairAddress))
+			pool, persistErr := s.persistPool(ctx, group.Token, preview)
+			if persistErr != nil {
+				return ProjectDetail{}, persistErr
+			}
+			_, selected := selectedAddresses[pairAddress]
+			selected = selected && preview.Supported
+			poolParams = append(poolParams, store.CreateMultiChainMarketPoolParams{
+				MarketPoolID: pool.ID,
+				Selected:     selected,
+				IsPrimary:    selected && pairAddress == primaryAddress,
+			})
+			if selected {
+				selectedCount++
+			}
+		}
+		if selectedCount != len(selectedAddresses) {
+			return ProjectDetail{}, fmt.Errorf(
+				"%s 包含无效或仅支持行情的交易池。", group.ChainName,
+			)
+		}
+		totalSupply := group.Token.TotalSupplyRaw
+		deploymentParams := store.CreateMultiChainMarketDeploymentParams{
+			ChainKey:           group.ChainKey,
+			ChainID:            group.ChainID,
+			TokenAddress:       group.Token.Address,
+			TokenName:          group.Token.Name,
+			TokenSymbol:        group.Token.Symbol,
+			TokenDecimals:      group.Token.Decimals,
+			TotalSupplyRaw:     &totalSupply,
+			VerificationStatus: verificationStatus,
+			VerificationSource: identitySource,
+			VerificationEvidence: mustJSON(map[string]any{
+				"canonical_asset_id": canonicalAssetID,
+				"verified_at":        verifiedAt,
+			}),
+			VerifiedAt: &verifiedAt,
+			Metadata: mustJSON(map[string]any{
+				"chain_name": group.ChainName,
+			}),
+			Pools: poolParams,
+		}
+		if evidence, ok := evidenceByChain[group.ChainKey]; ok {
+			deploymentParams.VerificationEvidence = evidence.Payload
+			deploymentParams.Evidence = &store.CreateMarketAssetEvidenceParams{
+				EvidenceKey:     evidence.EvidenceKey,
+				Source:          evidence.Source,
+				EvidenceType:    evidence.EvidenceType,
+				ExternalAssetID: evidence.ExternalAssetID,
+				Verdict:         evidence.Verdict,
+				Confidence:      evidence.Confidence,
+				Payload:         evidence.Payload,
+				ObservedAt:      evidence.ObservedAt,
+			}
+		}
+		createParams.Deployments = append(
+			createParams.Deployments, deploymentParams,
+		)
+	}
+	entitlements, ok := s.deps.Entitlements.(multiChainProjectEntitlements)
+	if !ok {
+		return ProjectDetail{}, errors.New("多链项目创建服务不可用。")
+	}
+	project, err := entitlements.CreateMultiChainMarketProject(ctx, createParams)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	return s.Project(ctx, deboxUserID, project.ID)
+}
+
+func candidateHasContract(
+	candidate assetcatalog.Candidate,
+	chainKey string,
+	tokenAddress string,
+) bool {
+	for _, deployment := range candidate.Deployments {
+		if deployment.ChainKey == chainKey &&
+			deployment.ContractAddress == tokenAddress {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) ListProjects(
 	ctx context.Context,
 	deboxUserID string,
@@ -482,6 +747,15 @@ func (s *Service) Project(
 	pools, err := s.deps.Repository.ListMarketProjectPoolViews(ctx, projectID, deboxUserID)
 	if err != nil {
 		return ProjectDetail{}, err
+	}
+	deployments := []store.MarketProjectDeployment{}
+	if repository, ok := s.deps.Repository.(multiChainProjectRepository); ok {
+		deployments, err = repository.ListMarketProjectDeployments(
+			ctx, projectID, deboxUserID,
+		)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
 	}
 	rules, err := s.deps.Repository.ListMarketRules(ctx, deboxUserID, &projectID)
 	if err != nil {
@@ -508,6 +782,7 @@ func (s *Service) Project(
 	return ProjectDetail{
 		Project: *project, Pools: pools, LatestSnapshot: snapshot, Rules: rules,
 		Holders: holders, Labels: labels, ProviderHealth: health,
+		Deployments: deployments,
 	}, nil
 }
 

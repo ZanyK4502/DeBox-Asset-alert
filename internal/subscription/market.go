@@ -52,6 +52,14 @@ type marketRepository interface {
 	) (store.MarketCombinationRule, error)
 }
 
+type multiChainMarketRepository interface {
+	CreateMultiChainMarketProjectWithinQuota(
+		context.Context,
+		store.CreateMultiChainMarketProjectParams,
+		store.QuotaPolicy,
+	) (store.MarketProject, error)
+}
+
 func (s *Service) CreateMarketProject(
 	ctx context.Context,
 	params store.CreateMarketProjectParams,
@@ -66,6 +74,35 @@ func (s *Service) CreateMarketProject(
 			return store.MarketProject{}, err
 		}
 		project, err := repository.CreateMarketProjectWithinQuota(
+			ctx,
+			params,
+			quotaPolicy(plan),
+		)
+		if errors.Is(err, store.ErrSubscriptionChanged) {
+			continue
+		}
+		if err != nil {
+			return store.MarketProject{}, quotaError(err, plan, false)
+		}
+		return project, nil
+	}
+	return store.MarketProject{}, store.ErrSubscriptionChanged
+}
+
+func (s *Service) CreateMultiChainMarketProject(
+	ctx context.Context,
+	params store.CreateMultiChainMarketProjectParams,
+) (store.MarketProject, error) {
+	repository, ok := s.repository.(multiChainMarketRepository)
+	if !ok {
+		return store.MarketProject{}, errors.New("market project repository is unavailable")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		plan, err := s.ActivePlan(ctx, params.DeBoxUserID)
+		if err != nil {
+			return store.MarketProject{}, err
+		}
+		project, err := repository.CreateMultiChainMarketProjectWithinQuota(
 			ctx,
 			params,
 			quotaPolicy(plan),

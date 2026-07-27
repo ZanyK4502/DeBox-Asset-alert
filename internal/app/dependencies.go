@@ -222,6 +222,7 @@ func buildDependencies(
 		Entitlements: subscriptions,
 		Chain:        chainClient,
 		Market:       marketDataClient,
+		Assets:       assetCatalog,
 		Catalog:      catalog,
 	})
 	paymentService := payment.New(

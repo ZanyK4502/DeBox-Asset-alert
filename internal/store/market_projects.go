@@ -577,11 +577,31 @@ func linkMarketProjectPool(
 	singleSelectedPool bool,
 ) (MarketProjectPool, error) {
 	var projectChainID, poolChainID int64
+	var projectDeploymentID *int64
 	var tokenAddress, token0Address, token1Address string
 	if err := db.QueryRow(ctx, `
-			SELECT mp.chain_id, mp.token_address, p.chain_id, p.token0_address, p.token1_address
+			SELECT
+				mp.chain_id,
+				mp.token_address,
+				p.chain_id,
+				p.token0_address,
+				p.token1_address,
+				mpd.id
 			FROM market_projects mp
-			CROSS JOIN market_pools p
+			JOIN market_pools p ON TRUE
+			LEFT JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status <> 'removed'
+			 AND EXISTS (
+				SELECT 1
+				FROM market_asset_deployments mad
+				WHERE mad.id = mpd.market_asset_deployment_id
+				  AND mad.chain_id = p.chain_id
+				  AND (
+					mad.token_address = p.token0_address
+					OR mad.token_address = p.token1_address
+				  )
+			 )
 			WHERE mp.id = $1 AND mp.debox_user_id = $2 AND p.id = $3
 			FOR UPDATE OF mp
 		`, params.MarketProjectID, params.DeBoxUserID, params.MarketPoolID).Scan(
@@ -590,14 +610,16 @@ func linkMarketProjectPool(
 		&poolChainID,
 		&token0Address,
 		&token1Address,
+		&projectDeploymentID,
 	); err != nil {
 		if isNoRows(err) {
 			return MarketProjectPool{}, ErrNotFound
 		}
 		return MarketProjectPool{}, fmt.Errorf("validate market project pool: %w", err)
 	}
-	if projectChainID != poolChainID ||
-		(tokenAddress != token0Address && tokenAddress != token1Address) {
+	if projectDeploymentID == nil &&
+		(projectChainID != poolChainID ||
+			(tokenAddress != token0Address && tokenAddress != token1Address)) {
 		return MarketProjectPool{}, ErrMarketPoolMismatch
 	}
 	selected := params.Selected || params.IsPrimary
@@ -606,8 +628,10 @@ func linkMarketProjectPool(
 		if _, err := db.Exec(ctx, `
 			UPDATE market_project_pools
 			SET selected = 0, is_primary = 0, updated_at = NOW()
-			WHERE market_project_id = $1 AND market_pool_id <> $2
-		`, params.MarketProjectID, params.MarketPoolID); err != nil {
+			WHERE market_project_id = $1
+			  AND market_project_deployment_id IS NOT DISTINCT FROM $2
+			  AND market_pool_id <> $3
+		`, params.MarketProjectID, projectDeploymentID, params.MarketPoolID); err != nil {
 			return MarketProjectPool{}, fmt.Errorf("clear standard plan market pools: %w", err)
 		}
 	}
@@ -615,23 +639,28 @@ func linkMarketProjectPool(
 		if _, err := db.Exec(ctx, `
 				UPDATE market_project_pools
 				SET is_primary = 0, updated_at = NOW()
-				WHERE market_project_id = $1 AND is_primary = 1
-			`, params.MarketProjectID); err != nil {
+				WHERE market_project_id = $1
+				  AND market_project_deployment_id IS NOT DISTINCT FROM $2
+				  AND is_primary = 1
+			`, params.MarketProjectID, projectDeploymentID); err != nil {
 			return MarketProjectPool{}, fmt.Errorf("clear primary market pool: %w", err)
 		}
 	}
 	link, err := collectOne[MarketProjectPool](ctx, db, `
 			INSERT INTO market_project_pools (
-				market_project_id, market_pool_id, selected, is_primary, discovery_source
+				market_project_id, market_project_deployment_id,
+				market_pool_id, selected, is_primary, discovery_source
 			)
-			VALUES ($1, $2, $3, $4, $5)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (market_project_id, market_pool_id) DO UPDATE
-			SET selected = EXCLUDED.selected,
+			SET market_project_deployment_id = EXCLUDED.market_project_deployment_id,
+			    selected = EXCLUDED.selected,
 			    is_primary = EXCLUDED.is_primary,
 			    discovery_source = EXCLUDED.discovery_source,
 			    updated_at = NOW()
 			RETURNING `+marketProjectPoolColumns,
 		params.MarketProjectID,
+		projectDeploymentID,
 		params.MarketPoolID,
 		boolInt(selected),
 		boolInt(params.IsPrimary),
@@ -641,19 +670,40 @@ func linkMarketProjectPool(
 		return MarketProjectPool{}, fmt.Errorf("link market project pool: %w", err)
 	}
 	if params.IsPrimary {
-		if _, err := db.Exec(ctx, `
+		if projectDeploymentID != nil {
+			if _, err := db.Exec(ctx, `
+				UPDATE market_project_deployments
+				SET default_market_pool_id = $1, updated_at = NOW()
+				WHERE id = $2 AND market_project_id = $3
+			`, params.MarketPoolID, projectDeploymentID, params.MarketProjectID); err != nil {
+				return MarketProjectPool{}, fmt.Errorf("set deployment primary market pool: %w", err)
+			}
+		}
+		if projectChainID == poolChainID &&
+			(tokenAddress == token0Address || tokenAddress == token1Address) {
+			if _, err := db.Exec(ctx, `
 				UPDATE market_projects
 				SET main_pool_id = $1, updated_at = NOW()
 				WHERE id = $2 AND debox_user_id = $3
 			`, params.MarketPoolID, params.MarketProjectID, params.DeBoxUserID); err != nil {
-			return MarketProjectPool{}, fmt.Errorf("set market project main pool: %w", err)
+				return MarketProjectPool{}, fmt.Errorf("set market project main pool: %w", err)
+			}
 		}
 	} else if !selected {
+		if projectDeploymentID != nil {
+			if _, err := db.Exec(ctx, `
+				UPDATE market_project_deployments
+				SET default_market_pool_id = NULL, updated_at = NOW()
+				WHERE id = $1 AND market_project_id = $2 AND default_market_pool_id = $3
+			`, projectDeploymentID, params.MarketProjectID, params.MarketPoolID); err != nil {
+				return MarketProjectPool{}, fmt.Errorf("clear deployment primary market pool: %w", err)
+			}
+		}
 		if _, err := db.Exec(ctx, `
-			UPDATE market_projects
-			SET main_pool_id = NULL, updated_at = NOW()
-			WHERE id = $1 AND debox_user_id = $2 AND main_pool_id = $3
-		`, params.MarketProjectID, params.DeBoxUserID, params.MarketPoolID); err != nil {
+				UPDATE market_projects
+				SET main_pool_id = NULL, updated_at = NOW()
+				WHERE id = $1 AND debox_user_id = $2 AND main_pool_id = $3
+			`, params.MarketProjectID, params.DeBoxUserID, params.MarketPoolID); err != nil {
 			return MarketProjectPool{}, fmt.Errorf("clear market project main pool: %w", err)
 		}
 	}

@@ -34,7 +34,10 @@ const requiredAPIs = [
   "/api/subscription/summary-settings",
   "/api/notification-groups",
   "/api/market/catalog",
-  "/api/market/query",
+  "/api/market/assets/search",
+  "/api/market/assets/manual-resolve",
+  "/api/market/assets/verify-cross-chain",
+  "/api/market/pools/discover",
   "/api/market/projects",
   "/api/market/rules/",
   "/api/market/labels/",
@@ -45,6 +48,17 @@ for (const endpoint of requiredAPIs) {
 assert.ok(
   !app.includes("/api/subscription/complimentary"),
   "H5 still references the removed complimentary subscription API",
+);
+for (const step of [1, 2, 3, 4]) {
+  assert.ok(
+    htmlIDs.has(`marketWizardStep${step}`),
+    `four-step market wizard is missing step ${step}`,
+  );
+}
+assert.ok(
+  app.includes('deployment_scope: "all"') &&
+    app.includes('cooldown_scope: "chain"'),
+  "market wizard must create the first rule with explicit multi-chain scopes",
 );
 
 const context = { window: {} };
