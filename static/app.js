@@ -2530,6 +2530,9 @@ function renderMarketWizardPools() {
   container.querySelectorAll("[data-market-wizard-primary]").forEach((radio) => {
     radio.addEventListener("change", () => {
       const selection = marketPoolSelection(radio.dataset.marketWizardPrimary);
+      if ((currentPlan()?.code || "free") === "standard") {
+        selection.selected.clear();
+      }
       selection.primary = radio.value;
       selection.selected.add(radio.value);
       renderMarketWizardPools();
