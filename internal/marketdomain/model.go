@@ -60,6 +60,11 @@ var (
 	ErrUnverifiedCrossChainAsset = errors.New("cross-chain deployments require verified identity")
 )
 
+const (
+	authoritativeIdentitySource = "coingecko"
+	canonicalAssetEvidenceType  = "canonical_asset_id"
+)
+
 // Asset is the chain-independent identity of one project token. A user project
 // points to one Asset and may select one deployment from each supported chain.
 type Asset struct {
@@ -132,10 +137,11 @@ type ProjectDeployment struct {
 }
 
 type Project struct {
-	ID          int64
-	DeBoxUserID string
-	Asset       Asset
-	Deployments []ProjectDeployment
+	ID               int64
+	DeBoxUserID      string
+	Asset            Asset
+	Deployments      []ProjectDeployment
+	IdentityEvidence []IdentityEvidence
 }
 
 // RuleScope describes the deployment, pool, and cooldown boundaries of one
@@ -230,11 +236,13 @@ func (project Project) ValidateForCreation() error {
 		return ErrInvalidProject
 	}
 	if len(project.Deployments) > 1 &&
-		project.Asset.VerificationStatus != VerificationVerified {
+		(project.Asset.VerificationStatus != VerificationVerified ||
+			project.Asset.IdentitySource != authoritativeIdentitySource) {
 		return ErrUnverifiedCrossChainAsset
 	}
 	seenChains := make(map[int64]struct{}, len(project.Deployments))
 	seenContracts := make(map[string]struct{}, len(project.Deployments))
+	selectedDeploymentIDs := make(map[int64]struct{}, len(project.Deployments))
 	for _, selected := range project.Deployments {
 		deployment, err := NormalizeDeployment(selected.Deployment)
 		if err != nil ||
@@ -259,11 +267,60 @@ func (project Project) ValidateForCreation() error {
 			return ErrInvalidProject
 		}
 		if len(project.Deployments) > 1 &&
-			deployment.VerificationStatus != VerificationVerified {
+			(deployment.VerificationStatus != VerificationVerified ||
+				deployment.VerificationSource != authoritativeIdentitySource) {
 			return ErrUnverifiedCrossChainAsset
 		}
+		selectedDeploymentIDs[selected.MarketAssetDeploymentID] = struct{}{}
+	}
+	if len(project.Deployments) > 1 &&
+		!project.hasAuthoritativeIdentityEvidence(selectedDeploymentIDs) {
+		return ErrUnverifiedCrossChainAsset
 	}
 	return nil
+}
+
+func (project Project) hasAuthoritativeIdentityEvidence(
+	selectedDeploymentIDs map[int64]struct{},
+) bool {
+	supported := make(map[int64]bool, len(selectedDeploymentIDs))
+	for _, evidence := range project.IdentityEvidence {
+		if evidence.Validate() != nil ||
+			evidence.MarketAssetID != project.Asset.ID {
+			return false
+		}
+		relevant := evidence.MarketAssetDeploymentID == nil
+		var deploymentID int64
+		if evidence.MarketAssetDeploymentID != nil {
+			deploymentID = *evidence.MarketAssetDeploymentID
+			_, relevant = selectedDeploymentIDs[deploymentID]
+		}
+		if !relevant {
+			continue
+		}
+		if evidence.Verdict == EvidenceConflicts {
+			return false
+		}
+		if deploymentID > 0 &&
+			evidence.Verdict == EvidenceSupports &&
+			evidence.Source == authoritativeIdentitySource &&
+			evidence.EvidenceType == canonicalAssetEvidenceType &&
+			evidence.ExternalAssetID == project.Asset.CanonicalAssetID &&
+			confidenceIsOne(evidence.Confidence) {
+			supported[deploymentID] = true
+		}
+	}
+	for deploymentID := range selectedDeploymentIDs {
+		if !supported[deploymentID] {
+			return false
+		}
+	}
+	return true
+}
+
+func confidenceIsOne(value string) bool {
+	confidence, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	return ok && confidence.Cmp(big.NewRat(1, 1)) == 0
 }
 
 func (scope RuleScope) Validate() error {

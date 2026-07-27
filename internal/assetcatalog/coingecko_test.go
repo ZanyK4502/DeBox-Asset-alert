@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type noWaitLimiter struct{}
@@ -156,6 +157,105 @@ func TestCoinGeckoResolveContractUsesCanonicalIdentity(t *testing.T) {
 		context.Background(), "base", testAddress(99),
 	); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing contract error = %v", err)
+	}
+}
+
+func TestCoinGeckoAuthoritativeResolveNeverUsesStaleFallback(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		calls.Add(1)
+		writeTestJSON(t, writer, []map[string]any{{
+			"id": "project", "name": "Project", "symbol": "prj",
+			"platforms": map[string]string{
+				"ethereum": testAddress(31),
+				"base":     testAddress(32),
+			},
+		}})
+	}))
+	defer server.Close()
+	client, err := NewCoinGeckoClient(CoinGeckoSettings{
+		BaseURL: server.URL, HTTPClient: server.Client(),
+		Limiter: noWaitLimiter{},
+	})
+	if err != nil {
+		t.Fatalf("NewCoinGeckoClient() error = %v", err)
+	}
+	if _, err := client.ResolveContract(
+		context.Background(), "base", testAddress(32),
+	); err != nil {
+		t.Fatalf("prime identity cache: %v", err)
+	}
+
+	path := "/coins/list?include_platform=true&status=active"
+	client.indexMu.Lock()
+	client.indexExpires = time.Now().Add(-time.Minute)
+	client.indexMu.Unlock()
+	client.mu.Lock()
+	cached := client.cache[path]
+	cached.expiresAt = time.Now().Add(-time.Minute)
+	cached.staleUntil = time.Now().Add(time.Hour)
+	client.cache[path] = cached
+	client.circuitOpenUntil = time.Now().Add(time.Minute)
+	client.mu.Unlock()
+
+	if _, err := client.ResolveContract(
+		context.Background(), "base", testAddress(32),
+	); err != nil {
+		t.Fatalf("ordinary stale fallback failed: %v", err)
+	}
+	if _, err := client.ResolveContractAuthoritative(
+		context.Background(), "base", testAddress(32),
+	); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("authoritative stale fallback error = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestCoinGeckoAuthoritativeResolveCachesFreshIndex(t *testing.T) {
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		calls.Add(1)
+		writeTestJSON(t, writer, []map[string]any{{
+			"id": "project", "name": "Project", "symbol": "prj",
+			"platforms": map[string]string{
+				"ethereum": testAddress(41),
+				"base":     testAddress(42),
+			},
+		}})
+	}))
+	defer server.Close()
+	client, err := NewCoinGeckoClient(CoinGeckoSettings{
+		BaseURL: server.URL, HTTPClient: server.Client(),
+		Limiter: noWaitLimiter{},
+	})
+	if err != nil {
+		t.Fatalf("NewCoinGeckoClient() error = %v", err)
+	}
+	for _, value := range []struct {
+		chain   string
+		address string
+	}{
+		{chain: "ethereum", address: testAddress(41)},
+		{chain: "base", address: testAddress(42)},
+	} {
+		if _, err := client.ResolveContractAuthoritative(
+			context.Background(),
+			value.chain,
+			value.address,
+		); err != nil {
+			t.Fatalf("authoritative resolve %s: %v", value.chain, err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("authoritative identity calls = %d, want 1", calls.Load())
 	}
 }
 

@@ -16,15 +16,17 @@ import (
 )
 
 type fakeAssetCatalog struct {
-	searchQuery string
-	searchLimit int
-	resolve     [2]string
-	result      assetcatalog.SearchResult
-	candidate   *assetcatalog.Candidate
-	manualInput assetcatalog.ManualResolveInput
-	manual      assetcatalog.ManualResolveResult
-	logo        assetcatalog.Logo
-	err         error
+	searchQuery  string
+	searchLimit  int
+	resolve      [2]string
+	result       assetcatalog.SearchResult
+	candidate    *assetcatalog.Candidate
+	manualInput  assetcatalog.ManualResolveInput
+	manual       assetcatalog.ManualResolveResult
+	verifyInput  assetcatalog.CrossChainVerifyInput
+	verification assetcatalog.CrossChainVerificationResult
+	logo         assetcatalog.Logo
+	err          error
 }
 
 func (f *fakeAssetCatalog) Search(
@@ -52,6 +54,14 @@ func (f *fakeAssetCatalog) ResolveManualContracts(
 ) (assetcatalog.ManualResolveResult, error) {
 	f.manualInput = input
 	return f.manual, f.err
+}
+
+func (f *fakeAssetCatalog) VerifyCrossChainIdentity(
+	_ context.Context,
+	input assetcatalog.CrossChainVerifyInput,
+) (assetcatalog.CrossChainVerificationResult, error) {
+	f.verifyInput = input
+	return f.verification, f.err
 }
 
 func (f *fakeAssetCatalog) Logo(
@@ -233,5 +243,86 @@ func TestMarketAssetManualResolveRouteAndErrorMapping(t *testing.T) {
 			unreadable.Code,
 			unreadable.Body.String(),
 		)
+	}
+}
+
+func TestMarketAssetVerifyCrossChainRouteAndErrorMapping(t *testing.T) {
+	assets := &fakeAssetCatalog{
+		verification: assetcatalog.CrossChainVerificationResult{
+			CanonicalAssetID:   "project-token",
+			IdentitySource:     assetcatalog.SourceCoinGecko,
+			VerificationStatus: assetcatalog.VerificationStatusVerified,
+		},
+	}
+	handler := New(testConfig(t), Dependencies{
+		Auth: &fakeAuthService{session: &store.AuthSession{
+			DeBoxUserID: "user-1",
+		}},
+		Assets: assets,
+	})
+	request := func() *http.Request {
+		value := httptest.NewRequest(
+			http.MethodPost,
+			"/api/market/assets/verify-cross-chain",
+			strings.NewReader(`{
+				"canonical_asset_id":"project-token",
+				"contracts":[
+					{"chain_key":"bsc","contract_address":"0x0000000000000000000000000000000000000001"},
+					{"chain_key":"base","contract_address":"0x0000000000000000000000000000000000000002"}
+				]
+			}`),
+		)
+		value.AddCookie(&http.Cookie{
+			Name: auth.CookieName, Value: "session-token",
+		})
+		return value
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request())
+	if recorder.Code != http.StatusOK ||
+		assets.verifyInput.CanonicalAssetID != "project-token" ||
+		len(assets.verifyInput.Contracts) != 2 {
+		t.Fatalf(
+			"verify route = %d/%#v",
+			recorder.Code,
+			assets.verifyInput,
+		)
+	}
+
+	tests := []struct {
+		err    error
+		status int
+		body   string
+	}{
+		{
+			err:    assetcatalog.ErrInvalidCrossChainRequest,
+			status: http.StatusBadRequest,
+			body:   "invalid cross-chain identity request",
+		},
+		{
+			err:    assetcatalog.ErrCrossChainIdentityUnverified,
+			status: http.StatusUnprocessableEntity,
+			body:   "cross-chain asset identity is unverified",
+		},
+		{
+			err:    assetcatalog.ErrCrossChainIdentityConflict,
+			status: http.StatusConflict,
+			body:   "cross-chain asset identity conflicts",
+		},
+	}
+	for _, test := range tests {
+		assets.err = fmt.Errorf("private detail: %w", test.err)
+		failed := httptest.NewRecorder()
+		handler.ServeHTTP(failed, request())
+		if failed.Code != test.status ||
+			failed.Body.String() !=
+				`{"detail":"`+test.body+`"}`+"\n" {
+			t.Fatalf(
+				"verify error = %d/%s",
+				failed.Code,
+				failed.Body.String(),
+			)
+		}
 	}
 }

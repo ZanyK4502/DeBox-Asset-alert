@@ -119,6 +119,10 @@ type AssetCatalogService interface {
 		context.Context,
 		assetcatalog.ManualResolveInput,
 	) (assetcatalog.ManualResolveResult, error)
+	VerifyCrossChainIdentity(
+		context.Context,
+		assetcatalog.CrossChainVerifyInput,
+	) (assetcatalog.CrossChainVerificationResult, error)
 	Logo(context.Context, string) (assetcatalog.Logo, error)
 }
 
@@ -188,6 +192,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/market/assets/search", h.getMarketAssetSearch)
 	mux.HandleFunc("GET /api/market/assets/resolve", h.getMarketAssetResolve)
 	mux.HandleFunc("POST /api/market/assets/manual-resolve", h.postMarketAssetManualResolve)
+	mux.HandleFunc("POST /api/market/assets/verify-cross-chain", h.postMarketAssetVerifyCrossChain)
 	mux.HandleFunc("GET /api/market/assets/logo", h.getMarketAssetLogo)
 	mux.HandleFunc("POST /api/market/query", h.postMarketQuery)
 	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)

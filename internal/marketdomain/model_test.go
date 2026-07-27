@@ -92,8 +92,74 @@ func TestProjectRequiresAuthoritativeIdentityForMultipleChains(t *testing.T) {
 	}
 
 	project.Deployments[1].Deployment.VerificationStatus = VerificationVerified
+	project.Deployments[1].Deployment.VerificationSource = authoritativeIdentitySource
+	project.IdentityEvidence = identityEvidenceFixture(project.Deployments)
 	if err := project.ValidateForCreation(); err != nil {
 		t.Fatalf("verified multi-chain project: %v", err)
+	}
+}
+
+func TestProjectRejectsVerifiedFlagsWithoutAuthoritativeEvidence(t *testing.T) {
+	t.Parallel()
+
+	project := projectFixture([]Deployment{
+		deploymentFixture(1, "bsc", 56, VerificationVerified),
+		deploymentFixture(2, "ethereum", 1, VerificationVerified),
+	})
+	project.IdentityEvidence = nil
+	if err := project.ValidateForCreation(); !errors.Is(
+		err,
+		ErrUnverifiedCrossChainAsset,
+	) {
+		t.Fatalf(
+			"missing evidence error = %v, want ErrUnverifiedCrossChainAsset",
+			err,
+		)
+	}
+
+	project = projectFixture([]Deployment{
+		deploymentFixture(1, "bsc", 56, VerificationVerified),
+		deploymentFixture(2, "ethereum", 1, VerificationVerified),
+	})
+	project.Deployments[1].Deployment.VerificationSource = "dexscreener"
+	if err := project.ValidateForCreation(); !errors.Is(
+		err,
+		ErrUnverifiedCrossChainAsset,
+	) {
+		t.Fatalf("non-authoritative deployment source error = %v", err)
+	}
+}
+
+func TestProjectRejectsConflictingOrMismatchedIdentityEvidence(t *testing.T) {
+	t.Parallel()
+
+	project := projectFixture([]Deployment{
+		deploymentFixture(1, "bsc", 56, VerificationVerified),
+		deploymentFixture(2, "base", 8453, VerificationVerified),
+	})
+	project.IdentityEvidence[1].ExternalAssetID = "different-token"
+	if err := project.ValidateForCreation(); !errors.Is(
+		err,
+		ErrUnverifiedCrossChainAsset,
+	) {
+		t.Fatalf("mismatched evidence error = %v", err)
+	}
+
+	project.IdentityEvidence = identityEvidenceFixture(project.Deployments)
+	project.IdentityEvidence = append(project.IdentityEvidence, IdentityEvidence{
+		MarketAssetID:   10,
+		EvidenceKey:     "coingecko:conflict",
+		Source:          authoritativeIdentitySource,
+		EvidenceType:    canonicalAssetEvidenceType,
+		ExternalAssetID: "different-token",
+		Verdict:         EvidenceConflicts,
+		Confidence:      "1",
+	})
+	if err := project.ValidateForCreation(); !errors.Is(
+		err,
+		ErrUnverifiedCrossChainAsset,
+	) {
+		t.Fatalf("conflicting evidence error = %v", err)
 	}
 }
 
@@ -178,6 +244,7 @@ func projectFixture(deployments []Deployment) Project {
 			Deployment:              deployment,
 		})
 	}
+	project.IdentityEvidence = identityEvidenceFixture(project.Deployments)
 	return project
 }
 
@@ -197,5 +264,27 @@ func deploymentFixture(
 		TokenSymbol:        "PT",
 		TokenDecimals:      18,
 		VerificationStatus: status,
+		VerificationSource: authoritativeIdentitySource,
 	}
+}
+
+func identityEvidenceFixture(
+	deployments []ProjectDeployment,
+) []IdentityEvidence {
+	result := make([]IdentityEvidence, 0, len(deployments))
+	for _, deployment := range deployments {
+		deploymentID := deployment.MarketAssetDeploymentID
+		result = append(result, IdentityEvidence{
+			MarketAssetID:           10,
+			MarketAssetDeploymentID: &deploymentID,
+			EvidenceKey: "coingecko:pancakeswap-token:" +
+				deployment.Deployment.ChainKey,
+			Source:          authoritativeIdentitySource,
+			EvidenceType:    canonicalAssetEvidenceType,
+			ExternalAssetID: "pancakeswap-token",
+			Verdict:         EvidenceSupports,
+			Confidence:      "1.0000",
+		})
+	}
+	return result
 }

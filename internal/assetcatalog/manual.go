@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -178,31 +177,13 @@ func (c *Catalog) resolveManualContract(
 			contract.inputIndex+1,
 		)}
 	}
-	if metadata.Address != contract.address ||
-		strings.TrimSpace(metadata.Symbol) == "" ||
-		metadata.Decimals < 0 ||
-		metadata.Decimals > 255 {
+	metadata, ok := normalizeTokenMetadata(contract.address, metadata)
+	if !ok {
 		return manualResolution{err: fmt.Errorf(
 			"%w: item %d",
 			ErrContractUnreadable,
 			contract.inputIndex+1,
 		)}
-	}
-	totalSupply := new(big.Int)
-	if _, ok := totalSupply.SetString(
-		strings.TrimSpace(metadata.TotalSupplyRaw),
-		10,
-	); !ok || totalSupply.Sign() < 0 {
-		return manualResolution{err: fmt.Errorf(
-			"%w: item %d",
-			ErrContractUnreadable,
-			contract.inputIndex+1,
-		)}
-	}
-	tokenSymbol := strings.ToUpper(strings.TrimSpace(metadata.Symbol))
-	tokenName := strings.TrimSpace(metadata.Name)
-	if tokenName == "" {
-		tokenName = tokenSymbol
 	}
 
 	candidate, identityStatus := c.resolveManualIdentity(ctx, contract, metadata)
@@ -218,10 +199,10 @@ func (c *Catalog) resolveManualContract(
 			ChainName:            contract.profile.ChainName,
 			PlatformID:           contract.profile.PlatformID,
 			ContractAddress:      contract.address,
-			TokenName:            tokenName,
-			TokenSymbol:          tokenSymbol,
+			TokenName:            metadata.Name,
+			TokenSymbol:          metadata.Symbol,
 			TokenDecimals:        metadata.Decimals,
-			TotalSupplyRaw:       totalSupply.String(),
+			TotalSupplyRaw:       metadata.TotalSupplyRaw,
 			CanonicalAssetID:     candidate.CanonicalAssetID,
 			IdentitySource:       candidate.IdentitySource,
 			IdentityLookupStatus: identityStatus,

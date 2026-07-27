@@ -44,6 +44,14 @@ func (f fakePrimary) ResolveContract(
 	return &copy, f.err
 }
 
+func (f fakePrimary) ResolveContractAuthoritative(
+	ctx context.Context,
+	chainKey string,
+	contract string,
+) (*Candidate, error) {
+	return f.ResolveContract(ctx, chainKey, contract)
+}
+
 type fakeTokenMetadata struct {
 	values map[string]chain.TokenMetadata
 	err    error

@@ -17,6 +17,11 @@ import (
 type primaryProvider interface {
 	Search(context.Context, string, int) ([]Candidate, error)
 	ResolveContract(context.Context, string, string) (*Candidate, error)
+	ResolveContractAuthoritative(
+		context.Context,
+		string,
+		string,
+	) (*Candidate, error)
 }
 
 type pairSearcher interface {

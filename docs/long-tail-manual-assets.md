@@ -63,7 +63,8 @@ The preflight response has one of these statuses:
 
 Names, symbols, decimals, supply, logos, and DexScreener pools are supporting
 display data only. They never prove cross-chain identity. Step 6 performs the
-final strict identity validation before project creation.
+final strict identity validation before project creation through
+`POST /api/market/assets/verify-cross-chain`.
 
 ## Failure behavior
 

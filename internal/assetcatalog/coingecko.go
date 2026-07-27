@@ -64,6 +64,10 @@ type CoinGeckoClient struct {
 	index         *identityIndex
 	indexExpires  time.Time
 	indexInflight *indexCall
+
+	authoritativeIndex         *identityIndex
+	authoritativeIndexExpires  time.Time
+	authoritativeIndexInflight *indexCall
 }
 
 type cachedResponse struct {
@@ -225,6 +229,36 @@ func (c *CoinGeckoClient) ResolveContract(
 	chainKey string,
 	contractAddress string,
 ) (*Candidate, error) {
+	return c.resolveContractWithIndex(
+		ctx,
+		chainKey,
+		contractAddress,
+		c.loadIdentityIndex,
+	)
+}
+
+// ResolveContractAuthoritative never uses the stale-response fallback. It is
+// reserved for the final cross-chain creation check, where an unavailable
+// authority must fail closed instead of accepting old fallback data.
+func (c *CoinGeckoClient) ResolveContractAuthoritative(
+	ctx context.Context,
+	chainKey string,
+	contractAddress string,
+) (*Candidate, error) {
+	return c.resolveContractWithIndex(
+		ctx,
+		chainKey,
+		contractAddress,
+		c.loadAuthoritativeIdentityIndex,
+	)
+}
+
+func (c *CoinGeckoClient) resolveContractWithIndex(
+	ctx context.Context,
+	chainKey string,
+	contractAddress string,
+	load func(context.Context) (*identityIndex, error),
+) (*Candidate, error) {
 	profile, ok := profileByChainKey(chainKey)
 	if !ok {
 		return nil, ErrInvalidQuery
@@ -233,7 +267,7 @@ func (c *CoinGeckoClient) ResolveContract(
 	if !ok {
 		return nil, ErrInvalidQuery
 	}
-	index, err := c.loadIdentityIndex(ctx)
+	index, err := load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +352,63 @@ func (c *CoinGeckoClient) loadIdentityIndex(ctx context.Context) (*identityIndex
 	active.index = result
 	active.err = err
 	c.indexInflight = nil
+	close(active.done)
+	c.indexMu.Unlock()
+	return result, err
+}
+
+func (c *CoinGeckoClient) loadAuthoritativeIdentityIndex(
+	ctx context.Context,
+) (*identityIndex, error) {
+	now := time.Now()
+	c.indexMu.Lock()
+	if c.authoritativeIndex != nil &&
+		now.Before(c.authoritativeIndexExpires) {
+		index := c.authoritativeIndex
+		c.indexMu.Unlock()
+		return index, nil
+	}
+	if active := c.authoritativeIndexInflight; active != nil {
+		c.indexMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-active.done:
+			return active.index, active.err
+		}
+	}
+	active := &indexCall{done: make(chan struct{})}
+	c.authoritativeIndexInflight = active
+	c.indexMu.Unlock()
+
+	body, err := c.getWithRetry(
+		ctx,
+		"/coins/list?include_platform=true&status=active",
+	)
+	var result *identityIndex
+	if err == nil {
+		var items []coinListItem
+		if decodeErr := decodeCoinGeckoJSON(body, &items); decodeErr != nil {
+			err = fmt.Errorf(
+				"%w: invalid CoinGecko identity response",
+				ErrUnavailable,
+			)
+		} else {
+			result = buildIdentityIndex(items)
+		}
+	}
+
+	c.indexMu.Lock()
+	if err == nil {
+		expiresAt := time.Now().Add(defaultIdentityCacheTTL)
+		c.authoritativeIndex = result
+		c.authoritativeIndexExpires = expiresAt
+		c.index = result
+		c.indexExpires = expiresAt
+	}
+	active.index = result
+	active.err = err
+	c.authoritativeIndexInflight = nil
 	close(active.done)
 	c.indexMu.Unlock()
 	return result, err

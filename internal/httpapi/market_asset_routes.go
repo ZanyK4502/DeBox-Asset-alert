@@ -72,6 +72,26 @@ func (h handler) postMarketAssetManualResolve(
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h handler) postMarketAssetVerifyCrossChain(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if !h.requireAssetSession(w, r) {
+		return
+	}
+	var input assetcatalog.CrossChainVerifyInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := h.deps.Assets.VerifyCrossChainIdentity(r.Context(), input)
+	if err != nil {
+		writeAssetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h handler) getMarketAssetLogo(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAssetSession(w, r) {
 		return
@@ -131,6 +151,15 @@ func writeAssetError(w http.ResponseWriter, err error) {
 	case errors.Is(err, assetcatalog.ErrContractUnreadable):
 		status = http.StatusUnprocessableEntity
 		publicErr = assetcatalog.ErrContractUnreadable
+	case errors.Is(err, assetcatalog.ErrInvalidCrossChainRequest):
+		status = http.StatusBadRequest
+		publicErr = assetcatalog.ErrInvalidCrossChainRequest
+	case errors.Is(err, assetcatalog.ErrCrossChainIdentityUnverified):
+		status = http.StatusUnprocessableEntity
+		publicErr = assetcatalog.ErrCrossChainIdentityUnverified
+	case errors.Is(err, assetcatalog.ErrCrossChainIdentityConflict):
+		status = http.StatusConflict
+		publicErr = assetcatalog.ErrCrossChainIdentityConflict
 	}
 	writeError(w, status, publicErr)
 }

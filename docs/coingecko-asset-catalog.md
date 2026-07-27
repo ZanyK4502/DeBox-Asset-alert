@@ -28,11 +28,12 @@ merged into one verified asset.
 
 ## Backend endpoints
 
-All four endpoints require an authenticated DeBox session:
+All five endpoints require an authenticated DeBox session:
 
 - `GET /api/market/assets/search?q=<name-or-symbol>&limit=<1..25>`
 - `GET /api/market/assets/resolve?chain=<chain-key>&contract=<address>`
 - `POST /api/market/assets/manual-resolve`
+- `POST /api/market/assets/verify-cross-chain`
 - `GET /api/market/assets/logo?source=<encoded-approved-CDN-URL>`
 
 Search returns a canonical asset ID, local logo-proxy URL, identity source and

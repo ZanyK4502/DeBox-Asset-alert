@@ -1,8 +1,10 @@
 package assetcatalog
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 )
@@ -26,15 +28,22 @@ const (
 	MarketAvailable   = "available"
 	MarketEmpty       = "empty"
 	MarketUnavailable = "unavailable"
+
+	VerificationStatusVerified = "verified"
+	EvidenceVerdictSupports    = "supports"
+	EvidenceTypeCanonicalAsset = "canonical_asset_id"
 )
 
 var (
-	ErrInvalidQuery         = errors.New("invalid asset search query")
-	ErrNotFound             = errors.New("asset not found")
-	ErrUnavailable          = errors.New("asset catalog temporarily unavailable")
-	ErrInvalidLogo          = errors.New("invalid asset logo")
-	ErrInvalidManualRequest = errors.New("invalid manual contract request")
-	ErrContractUnreadable   = errors.New("token contract metadata is unavailable")
+	ErrInvalidQuery                 = errors.New("invalid asset search query")
+	ErrNotFound                     = errors.New("asset not found")
+	ErrUnavailable                  = errors.New("asset catalog temporarily unavailable")
+	ErrInvalidLogo                  = errors.New("invalid asset logo")
+	ErrInvalidManualRequest         = errors.New("invalid manual contract request")
+	ErrContractUnreadable           = errors.New("token contract metadata is unavailable")
+	ErrInvalidCrossChainRequest     = errors.New("invalid cross-chain identity request")
+	ErrCrossChainIdentityUnverified = errors.New("cross-chain asset identity is unverified")
+	ErrCrossChainIdentityConflict   = errors.New("cross-chain asset identity conflicts")
 )
 
 // Candidate is a chain-independent asset identity returned to the creation
@@ -108,6 +117,48 @@ type ManualResolveResult struct {
 	Candidates  []Candidate            `json:"candidates"`
 	CanMerge    bool                   `json:"can_merge"`
 	MergeStatus string                 `json:"merge_status"`
+}
+
+type CrossChainVerifyInput struct {
+	CanonicalAssetID string                `json:"canonical_asset_id"`
+	Contracts        []ManualContractInput `json:"contracts"`
+}
+
+type IdentityEvidenceRecord struct {
+	EvidenceKey     string          `json:"evidence_key"`
+	ChainKey        string          `json:"chain_key"`
+	ChainID         int64           `json:"chain_id"`
+	ContractAddress string          `json:"contract_address"`
+	Source          string          `json:"source"`
+	EvidenceType    string          `json:"evidence_type"`
+	ExternalAssetID string          `json:"external_asset_id"`
+	Verdict         string          `json:"verdict"`
+	Confidence      string          `json:"confidence"`
+	Payload         json.RawMessage `json:"payload"`
+	ObservedAt      time.Time       `json:"observed_at"`
+}
+
+type VerifiedContract struct {
+	ChainKey        string `json:"chain_key"`
+	ChainID         int64  `json:"chain_id"`
+	ChainName       string `json:"chain_name"`
+	PlatformID      string `json:"platform_id"`
+	ContractAddress string `json:"contract_address"`
+	TokenName       string `json:"token_name"`
+	TokenSymbol     string `json:"token_symbol"`
+	TokenDecimals   int32  `json:"token_decimals"`
+	TotalSupplyRaw  string `json:"total_supply_raw"`
+}
+
+type CrossChainVerificationResult struct {
+	CanonicalAssetID   string                   `json:"canonical_asset_id"`
+	CanonicalName      string                   `json:"canonical_name"`
+	Symbol             string                   `json:"symbol"`
+	IdentitySource     string                   `json:"identity_source"`
+	VerificationStatus string                   `json:"verification_status"`
+	Contracts          []VerifiedContract       `json:"contracts"`
+	Evidence           []IdentityEvidenceRecord `json:"evidence"`
+	VerifiedAt         time.Time                `json:"verified_at"`
 }
 
 func normalizeQuery(value string) (string, error) {
