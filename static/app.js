@@ -2467,6 +2467,7 @@ function renderMarketWizardPools() {
   const container = $("marketWizardPoolGroups");
   if (!result) {
     container.innerHTML = "";
+    $("marketPoolsContinueBtn").disabled = true;
     return;
   }
   container.innerHTML = (result.groups || []).map((group) => {
@@ -2510,6 +2511,7 @@ function renderMarketWizardPools() {
       renderMarketWizardPools();
     });
   });
+  $("marketPoolsContinueBtn").disabled = state.marketWizard.busy || !marketWizardPoolsReady();
 }
 
 function renderWizardPoolCard(group, preview, selection, quoteOnly) {
@@ -2547,6 +2549,15 @@ function marketPoolSelection(chainKey) {
     };
   }
   return state.marketWizard.poolSelections[chainKey];
+}
+
+function marketWizardPoolsReady() {
+  const groups = state.marketWizard.poolResult?.groups || [];
+  return groups.length > 0 && groups.every((group) => {
+    const selection = marketPoolSelection(group.chain_key);
+    return !group.error && selection.selected.size > 0 &&
+      Boolean(selection.primary) && selection.selected.has(selection.primary);
+  });
 }
 
 function updateWizardPoolSelection(checkbox) {
@@ -3264,7 +3275,10 @@ function setMarketWizardBusy(busy) {
     "createMarketProjectBtn",
   ].forEach((id) => {
     const control = $(id);
-    if (control) control.disabled = busy;
+    if (!control) return;
+    control.disabled = id === "marketPoolsContinueBtn"
+      ? busy || !marketWizardPoolsReady()
+      : busy;
   });
 }
 
@@ -3494,11 +3508,7 @@ async function verifyAndDiscoverMarketPools() {
 }
 
 function continueMarketWizardToRules() {
-  const groups = state.marketWizard.poolResult?.groups || [];
-  if (!groups.length || groups.some((group) => {
-    const selection = marketPoolSelection(group.chain_key);
-    return group.error || !selection.selected.size || !selection.primary;
-  })) {
+  if (!marketWizardPoolsReady()) {
     toast(t("marketSelectPoolEachChain"));
     return;
   }
