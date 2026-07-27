@@ -27,6 +27,7 @@ const (
 	defaultPlanDays               = 30
 	defaultPaymentMode            = "preview"
 	defaultDexScreenerAPI         = "https://api.dexscreener.com"
+	defaultCoinGeckoAPITier       = "demo"
 	defaultNoditCUPerSecond int64 = 400
 )
 
@@ -62,6 +63,9 @@ type Config struct {
 	MarketRuleInterval          time.Duration
 	MarketHolderRefreshInterval time.Duration
 	DexScreenerBaseURL          string
+	CoinGeckoAPIKey             string
+	CoinGeckoAPITier            string
+	CoinGeckoBaseURL            string
 	NoditWebhookSigningKey      string
 	NoditWebhookSigningKeys     map[string]string
 	MarketWebhookAutoRepair     bool
@@ -208,6 +212,9 @@ func Load() (Config, error) {
 		MarketRuleInterval:          ruleInterval,
 		MarketHolderRefreshInterval: holderRefreshInterval,
 		DexScreenerBaseURL:          firstNonEmpty(os.Getenv("DEXSCREENER_BASE_URL"), defaultDexScreenerAPI),
+		CoinGeckoAPIKey:             strings.TrimSpace(os.Getenv("COINGECKO_API_KEY")),
+		CoinGeckoAPITier:            strings.ToLower(firstNonEmpty(os.Getenv("COINGECKO_API_TIER"), defaultCoinGeckoAPITier)),
+		CoinGeckoBaseURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("COINGECKO_BASE_URL")), "/"),
 		NoditWebhookSigningKey:      strings.TrimSpace(os.Getenv("NODIT_WEBHOOK_SIGNING_KEY")),
 		NoditWebhookSigningKeys:     webhookSigningKeys,
 		MarketWebhookAutoRepair:     webhookAutoRepair,
@@ -257,6 +264,15 @@ func (c Config) Validate() error {
 			"SUBSCRIPTION_TOKEN_DECIMALS must not be negative: %d",
 			c.SubscriptionTokenDecimals,
 		)
+	}
+	if c.CoinGeckoAPITier != "" &&
+		c.CoinGeckoAPITier != "demo" &&
+		c.CoinGeckoAPITier != "pro" {
+		return fmt.Errorf("COINGECKO_API_TIER must be demo or pro")
+	}
+	if c.CoinGeckoAPITier == "pro" &&
+		strings.TrimSpace(c.CoinGeckoAPIKey) == "" {
+		return fmt.Errorf("COINGECKO_API_KEY is required when COINGECKO_API_TIER=pro")
 	}
 	if c.MarketCollectorEnabled {
 		if c.ChainKey != "bsc" {

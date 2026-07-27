@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/bot"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
@@ -83,6 +84,26 @@ func buildDependencies(
 	if err != nil {
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create DexScreener client: %w", err)
+	}
+	coinGeckoClient, err := assetcatalog.NewCoinGeckoClient(
+		assetcatalog.CoinGeckoSettings{
+			Tier:    cfg.CoinGeckoAPITier,
+			APIKey:  cfg.CoinGeckoAPIKey,
+			BaseURL: cfg.CoinGeckoBaseURL,
+		},
+	)
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create CoinGecko client: %w", err)
+	}
+	assetCatalog, err := assetcatalog.NewCatalog(
+		coinGeckoClient,
+		marketDataClient,
+		nil,
+	)
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create asset catalog: %w", err)
 	}
 	marketService := marketcollector.New(
 		marketcollector.Dependencies{
@@ -250,6 +271,7 @@ func buildDependencies(
 			Bot:           botService,
 			MarketWebhook: marketService,
 			Market:        marketViewService,
+			Assets:        assetCatalog,
 			Catalog:       catalog,
 			ReadyCheck:    repository.Ping,
 		},

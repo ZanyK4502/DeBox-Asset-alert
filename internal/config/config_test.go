@@ -39,6 +39,9 @@ func TestLoadDefaults(t *testing.T) {
 		"MARKET_RULE_INTERVAL",
 		"MARKET_HOLDER_REFRESH_INTERVAL",
 		"DEXSCREENER_BASE_URL",
+		"COINGECKO_API_KEY",
+		"COINGECKO_API_TIER",
+		"COINGECKO_BASE_URL",
 		"NODIT_WEBHOOK_SIGNING_KEY",
 		"NODIT_WEBHOOK_SIGNING_KEYS_JSON",
 		"MARKET_WEBHOOK_AUTO_REPAIR",
@@ -88,6 +91,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DeBoxOpenAPIBase != defaultDeBoxAPI || cfg.ChainKey != defaultChainKey || cfg.NoditBaseURL != defaultNoditAPI {
 		t.Fatalf("external API defaults = %q/%q/%q", cfg.DeBoxOpenAPIBase, cfg.ChainKey, cfg.NoditBaseURL)
 	}
+	if cfg.CoinGeckoAPITier != defaultCoinGeckoAPITier ||
+		cfg.CoinGeckoAPIKey != "" || cfg.CoinGeckoBaseURL != "" {
+		t.Fatalf(
+			"CoinGecko defaults = %q/%q/%q",
+			cfg.CoinGeckoAPITier,
+			cfg.CoinGeckoAPIKey,
+			cfg.CoinGeckoBaseURL,
+		)
+	}
 	if cfg.NoditCUPerSecond != defaultNoditCUPerSecond {
 		t.Fatalf("NoditCUPerSecond = %d, want %d", cfg.NoditCUPerSecond, defaultNoditCUPerSecond)
 	}
@@ -136,6 +148,9 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	t.Setenv("NODIT_API_KEY", " nodit-key ")
 	t.Setenv("NODIT_BASE_URL", " https://nodit.example/v1 ")
 	t.Setenv("NODIT_CU_PER_SECOND", "321")
+	t.Setenv("COINGECKO_API_KEY", " cg-key ")
+	t.Setenv("COINGECKO_API_TIER", "PRO")
+	t.Setenv("COINGECKO_BASE_URL", " https://coingecko.example/api/v3/ ")
 	t.Setenv("STATIC_DIR", testStaticDir(t))
 
 	cfg, err := Load()
@@ -161,6 +176,35 @@ func TestLoadReadsExternalAPISettings(t *testing.T) {
 	}
 	if cfg.NoditCUPerSecond != 321 {
 		t.Fatalf("NoditCUPerSecond = %d", cfg.NoditCUPerSecond)
+	}
+	if cfg.CoinGeckoAPIKey != "cg-key" ||
+		cfg.CoinGeckoAPITier != "pro" ||
+		cfg.CoinGeckoBaseURL != "https://coingecko.example/api/v3" {
+		t.Fatalf(
+			"unexpected CoinGecko settings = %q/%q/%q",
+			cfg.CoinGeckoAPIKey,
+			cfg.CoinGeckoAPITier,
+			cfg.CoinGeckoBaseURL,
+		)
+	}
+}
+
+func TestLoadValidatesCoinGeckoTierAndPaidKey(t *testing.T) {
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+	t.Setenv("COINGECKO_API_TIER", "unknown")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted an unsupported CoinGecko tier")
+	}
+
+	t.Setenv("COINGECKO_API_TIER", "pro")
+	t.Setenv("COINGECKO_API_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted a paid CoinGecko tier without a key")
+	}
+
+	t.Setenv("COINGECKO_API_KEY", "secret")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() rejected paid CoinGecko settings: %v", err)
 	}
 }
 

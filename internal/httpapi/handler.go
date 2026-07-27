@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/bot"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
@@ -111,6 +112,12 @@ type MarketManagementService interface {
 	DeleteAddressLabel(context.Context, string, int64) error
 }
 
+type AssetCatalogService interface {
+	Search(context.Context, string, int) (assetcatalog.SearchResult, error)
+	ResolveContract(context.Context, string, string) (*assetcatalog.Candidate, error)
+	Logo(context.Context, string) (assetcatalog.Logo, error)
+}
+
 type Dependencies struct {
 	Auth          AuthService
 	Subscriptions SubscriptionService
@@ -121,6 +128,7 @@ type Dependencies struct {
 	Bot           BotService
 	MarketWebhook MarketWebhookService
 	Market        MarketManagementService
+	Assets        AssetCatalogService
 	Catalog       *plans.Catalog
 	ReadyCheck    func(context.Context) error
 }
@@ -173,6 +181,9 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /bot/webhook", h.postBotWebhook)
 	mux.HandleFunc("POST /api/market/webhook/{category}", h.postMarketWebhook)
 	mux.HandleFunc("GET /api/market/catalog", h.getMarketCatalog)
+	mux.HandleFunc("GET /api/market/assets/search", h.getMarketAssetSearch)
+	mux.HandleFunc("GET /api/market/assets/resolve", h.getMarketAssetResolve)
+	mux.HandleFunc("GET /api/market/assets/logo", h.getMarketAssetLogo)
 	mux.HandleFunc("POST /api/market/query", h.postMarketQuery)
 	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)
 	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)

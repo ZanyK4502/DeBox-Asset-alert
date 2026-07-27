@@ -63,6 +63,44 @@ func TestDexScreenerDiscoverPoolsPreservesDecimalsAndCaches(t *testing.T) {
 	}
 }
 
+func TestDexScreenerSearchPairsKeepsSupportedEVMChainsAndCaches(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		calls++
+		if request.URL.Path != "/latest/dex/search" ||
+			request.URL.Query().Get("q") != "Project Coin" {
+			t.Errorf("request = %s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(
+			writer,
+			`{"pairs":[%s,{"chainId":"solana","dexId":"raydium","pairAddress":"bad","baseToken":{"address":"bad","name":"Project Coin","symbol":"PRJ"},"quoteToken":{"address":"bad","name":"USD","symbol":"USD"}}]}`,
+			strings.TrimSuffix(strings.TrimPrefix(
+				pairArrayJSON(marketPairA, marketTokenA, marketTokenB),
+				"[",
+			), "]"),
+		)
+	}))
+	defer server.Close()
+	client := newTestDexScreenerClient(t, server)
+
+	first, err := client.SearchPairs(context.Background(), " Project Coin ")
+	if err != nil {
+		t.Fatalf("SearchPairs() error = %v", err)
+	}
+	second, err := client.SearchPairs(context.Background(), "Project Coin")
+	if err != nil {
+		t.Fatalf("cached SearchPairs() error = %v", err)
+	}
+	if len(first) != 1 || len(second) != 1 ||
+		first[0].ChainID != ChainBSC || calls != 1 {
+		t.Fatalf("pairs/calls = %#v/%#v/%d", first, second, calls)
+	}
+}
+
 func TestDexScreenerBatchesTokensAndPairs(t *testing.T) {
 	var tokenRequests atomic.Int32
 	var pairRequests atomic.Int32

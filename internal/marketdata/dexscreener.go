@@ -193,6 +193,32 @@ func (c *DexScreenerClient) PairsByAddresses(
 	return c.fetchBatches(ctx, normalizedChain, addresses, "pairs", c.quoteCacheTTL)
 }
 
+// SearchPairs is used only as the long-tail asset-search fallback. Unlike
+// DiscoverPools, it searches globally and then keeps valid pairs from the six
+// EVM chains supported by the product.
+func (c *DexScreenerClient) SearchPairs(
+	ctx context.Context,
+	query string,
+) ([]Pair, error) {
+	query = strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
+	if len(query) < 2 || len(query) > 80 {
+		return nil, fmt.Errorf("invalid DexScreener search query")
+	}
+	cacheKey := "search:" + strings.ToLower(query)
+	return c.cachedFetch(
+		ctx,
+		cacheKey,
+		c.discoveryCacheTTL,
+		c.discoveryStaleTTL,
+		func(ctx context.Context) ([]Pair, error) {
+			return c.getSearchPairs(
+				ctx,
+				"/latest/dex/search?q="+url.QueryEscape(query),
+			)
+		},
+	)
+}
+
 func (c *DexScreenerClient) fetchBatches(
 	ctx context.Context,
 	chainID string,
@@ -309,6 +335,97 @@ func (c *DexScreenerClient) getPairsOnce(
 		return nil, fmt.Errorf("decode DexScreener response: %w", err)
 	}
 	return normalizePairs(pairs)
+}
+
+func (c *DexScreenerClient) getSearchPairs(
+	ctx context.Context,
+	path string,
+) ([]Pair, error) {
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if err := c.waitForCooldown(ctx); err != nil {
+			return nil, err
+		}
+		pairs, err := c.getSearchPairsOnce(ctx, path)
+		if err == nil {
+			c.clearRateLimitBackoff()
+			return pairs, nil
+		}
+		lastErr = err
+		if !IsTemporaryError(err) {
+			return nil, err
+		}
+		var apiError *DexScreenerHTTPError
+		if errors.As(err, &apiError) &&
+			apiError.StatusCode == http.StatusTooManyRequests {
+			c.noteRateLimit(apiError.RetryAfter)
+			if attempt == c.maxRetries {
+				return nil, err
+			}
+			continue
+		}
+		if attempt == c.maxRetries {
+			return nil, err
+		}
+		if err := waitContext(ctx, c.retryBackoff(attempt)); err != nil {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *DexScreenerClient) getSearchPairsOnce(
+	ctx context.Context,
+	path string,
+) ([]Pair, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, c.baseURL+path, nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create DexScreener request: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("DexScreener request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= http.StatusBadRequest {
+		body, _ := io.ReadAll(
+			io.LimitReader(response.Body, maxDexScreenerErrorBody),
+		)
+		return nil, &DexScreenerHTTPError{
+			StatusCode: response.StatusCode,
+			RetryAfter: strings.TrimSpace(response.Header.Get("Retry-After")),
+			Body:       strings.TrimSpace(string(body)),
+		}
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read DexScreener response: %w", err)
+	}
+	var envelope struct {
+		Pairs []Pair `json:"pairs"`
+	}
+	if err := decodeJSON(body, &envelope); err != nil {
+		return nil, fmt.Errorf("decode DexScreener response: %w", err)
+	}
+	result := make([]Pair, 0, len(envelope.Pairs))
+	for _, pair := range envelope.Pairs {
+		switch strings.ToLower(strings.TrimSpace(pair.ChainID)) {
+		case "bsc", "ethereum", "base", "polygon", "arbitrum", "optimism":
+		default:
+			continue
+		}
+		normalized, normalizeErr := normalizePairs([]Pair{pair})
+		if normalizeErr == nil && len(normalized) == 1 {
+			result = append(result, normalized[0])
+		}
+	}
+	return deduplicatePairs(result), nil
 }
 
 func (c *DexScreenerClient) cachedFetch(
