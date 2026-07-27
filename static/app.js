@@ -432,9 +432,19 @@ function closeChainPicker(prefix = "") {
   $(ids.button).setAttribute("aria-expanded", "false");
 }
 
+function closeMarketManualChainPickers() {
+  document.querySelectorAll("[data-market-manual-chain-menu]").forEach((menu) => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll("[data-market-manual-chain-button]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
+}
+
 function closeAllChainPickers() {
   closeChainPicker();
   closeChainPicker("combination");
+  closeMarketManualChainPickers();
 }
 
 function shieldTapThrough(duration = 260) {
@@ -2342,15 +2352,24 @@ function renderMarketManualRows() {
     const availableChains = state.chains.filter((chain) =>
       chain.key === row.chainKey || !usedByOtherRows.has(chain.key)
     );
+    const selectedChain = availableChains.find((chain) => chain.key === row.chainKey);
     return `
       <div class="market-manual-row">
         <label>
           <span>${escapeHtml(t("chain"))}</span>
-          <select data-market-manual-chain="${index}">
-            ${availableChains.map((chain) => `
-              <option value="${escapeHtml(chain.key)}" ${chain.key === row.chainKey ? "selected" : ""}>${escapeHtml(chain.name)}</option>
-            `).join("")}
-          </select>
+          <div class="chain-picker" data-market-manual-picker="${index}">
+            <button class="chain-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false" data-market-manual-chain-button="${index}">
+              ${selectedChain ? chainOptionHtml(selectedChain) : escapeHtml(t("selectChain"))}
+              <span class="chain-picker-arrow">&#8964;</span>
+            </button>
+            <div class="chain-picker-menu" role="listbox" data-market-manual-chain-menu="${index}" hidden>
+              ${availableChains.map((chain) => `
+                <button class="chain-picker-option${chain.key === row.chainKey ? " active" : ""}" type="button" role="option" aria-selected="${chain.key === row.chainKey}" data-market-manual-chain-option="${index}" data-chain="${escapeHtml(chain.key)}">
+                  ${chainOptionHtml(chain)}
+                </button>
+              `).join("")}
+            </div>
+          </div>
         </label>
         <label>
           <span>${escapeHtml(t("marketTokenContract"))}</span>
@@ -2361,9 +2380,25 @@ function renderMarketManualRows() {
     `;
   }).join("");
   $("addMarketManualRowBtn").disabled = rows.length >= state.chains.length;
-  $("marketManualRows").querySelectorAll("[data-market-manual-chain]").forEach((select) => {
-    select.addEventListener("change", () => {
-      state.marketWizard.manualRows[Number(select.dataset.marketManualChain)].chainKey = select.value;
+  $("marketManualRows").querySelectorAll("[data-market-manual-chain-button]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menu = $("marketManualRows").querySelector(
+        `[data-market-manual-chain-menu="${button.dataset.marketManualChainButton}"]`,
+      );
+      const willOpen = menu.hidden;
+      closeAllChainPickers();
+      menu.hidden = !willOpen;
+      button.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) menu.querySelector(".chain-picker-option.active")?.scrollIntoView({ block: "nearest" });
+    });
+  });
+  $("marketManualRows").querySelectorAll("[data-market-manual-chain-option]").forEach((option) => {
+    option.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.marketWizard.manualRows[Number(option.dataset.marketManualChainOption)].chainKey = option.dataset.chain;
+      shieldTapThrough();
       renderMarketManualRows();
     });
   });
@@ -4033,6 +4068,7 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     if (!$("chainPicker").contains(event.target)) closeChainPicker();
     if (!$("combinationChainPicker").contains(event.target)) closeChainPicker("combination");
+    if (!event.target.closest("[data-market-manual-picker]")) closeMarketManualChainPickers();
     if (!event.target.closest(".help-control")) {
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
       ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
