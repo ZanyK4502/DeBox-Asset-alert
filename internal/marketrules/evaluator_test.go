@@ -209,6 +209,48 @@ func TestEvaluatePriceChangeDoesNotRepeatWhenOptionIsDisabled(t *testing.T) {
 	}
 }
 
+func TestEvaluateLiquidityDecreaseRepeatsAfterCooldownWhenEnabled(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	window := int32(60)
+	baselineLiquidity, latestLiquidity := "100000", "80000"
+	input := EvaluationInput{
+		Rule: store.MarketRule{
+			RuleType:          plans.MarketLiquidityDecrease,
+			ThresholdValue:    "10",
+			ThresholdUnit:     "percent",
+			WindowMinutes:     &window,
+			CooldownSeconds:   60,
+			RepeatWhileActive: true,
+		},
+		Project: store.MarketProject{TokenSymbol: "TEST"},
+		Snapshots: []store.MarketSnapshot{
+			{ID: 2, MarketPoolID: 10, LiquidityUSD: &latestLiquidity, CapturedAt: now},
+			{ID: 1, MarketPoolID: 10, LiquidityUSD: &baselineLiquidity, CapturedAt: now.Add(-time.Hour)},
+		},
+		Now: now,
+	}
+	first, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("first evaluation: %v", err)
+	}
+	if len(first.Triggers) != 1 {
+		t.Fatalf("first triggers = %d, want 1", len(first.Triggers))
+	}
+
+	input.Rule.State = first.State
+	input.Rule.LastTriggeredAt = &now
+	input.Now = now.Add(61 * time.Second)
+	input.Snapshots[0].ID = 3
+	input.Snapshots[0].CapturedAt = input.Now
+	repeated, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("post-cooldown evaluation: %v", err)
+	}
+	if len(repeated.Triggers) != 1 {
+		t.Fatalf("post-cooldown triggers = %d, want 1", len(repeated.Triggers))
+	}
+}
+
 func TestEvaluateEventCooldownLimitsOneTriggerPerBatch(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	firstValue, secondValue := "1000", "2000"

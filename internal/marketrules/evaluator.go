@@ -317,7 +317,8 @@ func evaluateSnapshotRule(
 func repeatsWhileConditionActive(rule store.MarketRule) bool {
 	return rule.RepeatWhileActive &&
 		(rule.RuleType == plans.MarketPriceIncrease ||
-			rule.RuleType == plans.MarketPriceDecrease)
+			rule.RuleType == plans.MarketPriceDecrease ||
+			rule.RuleType == plans.MarketLiquidityDecrease)
 }
 
 func snapshotCondition(

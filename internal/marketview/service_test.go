@@ -110,7 +110,7 @@ func (f fakeMarket) PairsByAddresses(_ context.Context, chainKey string, _ []str
 	return f.pairs, f.err
 }
 
-func TestCreateRuleLimitsRepeatWhileActiveToPriceChangeRules(t *testing.T) {
+func TestCreateRuleLimitsRepeatWhileActiveToSupportedRules(t *testing.T) {
 	var captured store.CreateMarketRuleParams
 	service := New(Dependencies{
 		Entitlements: fakeEntitlements{createdRuleParams: &captured},
@@ -122,7 +122,9 @@ func TestCreateRuleLimitsRepeatWhileActiveToPriceChangeRules(t *testing.T) {
 	}{
 		{name: "price increase", ruleType: plans.MarketPriceIncrease, want: true},
 		{name: "price decrease", ruleType: plans.MarketPriceDecrease, want: true},
+		{name: "liquidity decrease", ruleType: plans.MarketLiquidityDecrease, want: true},
 		{name: "price above", ruleType: plans.MarketPriceAbove, want: false},
+		{name: "liquidity below", ruleType: plans.MarketLiquidityBelow, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			captured = store.CreateMarketRuleParams{}

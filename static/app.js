@@ -2179,6 +2179,7 @@ const MARKET_EVENT_ONLY_RULES = new Set([
 const MARKET_REPEAT_WHILE_ACTIVE_RULES = new Set([
   "market_price_increase",
   "market_price_decrease",
+  "market_liquidity_decrease",
 ]);
 
 const MARKET_GOAL_HINT_KEYS = {
@@ -3261,12 +3262,14 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.repeatWrap.hidden = !repeatSupported;
   if (!repeatSupported) controls.repeat.checked = false;
   controls.repeat.disabled = !repeatSupported || !editable;
-  controls.repeatLabel.textContent = t(definition?.code === "market_price_decrease"
-    ? "repeatPriceDecreaseLabel"
-    : "repeatPriceIncreaseLabel");
-  controls.repeatHelp.textContent = t(definition?.code === "market_price_decrease"
-    ? "repeatPriceDecreaseHelp"
-    : "repeatPriceIncreaseHelp");
+  const liquidityDecrease = definition?.code === "market_liquidity_decrease";
+  const priceDecrease = definition?.code === "market_price_decrease";
+  controls.repeatLabel.textContent = t(liquidityDecrease
+    ? "repeatLiquidityDecreaseLabel"
+    : priceDecrease ? "repeatPriceDecreaseLabel" : "repeatPriceIncreaseLabel");
+  controls.repeatHelp.textContent = t(liquidityDecrease
+    ? "repeatLiquidityDecreaseHelp"
+    : priceDecrease ? "repeatPriceDecreaseHelp" : "repeatPriceIncreaseHelp");
   controls.refresh.hidden = !systemRecommended;
   controls.refresh.disabled = !editable || recommendationState.loading ||
     (mode === "wizard" && state.marketWizard.busy);

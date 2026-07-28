@@ -1128,7 +1128,9 @@ func (s *Service) CreateRule(
 	}
 	ruleType := strings.ToLower(strings.TrimSpace(input.RuleType))
 	repeatWhileActive := input.RepeatWhileActive &&
-		(ruleType == plans.MarketPriceIncrease || ruleType == plans.MarketPriceDecrease)
+		(ruleType == plans.MarketPriceIncrease ||
+			ruleType == plans.MarketPriceDecrease ||
+			ruleType == plans.MarketLiquidityDecrease)
 	return s.deps.Entitlements.CreateMarketRule(ctx, store.CreateMarketRuleParams{
 		DeBoxUserID:     deboxUserID,
 		MarketProjectID: projectID,
