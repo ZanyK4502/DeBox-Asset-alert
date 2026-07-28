@@ -2652,6 +2652,7 @@ function renderMarketWizardRuleEditor() {
     select.value = definitions.find((rule) => rule.allowed)?.code || "";
   }
   const definition = marketRuleDefinition(select.value);
+  $("marketWizardPoolScopeWrap").hidden = definition?.code === "market_new_pool";
   $("marketWizardRuleDescription").textContent = definition
     ? marketRuleDescription(definition)
     : t("marketProfessionalOnly");
@@ -3018,6 +3019,7 @@ function renderMarketRuleEditor() {
     if (firstAllowed) select.value = firstAllowed.code;
   }
   const definition = marketRuleDefinition(select.value);
+  $("marketRulePoolWrap").hidden = definition?.code === "market_new_pool";
   $("marketRuleDescription").textContent = definition
     ? marketRuleDescription(definition)
     : t("marketProfessionalOnly");
@@ -3846,7 +3848,9 @@ async function createMarketProject() {
         method: "POST",
         body: JSON.stringify({
           deployment_scope: "all",
-          pool_scope: $("marketWizardPoolScopeSelect").value,
+          pool_scope: definition.code === "market_new_pool"
+            ? "primary"
+            : $("marketWizardPoolScopeSelect").value,
           cooldown_scope: "chain",
           rule_type: definition.code,
           threshold_value: $("marketWizardThresholdInput").value,
@@ -3998,7 +4002,9 @@ async function createMarketRule(event) {
   await api(`/api/market/projects/${projectId}/rules`, {
     method: "POST",
     body: JSON.stringify({
-      market_pool_id: poolValue ? Number(poolValue) : null,
+      market_pool_id: definition.code === "market_new_pool"
+        ? null
+        : (poolValue ? Number(poolValue) : null),
       rule_type: definition.code,
       threshold_value: $("marketThresholdInput").value,
       threshold_unit: $("marketThresholdUnitSelect").value,
