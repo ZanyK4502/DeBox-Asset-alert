@@ -2176,6 +2176,11 @@ const MARKET_EVENT_ONLY_RULES = new Set([
   "market_four_meme_migration",
 ]);
 
+const MARKET_REPEAT_WHILE_ACTIVE_RULES = new Set([
+  "market_price_increase",
+  "market_price_decrease",
+]);
+
 const MARKET_GOAL_HINT_KEYS = {
   price: "marketGoalPriceHint",
   liquidity: "marketGoalLiquidityHint",
@@ -3195,6 +3200,9 @@ function marketRecommendationControls(mode) {
     window: $(wizard ? "marketWizardWindowInput" : "marketWindowInput"),
     cooldownWrap: $(wizard ? "marketWizardCooldownWrap" : "marketCooldownWrap"),
     cooldown: $(wizard ? "marketWizardCooldownInput" : "marketCooldownInput"),
+    repeatWrap: $(wizard ? "marketWizardRepeatWrap" : "marketRepeatWrap"),
+    repeat: $(wizard ? "marketWizardRepeatInput" : "marketRepeatInput"),
+    repeatHelp: $(wizard ? "marketWizardRepeatHelpText" : "marketRepeatHelpText"),
   };
 }
 
@@ -3241,6 +3249,7 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   const controls = marketRecommendationControls(mode);
   const recommendationState = marketRecommendationState(mode);
   const eventOnly = MARKET_EVENT_ONLY_RULES.has(definition?.code);
+  const repeatSupported = MARKET_REPEAT_WHILE_ACTIVE_RULES.has(definition?.code);
   const custom = controls.sensitivity.value === "custom";
   const systemRecommended = !eventOnly && !custom;
 
@@ -3248,6 +3257,12 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.thresholdWrap.hidden = eventOnly;
   controls.cooldownWrap.hidden = eventOnly;
   controls.windowWrap.hidden = eventOnly || !Number(definition?.default_window_minutes);
+  controls.repeatWrap.hidden = !repeatSupported;
+  if (!repeatSupported) controls.repeat.checked = false;
+  controls.repeat.disabled = !repeatSupported || !editable;
+  controls.repeatHelp.textContent = t(definition?.code === "market_price_decrease"
+    ? "repeatPriceDecreaseHelp"
+    : "repeatPriceIncreaseHelp");
   controls.refresh.hidden = !systemRecommended;
   controls.refresh.disabled = !editable || recommendationState.loading ||
     (mode === "wizard" && state.marketWizard.busy);
@@ -3648,6 +3663,7 @@ function clearMarketWizardVerification() {
 function resetMarketWizard() {
   state.marketWizard = freshMarketWizard();
   state.marketGoal = "price";
+  $("marketWizardRepeatInput").checked = false;
   $("marketAssetSearchInput").value = "";
   $("marketAssetSearchStatus").textContent = t("marketAssetSearchHint");
   $("marketManualStatus").textContent = t("marketManualHint");
@@ -3947,6 +3963,8 @@ async function createMarketProject() {
             : Number($("marketWizardWindowInput").value),
           sensitivity: $("marketWizardSensitivitySelect").value,
           cooldown_seconds: Number($("marketWizardCooldownInput").value),
+          repeat_while_active: !$("marketWizardRepeatWrap").hidden &&
+            $("marketWizardRepeatInput").checked,
           delivery_mode: "realtime",
           cycle_type: "fixed",
           cycle_minutes: Number($("marketWizardWindowInput").value || 60),
@@ -4098,6 +4116,7 @@ async function createMarketRule(event) {
       window_minutes: $("marketWindowWrap").hidden ? null : Number($("marketWindowInput").value),
       sensitivity: $("marketSensitivitySelect").value,
       cooldown_seconds: Number($("marketCooldownInput").value),
+      repeat_while_active: !$("marketRepeatWrap").hidden && $("marketRepeatInput").checked,
       delivery_mode: $("marketDeliveryModeSelect").value,
       cycle_type: $("marketCycleTypeSelect").value,
       cycle_minutes: Number($("marketCycleMinutesInput").value),
@@ -4468,9 +4487,41 @@ function bindEvents() {
   $("combinationChainPickerButton").addEventListener("keydown", (event) => {
     handleChainPickerKeydown(event, "combination");
   });
-  ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+  const repeatHelpButtonIds = ["marketWizardRepeatHelpBtn", "marketRepeatHelpBtn"];
+  const helpButtonIds = [
+    "balanceHelpBtn",
+    "combinationBalanceHelpBtn",
+    ...repeatHelpButtonIds,
+  ];
+  repeatHelpButtonIds.forEach((id) => {
+    const button = $(id);
+    let pressTimer = null;
+    const clearPressTimer = () => {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    };
+    button.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "mouse" || event.button !== 0) return;
+      clearPressTimer();
+      pressTimer = setTimeout(() => {
+        const control = button.closest(".help-control");
+        control.classList.add("open");
+        button.setAttribute("aria-expanded", "true");
+        button.dataset.longPressOpen = "true";
+      }, 280);
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
+      button.addEventListener(eventName, clearPressTimer);
+    });
+    button.addEventListener("contextmenu", (event) => event.preventDefault());
+  });
+  helpButtonIds.forEach((id) => {
     $(id).addEventListener("click", (event) => {
       event.stopPropagation();
+      if (event.currentTarget.dataset.longPressOpen === "true") {
+        delete event.currentTarget.dataset.longPressOpen;
+        return;
+      }
       const control = event.currentTarget.closest(".help-control");
       const open = !control.classList.contains("open");
       control.classList.toggle("open", open);
@@ -4483,7 +4534,7 @@ function bindEvents() {
     if (!event.target.closest("[data-market-manual-picker]")) closeMarketManualChainPickers();
     if (!event.target.closest(".help-control")) {
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
-      ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+      helpButtonIds.forEach((id) => {
         $(id).setAttribute("aria-expanded", "false");
         $(id).blur();
       });
@@ -4493,7 +4544,7 @@ function bindEvents() {
     if (event.key === "Escape") {
       closeAllChainPickers();
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
-      ["balanceHelpBtn", "combinationBalanceHelpBtn"].forEach((id) => {
+      helpButtonIds.forEach((id) => {
         $(id).setAttribute("aria-expanded", "false");
         $(id).blur();
       });

@@ -224,6 +224,7 @@ type MarketRule struct {
 	WindowMinutes         *int32          `db:"window_minutes" json:"window_minutes"`
 	Sensitivity           string          `db:"sensitivity" json:"sensitivity"`
 	CooldownSeconds       int32           `db:"cooldown_seconds" json:"cooldown_seconds"`
+	RepeatWhileActive     bool            `db:"repeat_while_active" json:"repeat_while_active"`
 	RuleScope             string          `db:"rule_scope" json:"rule_scope"`
 	DeploymentScope       string          `db:"deployment_scope" json:"deployment_scope"`
 	PoolScope             string          `db:"pool_scope" json:"pool_scope"`

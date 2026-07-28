@@ -285,7 +285,7 @@ func evaluateSnapshotRule(
 	}
 	crossed := condition && !state.ConditionActive
 	repeatReady := condition && state.ConditionActive &&
-		repeatsWhileConditionActive(rule.RuleType) &&
+		repeatsWhileConditionActive(rule) &&
 		latest.ID != state.LastSnapshotID &&
 		!cooldownActive(rule, now)
 	pending := state.PendingCrossing || crossed || repeatReady
@@ -314,9 +314,10 @@ func evaluateSnapshotRule(
 	}, condition, false, true, nil
 }
 
-func repeatsWhileConditionActive(ruleType string) bool {
-	return ruleType == plans.MarketPriceIncrease ||
-		ruleType == plans.MarketPriceDecrease
+func repeatsWhileConditionActive(rule store.MarketRule) bool {
+	return rule.RepeatWhileActive &&
+		(rule.RuleType == plans.MarketPriceIncrease ||
+			rule.RuleType == plans.MarketPriceDecrease)
 }
 
 func snapshotCondition(

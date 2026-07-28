@@ -229,6 +229,7 @@ type CreateRuleInput struct {
 	WindowMinutes              *int32  `json:"window_minutes"`
 	Sensitivity                string  `json:"sensitivity"`
 	CooldownSeconds            int32   `json:"cooldown_seconds"`
+	RepeatWhileActive          bool    `json:"repeat_while_active"`
 	DeliveryMode               string  `json:"delivery_mode"`
 	CycleType                  string  `json:"cycle_type"`
 	CycleMinutes               int32   `json:"cycle_minutes"`
@@ -1125,6 +1126,9 @@ func (s *Service) CreateRule(
 	if input.TriggerCountThreshold <= 0 {
 		input.TriggerCountThreshold = 1
 	}
+	ruleType := strings.ToLower(strings.TrimSpace(input.RuleType))
+	repeatWhileActive := input.RepeatWhileActive &&
+		(ruleType == plans.MarketPriceIncrease || ruleType == plans.MarketPriceDecrease)
 	return s.deps.Entitlements.CreateMarketRule(ctx, store.CreateMarketRuleParams{
 		DeBoxUserID:     deboxUserID,
 		MarketProjectID: projectID,
@@ -1136,12 +1140,13 @@ func (s *Service) CreateRule(
 		PoolScope:             input.PoolScope,
 		MarketProjectPoolIDs:  append([]int64(nil), input.MarketProjectPoolIDs...),
 		CooldownScope:         input.CooldownScope,
-		RuleType:              strings.ToLower(strings.TrimSpace(input.RuleType)),
+		RuleType:              ruleType,
 		ThresholdValue:        strings.TrimSpace(input.ThresholdValue),
 		ThresholdUnit:         strings.ToLower(strings.TrimSpace(input.ThresholdUnit)),
 		WindowMinutes:         input.WindowMinutes,
 		Sensitivity:           strings.ToLower(strings.TrimSpace(input.Sensitivity)),
 		CooldownSeconds:       input.CooldownSeconds,
+		RepeatWhileActive:     repeatWhileActive,
 		RuleScope:             "standalone",
 		DeliveryMode:          deliveryMode,
 		CycleType:             cycleType,

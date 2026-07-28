@@ -223,6 +223,19 @@
                   <input id="marketWizardCooldownInput" type="number" min="0" step="1" value="300" />
                   <small class="field-note" data-i18n="cooldownHelp">同一规则两次通知之间的最短间隔。</small>
                 </label>
+                <div id="marketWizardRepeatWrap" class="market-repeat-control" hidden>
+                  <div class="market-repeat-heading">
+                    <label id="marketWizardRepeatLabel" for="marketWizardRepeatInput" data-i18n="repeatWhileActive">持续满足时重复提醒</label>
+                    <span class="help-control">
+                      <button id="marketWizardRepeatHelpBtn" class="icon-help market-repeat-help" type="button" aria-expanded="false" aria-describedby="marketWizardRepeatHelpText" data-i18n-aria-label="repeatWhileActiveHelpLabel">?</button>
+                      <span id="marketWizardRepeatHelpText" class="help-popover" role="tooltip">开启后，只要涨幅持续达到设定值，每经过一个冷却时间再次提醒；关闭后，只在涨幅首次达到或再次达到设定值时提醒。</span>
+                    </span>
+                  </div>
+                  <label class="market-toggle" for="marketWizardRepeatInput">
+                    <input id="marketWizardRepeatInput" type="checkbox" aria-labelledby="marketWizardRepeatLabel" aria-describedby="marketWizardRepeatHelpText" />
+                    <span class="market-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
                 <label data-i18n-label="notificationMethod">
                   通知方式
                   <select id="marketWizardTargetTypeSelect">
@@ -386,6 +399,19 @@
                   <input id="marketCooldownInput" type="number" min="0" step="1" value="300" />
                   <small class="field-note" data-i18n="cooldownHelp">同一规则两次通知之间的最短间隔。</small>
                 </label>
+                <div id="marketRepeatWrap" class="market-repeat-control" hidden>
+                  <div class="market-repeat-heading">
+                    <label id="marketRepeatLabel" for="marketRepeatInput" data-i18n="repeatWhileActive">持续满足时重复提醒</label>
+                    <span class="help-control">
+                      <button id="marketRepeatHelpBtn" class="icon-help market-repeat-help" type="button" aria-expanded="false" aria-describedby="marketRepeatHelpText" data-i18n-aria-label="repeatWhileActiveHelpLabel">?</button>
+                      <span id="marketRepeatHelpText" class="help-popover" role="tooltip">开启后，只要涨幅持续达到设定值，每经过一个冷却时间再次提醒；关闭后，只在涨幅首次达到或再次达到设定值时提醒。</span>
+                    </span>
+                  </div>
+                  <label class="market-toggle" for="marketRepeatInput">
+                    <input id="marketRepeatInput" type="checkbox" aria-labelledby="marketRepeatLabel" aria-describedby="marketRepeatHelpText" />
+                    <span class="market-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
                 <label data-i18n-label="deliveryMode">
                   通知模式
                   <select id="marketDeliveryModeSelect">

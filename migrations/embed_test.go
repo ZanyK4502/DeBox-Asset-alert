@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0014_repair_multichain_collection_links.sql" {
-		t.Fatalf("latest migration = %q, want collection link repair migration", got)
+	if got := names[len(names)-1]; got != "0015_market_price_change_repeat_alerts.sql" {
+		t.Fatalf("latest migration = %q, want price-change repeat alert migration", got)
 	}
 
 	requiredTables := []string{

@@ -118,11 +118,12 @@ func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *t
 			latestPrice := test.latestPrice
 			input := EvaluationInput{
 				Rule: store.MarketRule{
-					RuleType:        test.ruleType,
-					ThresholdValue:  "10",
-					ThresholdUnit:   "percent",
-					WindowMinutes:   &window,
-					CooldownSeconds: 60,
+					RuleType:          test.ruleType,
+					ThresholdValue:    "10",
+					ThresholdUnit:     "percent",
+					WindowMinutes:     &window,
+					CooldownSeconds:   60,
+					RepeatWhileActive: true,
 				},
 				Project: store.MarketProject{TokenSymbol: "TEST"},
 				Snapshots: []store.MarketSnapshot{
@@ -164,6 +165,47 @@ func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *t
 				t.Fatalf("post-cooldown triggers = %d, want 1", len(afterCooldown.Triggers))
 			}
 		})
+	}
+}
+
+func TestEvaluatePriceChangeDoesNotRepeatWhenOptionIsDisabled(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	window := int32(60)
+	baselinePrice, latestPrice := "100", "120"
+	input := EvaluationInput{
+		Rule: store.MarketRule{
+			RuleType:        plans.MarketPriceIncrease,
+			ThresholdValue:  "10",
+			ThresholdUnit:   "percent",
+			WindowMinutes:   &window,
+			CooldownSeconds: 60,
+		},
+		Project: store.MarketProject{TokenSymbol: "TEST"},
+		Snapshots: []store.MarketSnapshot{
+			{ID: 2, MarketPoolID: 10, PriceUSD: &latestPrice, CapturedAt: now},
+			{ID: 1, MarketPoolID: 10, PriceUSD: &baselinePrice, CapturedAt: now.Add(-time.Hour)},
+		},
+		Now: now,
+	}
+	first, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("first evaluation: %v", err)
+	}
+	if len(first.Triggers) != 1 {
+		t.Fatalf("first triggers = %d, want 1", len(first.Triggers))
+	}
+
+	input.Rule.State = first.State
+	input.Rule.LastTriggeredAt = &now
+	input.Now = now.Add(61 * time.Second)
+	input.Snapshots[0].ID = 3
+	input.Snapshots[0].CapturedAt = input.Now
+	repeated, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("post-cooldown evaluation: %v", err)
+	}
+	if len(repeated.Triggers) != 0 {
+		t.Fatalf("post-cooldown triggers = %d, want 0", len(repeated.Triggers))
 	}
 }
 

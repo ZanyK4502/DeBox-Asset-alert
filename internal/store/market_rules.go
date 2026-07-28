@@ -11,7 +11,7 @@ import (
 const marketRuleColumns = `
 	id, debox_user_id, market_project_id, market_pool_id, rule_type,
 	threshold_value::text AS threshold_value, threshold_unit, window_minutes,
-	sensitivity, cooldown_seconds, rule_scope, delivery_mode, cycle_type,
+	sensitivity, cooldown_seconds, repeat_while_active, rule_scope, delivery_mode, cycle_type,
 	cycle_minutes, trigger_count_threshold,
 	deployment_scope, pool_scope, cooldown_scope, notification_chat_id,
 	notification_chat_type, notification_label, notification_language,
@@ -58,6 +58,7 @@ type CreateMarketRuleParams struct {
 	WindowMinutes              *int32
 	Sensitivity                string
 	CooldownSeconds            int32
+	RepeatWhileActive          bool
 	RuleScope                  string
 	DeliveryMode               string
 	CycleType                  string
@@ -231,7 +232,7 @@ func createMarketRule(
 		INSERT INTO market_rules (
 			debox_user_id, market_project_id, market_pool_id, rule_type,
 			threshold_value, threshold_unit, window_minutes, sensitivity,
-			cooldown_seconds, rule_scope, delivery_mode, cycle_type,
+			cooldown_seconds, repeat_while_active, rule_scope, delivery_mode, cycle_type,
 			cycle_minutes, trigger_count_threshold,
 			deployment_scope, pool_scope, cooldown_scope, notification_chat_id,
 			notification_chat_type, notification_label, notification_language,
@@ -239,9 +240,9 @@ func createMarketRule(
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, $20, $21,
-			CASE WHEN $11 = 'stage' AND $12 = 'fixed' THEN NOW() ELSE NULL END,
-			$22
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+			CASE WHEN $12 = 'stage' AND $13 = 'fixed' THEN NOW() ELSE NULL END,
+			$23
 		)
 		RETURNING `+marketRuleColumns,
 		params.DeBoxUserID,
@@ -253,6 +254,7 @@ func createMarketRule(
 		params.WindowMinutes,
 		params.Sensitivity,
 		params.CooldownSeconds,
+		params.RepeatWhileActive,
 		params.RuleScope,
 		params.DeliveryMode,
 		params.CycleType,
@@ -581,7 +583,7 @@ func (s *Store) ListEnabledMarketRules(
 			mr.id, mr.debox_user_id, mr.market_project_id, mr.market_pool_id,
 			mr.rule_type, mr.threshold_value::text AS threshold_value,
 			mr.threshold_unit, mr.window_minutes, mr.sensitivity,
-			mr.cooldown_seconds, mr.rule_scope, mr.delivery_mode,
+			mr.cooldown_seconds, mr.repeat_while_active, mr.rule_scope, mr.delivery_mode,
 			mr.cycle_type, mr.cycle_minutes, mr.trigger_count_threshold,
 			mr.deployment_scope, mr.pool_scope, mr.cooldown_scope,
 			mr.notification_chat_id, mr.notification_chat_type,

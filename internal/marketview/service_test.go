@@ -22,8 +22,9 @@ const (
 )
 
 type fakeEntitlements struct {
-	plan plans.Plan
-	err  error
+	plan              plans.Plan
+	err               error
+	createdRuleParams *store.CreateMarketRuleParams
 }
 
 func (f fakeEntitlements) ActivePlan(context.Context, string) (plans.Plan, error) {
@@ -41,7 +42,11 @@ func (fakeEntitlements) RestoreMarketProject(context.Context, string, int64) (st
 func (fakeEntitlements) LinkMarketProjectPool(context.Context, store.LinkMarketProjectPoolParams) (store.MarketProjectPool, error) {
 	return store.MarketProjectPool{}, errors.New("not used")
 }
-func (fakeEntitlements) CreateMarketRule(context.Context, store.CreateMarketRuleParams) (store.MarketRule, error) {
+func (f fakeEntitlements) CreateMarketRule(_ context.Context, params store.CreateMarketRuleParams) (store.MarketRule, error) {
+	if f.createdRuleParams != nil {
+		*f.createdRuleParams = params
+		return store.MarketRule{RuleType: params.RuleType, RepeatWhileActive: params.RepeatWhileActive}, nil
+	}
 	return store.MarketRule{}, errors.New("not used")
 }
 func (fakeEntitlements) RestoreMarketRule(context.Context, string, int64) (store.MarketRule, error) {
@@ -103,6 +108,36 @@ func (f fakeMarket) PairsByAddresses(_ context.Context, chainKey string, _ []str
 		return f.pairsByChain[chainKey], f.err
 	}
 	return f.pairs, f.err
+}
+
+func TestCreateRuleLimitsRepeatWhileActiveToPriceChangeRules(t *testing.T) {
+	var captured store.CreateMarketRuleParams
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{createdRuleParams: &captured},
+	})
+	for _, test := range []struct {
+		name     string
+		ruleType string
+		want     bool
+	}{
+		{name: "price increase", ruleType: plans.MarketPriceIncrease, want: true},
+		{name: "price decrease", ruleType: plans.MarketPriceDecrease, want: true},
+		{name: "price above", ruleType: plans.MarketPriceAbove, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			captured = store.CreateMarketRuleParams{}
+			_, err := service.CreateRule(context.Background(), "user", 1, CreateRuleInput{
+				RuleType:          test.ruleType,
+				RepeatWhileActive: true,
+			})
+			if err != nil {
+				t.Fatalf("create rule: %v", err)
+			}
+			if captured.RepeatWhileActive != test.want {
+				t.Fatalf("repeat while active = %v, want %v", captured.RepeatWhileActive, test.want)
+			}
+		})
+	}
 }
 
 func TestQueryTokenSortsSupportedPancakePoolsFirst(t *testing.T) {
