@@ -123,6 +123,9 @@ func TestCreateRuleLimitsRepeatWhileActiveToSupportedRules(t *testing.T) {
 		{name: "price increase", ruleType: plans.MarketPriceIncrease, want: true},
 		{name: "price decrease", ruleType: plans.MarketPriceDecrease, want: true},
 		{name: "liquidity decrease", ruleType: plans.MarketLiquidityDecrease, want: true},
+		{name: "volume above", ruleType: plans.MarketVolumeAbove, want: true},
+		{name: "volume spike", ruleType: plans.MarketVolumeSpike, want: true},
+		{name: "trade imbalance", ruleType: plans.MarketTradeImbalance, want: true},
 		{name: "price above", ruleType: plans.MarketPriceAbove, want: false},
 		{name: "liquidity below", ruleType: plans.MarketLiquidityBelow, want: false},
 	} {

@@ -2180,7 +2180,28 @@ const MARKET_REPEAT_WHILE_ACTIVE_RULES = new Set([
   "market_price_increase",
   "market_price_decrease",
   "market_liquidity_decrease",
+  "market_volume_above",
+  "market_volume_spike",
+  "market_trade_imbalance",
 ]);
+
+const MARKET_REPEAT_WHILE_ACTIVE_LABEL_KEYS = {
+  market_price_increase: "repeatPriceIncreaseLabel",
+  market_price_decrease: "repeatPriceDecreaseLabel",
+  market_liquidity_decrease: "repeatLiquidityDecreaseLabel",
+  market_volume_above: "repeatVolumeAboveLabel",
+  market_volume_spike: "repeatVolumeSpikeLabel",
+  market_trade_imbalance: "repeatTradeImbalanceLabel",
+};
+
+const MARKET_REPEAT_WHILE_ACTIVE_HELP_KEYS = {
+  market_price_increase: "repeatPriceIncreaseHelp",
+  market_price_decrease: "repeatPriceDecreaseHelp",
+  market_liquidity_decrease: "repeatLiquidityDecreaseHelp",
+  market_volume_above: "repeatVolumeAboveHelp",
+  market_volume_spike: "repeatVolumeSpikeHelp",
+  market_trade_imbalance: "repeatTradeImbalanceHelp",
+};
 
 const MARKET_GOAL_HINT_KEYS = {
   price: "marketGoalPriceHint",
@@ -3262,14 +3283,12 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.repeatWrap.hidden = !repeatSupported;
   if (!repeatSupported) controls.repeat.checked = false;
   controls.repeat.disabled = !repeatSupported || !editable;
-  const liquidityDecrease = definition?.code === "market_liquidity_decrease";
-  const priceDecrease = definition?.code === "market_price_decrease";
-  controls.repeatLabel.textContent = t(liquidityDecrease
-    ? "repeatLiquidityDecreaseLabel"
-    : priceDecrease ? "repeatPriceDecreaseLabel" : "repeatPriceIncreaseLabel");
-  controls.repeatHelp.textContent = t(liquidityDecrease
-    ? "repeatLiquidityDecreaseHelp"
-    : priceDecrease ? "repeatPriceDecreaseHelp" : "repeatPriceIncreaseHelp");
+  controls.repeatLabel.textContent = t(
+    MARKET_REPEAT_WHILE_ACTIVE_LABEL_KEYS[definition?.code] || "repeatWhileActive",
+  );
+  controls.repeatHelp.textContent = t(
+    MARKET_REPEAT_WHILE_ACTIVE_HELP_KEYS[definition?.code] || "repeatWhileActiveHelpLabel",
+  );
   controls.refresh.hidden = !systemRecommended;
   controls.refresh.disabled = !editable || recommendationState.loading ||
     (mode === "wizard" && state.marketWizard.busy);

@@ -318,7 +318,10 @@ func repeatsWhileConditionActive(rule store.MarketRule) bool {
 	return rule.RepeatWhileActive &&
 		(rule.RuleType == plans.MarketPriceIncrease ||
 			rule.RuleType == plans.MarketPriceDecrease ||
-			rule.RuleType == plans.MarketLiquidityDecrease)
+			rule.RuleType == plans.MarketLiquidityDecrease ||
+			rule.RuleType == plans.MarketVolumeAbove ||
+			rule.RuleType == plans.MarketVolumeSpike ||
+			rule.RuleType == plans.MarketTradeImbalance)
 }
 
 func snapshotCondition(

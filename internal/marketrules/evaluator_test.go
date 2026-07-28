@@ -251,6 +251,80 @@ func TestEvaluateLiquidityDecreaseRepeatsAfterCooldownWhenEnabled(t *testing.T) 
 	}
 }
 
+func TestEvaluateVolumeAndImbalanceRulesRepeatAfterCooldownWhenEnabled(t *testing.T) {
+	now := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)
+	window := int32(60)
+	volumeHigh, volumeBaseline := "1000", "100"
+	buys, sells := int64(80), int64(20)
+	tests := []struct {
+		name      string
+		ruleType  string
+		threshold string
+		unit      string
+		snapshots []store.MarketSnapshot
+	}{
+		{
+			name: "volume above", ruleType: plans.MarketVolumeAbove,
+			threshold: "500", unit: "usd",
+			snapshots: []store.MarketSnapshot{
+				{ID: 2, MarketPoolID: 10, Volume1hUSD: &volumeHigh, CapturedAt: now},
+			},
+		},
+		{
+			name: "volume spike", ruleType: plans.MarketVolumeSpike,
+			threshold: "5", unit: "ratio",
+			snapshots: []store.MarketSnapshot{
+				{ID: 2, MarketPoolID: 10, Volume1hUSD: &volumeHigh, CapturedAt: now},
+				{ID: 1, MarketPoolID: 10, Volume1hUSD: &volumeBaseline, CapturedAt: now.Add(-time.Hour)},
+			},
+		},
+		{
+			name: "trade imbalance", ruleType: plans.MarketTradeImbalance,
+			threshold: "70", unit: "percent",
+			snapshots: []store.MarketSnapshot{
+				{ID: 2, MarketPoolID: 10, Buys1h: &buys, Sells1h: &sells, CapturedAt: now},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := EvaluationInput{
+				Rule: store.MarketRule{
+					RuleType:          test.ruleType,
+					ThresholdValue:    test.threshold,
+					ThresholdUnit:     test.unit,
+					WindowMinutes:     &window,
+					CooldownSeconds:   60,
+					RepeatWhileActive: true,
+				},
+				Project:   store.MarketProject{TokenSymbol: "TEST"},
+				Snapshots: test.snapshots,
+				Now:       now,
+			}
+			first, err := Evaluate(input)
+			if err != nil {
+				t.Fatalf("first evaluation: %v", err)
+			}
+			if len(first.Triggers) != 1 {
+				t.Fatalf("first triggers = %d, want 1", len(first.Triggers))
+			}
+
+			input.Rule.State = first.State
+			input.Rule.LastTriggeredAt = &now
+			input.Now = now.Add(61 * time.Second)
+			input.Snapshots[0].ID = 3
+			input.Snapshots[0].CapturedAt = input.Now
+			repeated, err := Evaluate(input)
+			if err != nil {
+				t.Fatalf("post-cooldown evaluation: %v", err)
+			}
+			if len(repeated.Triggers) != 1 {
+				t.Fatalf("post-cooldown triggers = %d, want 1", len(repeated.Triggers))
+			}
+		})
+	}
+}
+
 func TestEvaluateEventCooldownLimitsOneTriggerPerBatch(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	firstValue, secondValue := "1000", "2000"

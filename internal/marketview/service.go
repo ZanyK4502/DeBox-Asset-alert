@@ -1130,7 +1130,10 @@ func (s *Service) CreateRule(
 	repeatWhileActive := input.RepeatWhileActive &&
 		(ruleType == plans.MarketPriceIncrease ||
 			ruleType == plans.MarketPriceDecrease ||
-			ruleType == plans.MarketLiquidityDecrease)
+			ruleType == plans.MarketLiquidityDecrease ||
+			ruleType == plans.MarketVolumeAbove ||
+			ruleType == plans.MarketVolumeSpike ||
+			ruleType == plans.MarketTradeImbalance)
 	return s.deps.Entitlements.CreateMarketRule(ctx, store.CreateMarketRuleParams{
 		DeBoxUserID:     deboxUserID,
 		MarketProjectID: projectID,
