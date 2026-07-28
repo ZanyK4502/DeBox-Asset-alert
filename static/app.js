@@ -3356,6 +3356,7 @@ function resetMarketWizard() {
   $("marketIdentityStatus").textContent = "";
   $("marketPoolSelectionStatus").textContent = "";
   $("marketWizardCreateStatus").textContent = t("marketReadyToCreate");
+  $("marketWizardCreateStatus").hidden = false;
   renderMarketWizard();
 }
 
@@ -3611,7 +3612,8 @@ async function createMarketProject() {
   });
   setMarketWizardBusy(true);
   setMarketCreateLoading(true);
-  $("marketWizardCreateStatus").textContent = t("marketCreatingProject");
+  $("marketWizardCreateStatus").textContent = "";
+  $("marketWizardCreateStatus").hidden = true;
   renderMarketWizardRuleEditor();
   let detail;
   try {
@@ -3625,6 +3627,7 @@ async function createMarketProject() {
       }),
     });
     $("marketWizardCreateStatus").textContent = t("marketCreatingFirstRule");
+    $("marketWizardCreateStatus").hidden = false;
     try {
       await api(`/api/market/projects/${detail.project.id}/rules`, {
         method: "POST",
@@ -3668,6 +3671,7 @@ async function createMarketProject() {
     $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     $("marketWizardCreateStatus").textContent = t("marketCreationFailed");
+    $("marketWizardCreateStatus").hidden = false;
     throw error;
   } finally {
     wizard.busy = false;
