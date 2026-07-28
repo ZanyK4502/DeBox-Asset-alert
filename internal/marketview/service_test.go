@@ -98,8 +98,11 @@ func (f fakeMarket) DiscoverPools(_ context.Context, chainKey, _ string) ([]mark
 func (fakeMarket) PairsByTokens(context.Context, string, []string) ([]marketdata.Pair, error) {
 	return nil, errors.New("not used")
 }
-func (fakeMarket) PairsByAddresses(context.Context, string, []string) ([]marketdata.Pair, error) {
-	return nil, errors.New("not used")
+func (f fakeMarket) PairsByAddresses(_ context.Context, chainKey string, _ []string) ([]marketdata.Pair, error) {
+	if f.pairsByChain != nil {
+		return f.pairsByChain[chainKey], f.err
+	}
+	return f.pairs, f.err
 }
 
 func TestQueryTokenSortsSupportedPancakePoolsFirst(t *testing.T) {
@@ -147,6 +150,48 @@ func TestQueryTokenRejectsChainOutsideSupportedSix(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("QueryToken() accepted unsupported chain")
+	}
+}
+
+func TestPreviewRecommendationsUsesLatestSelectedPoolQuote(t *testing.T) {
+	livePair := pair(testPairA, "pancakeswap", []string{"v3"}, "100000")
+	livePair.PriceUSD = marketdata.Decimal("2")
+	livePair.Volume = map[string]marketdata.Decimal{
+		"h1": marketdata.Decimal("12000"),
+	}
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{plan: plans.Plan{MarketQuery: true}},
+		Market:       fakeMarket{pairs: []marketdata.Pair{livePair}},
+	})
+	recommendations, err := service.PreviewRecommendations(
+		context.Background(),
+		"user",
+		RecommendationPreviewInput{Deployments: []RecommendationPreviewDeployment{{
+			ChainKey:      "bsc",
+			TokenAddress:  testToken,
+			PoolAddresses: []string{testPairA},
+		}}},
+	)
+	if err != nil {
+		t.Fatalf("PreviewRecommendations() error = %v", err)
+	}
+	if len(recommendations) != 63 {
+		t.Fatalf("recommendations = %d, want 63", len(recommendations))
+	}
+	var sensitive, stable string
+	for _, recommendation := range recommendations {
+		if recommendation.RuleType != plans.MarketPriceAbove {
+			continue
+		}
+		switch recommendation.Sensitivity {
+		case "sensitive":
+			sensitive = recommendation.Threshold
+		case "stable":
+			stable = recommendation.Threshold
+		}
+	}
+	if sensitive != "2.04" || stable != "2.2" {
+		t.Fatalf("price recommendations = %q/%q, want 2.04/2.2", sensitive, stable)
 	}
 }
 

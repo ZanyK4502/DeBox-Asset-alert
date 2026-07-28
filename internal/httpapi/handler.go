@@ -114,6 +114,11 @@ type MarketManagementService interface {
 	ArchiveCombination(context.Context, string, int64) error
 	RestoreCombination(context.Context, string, int64) (store.MarketCombinationRule, error)
 	Recommendations(context.Context, string, int64) ([]marketrules.Recommendation, error)
+	PreviewRecommendations(
+		context.Context,
+		string,
+		marketview.RecommendationPreviewInput,
+	) ([]marketrules.Recommendation, error)
 	Events(
 		context.Context,
 		string,
@@ -209,6 +214,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/market/assets/logo", h.getMarketAssetLogo)
 	mux.HandleFunc("POST /api/market/query", h.postMarketQuery)
 	mux.HandleFunc("POST /api/market/pools/discover", h.postMarketPoolsDiscover)
+	mux.HandleFunc("POST /api/market/recommendations/preview", h.postMarketRecommendationPreview)
 	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)
 	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)
 	mux.HandleFunc("GET /api/market/projects/{project_id}", h.getMarketProject)

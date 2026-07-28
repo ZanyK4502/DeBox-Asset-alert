@@ -19,6 +19,7 @@ func TestMarketManagementRoutesRequireAuthenticatedSession(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/market/catalog", ""},
 		{http.MethodPost, "/api/market/query", `{}`},
+		{http.MethodPost, "/api/market/recommendations/preview", `{}`},
 		{http.MethodGet, "/api/market/projects", ""},
 		{http.MethodPost, "/api/market/projects", `{}`},
 		{http.MethodGet, "/api/market/projects/1", ""},

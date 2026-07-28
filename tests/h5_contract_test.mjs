@@ -40,6 +40,7 @@ const requiredAPIs = [
   "/api/market/assets/manual-resolve",
   "/api/market/assets/verify-cross-chain",
   "/api/market/pools/discover",
+  "/api/market/recommendations/preview",
   "/api/market/projects",
   "/api/market/rules/",
   "/api/market/combinations",
@@ -83,6 +84,18 @@ assert.ok(
   app.includes('currentPlan()?.market_pool_mode === "multiple"') &&
     app.includes('t("marketMultiPoolProfessionalOnly")'),
   "market wizard must disable multi-pool scope outside Professional",
+);
+for (const refreshID of [
+  "marketWizardRecommendationRefreshBtn",
+  "marketRecommendationRefreshBtn",
+]) {
+  assert.ok(htmlIDs.has(refreshID), `market recommendation refresh control is missing: ${refreshID}`);
+}
+assert.ok(
+  app.includes("MARKET_EVENT_ONLY_RULES") &&
+    app.includes("controls.threshold.disabled = lockRecommended") &&
+    app.includes('controls.sensitivity.value === "custom"'),
+  "market recommendation presets must lock generated values and preserve custom editing",
 );
 for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
   assert.ok(

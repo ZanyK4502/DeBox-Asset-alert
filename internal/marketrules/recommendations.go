@@ -3,6 +3,7 @@ package marketrules
 import (
 	"math/big"
 	"sort"
+	"strings"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -22,33 +23,118 @@ func RecommendThresholds(
 	recentEvents []store.MarketEvent,
 ) []Recommendation {
 	largeTrade := recommendedLargeTrade(snapshot, recentEvents)
-	result := make([]Recommendation, 0, 21)
+	volumeAbove := recommendedVolumeAbove(snapshot)
+	liquidityChange := recommendedLiquidityChange(snapshot)
+	price, hasPrice := pointerRat(snapshot.PriceUSD)
+	liquidity, hasLiquidity := pointerRat(snapshot.LiquidityUSD)
+	result := make([]Recommendation, 0, 60)
 	for _, preset := range []struct {
-		name       string
-		multiplier *big.Rat
-		price      string
-		liquidity  string
-		volume     string
-		imbalance  string
-		cooldown   int32
+		name                   string
+		multiplier             *big.Rat
+		priceAboveMultiplier   *big.Rat
+		priceBelowMultiplier   *big.Rat
+		liquidityBelowMultiple *big.Rat
+		priceChange            string
+		liquidityChangePercent string
+		volumeSpike            string
+		imbalance              string
+		holderChange           string
+		holderRank             string
+		fourMemeProgress       string
+		priceAboveFallback     string
+		priceBelowFallback     string
+		liquidityFallback      string
+		cooldown               int32
 	}{
-		{"sensitive", big.NewRat(1, 2), "2", "5", "1.5", "65", 120},
-		{"balanced", big.NewRat(1, 1), "5", "10", "2", "75", 300},
-		{"stable", big.NewRat(2, 1), "10", "20", "3", "85", 900},
+		{
+			"sensitive", big.NewRat(1, 2),
+			big.NewRat(102, 100), big.NewRat(98, 100), big.NewRat(90, 100),
+			"2", "5", "1.5", "65", "2", "50", "60",
+			"0.5", "0.2", "20000", 120,
+		},
+		{
+			"balanced", big.NewRat(1, 1),
+			big.NewRat(105, 100), big.NewRat(95, 100), big.NewRat(75, 100),
+			"5", "10", "2", "75", "5", "20", "80",
+			"1", "0.1", "10000", 300,
+		},
+		{
+			"stable", big.NewRat(2, 1),
+			big.NewRat(110, 100), big.NewRat(90, 100), big.NewRat(50, 100),
+			"10", "20", "3", "85", "10", "10", "95",
+			"2", "0.05", "5000", 900,
+		},
 	} {
 		trade := new(big.Rat).Mul(largeTrade, preset.multiplier)
 		trade = clampRat(trade, big.NewRat(50, 1), dynamicTradeMaximum(snapshot))
+		volume := new(big.Rat).Mul(volumeAbove, preset.multiplier)
+		volume = clampRat(volume, big.NewRat(50, 1), big.NewRat(10_000_000, 1))
+		liquidityEvent := new(big.Rat).Mul(liquidityChange, preset.multiplier)
+		liquidityEvent = clampRat(
+			liquidityEvent, big.NewRat(100, 1), big.NewRat(10_000_000, 1),
+		)
+		priceAbove := preset.priceAboveFallback
+		priceBelow := preset.priceBelowFallback
+		if hasPrice && price.Sign() > 0 {
+			priceAbove = recommendationDecimalString(
+				new(big.Rat).Mul(price, preset.priceAboveMultiplier),
+			)
+			priceBelow = recommendationDecimalString(
+				new(big.Rat).Mul(price, preset.priceBelowMultiplier),
+			)
+		}
+		liquidityBelow := preset.liquidityFallback
+		if hasLiquidity && liquidity.Sign() > 0 {
+			liquidityBelow = moneyString(
+				new(big.Rat).Mul(liquidity, preset.liquidityBelowMultiple),
+			)
+		}
 		result = append(result,
+			Recommendation{plans.MarketPriceAbove, preset.name, priceAbove, "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketPriceBelow, preset.name, priceBelow, "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketPriceIncrease, preset.name, preset.priceChange, "percent", 60, preset.cooldown},
+			Recommendation{plans.MarketPriceDecrease, preset.name, preset.priceChange, "percent", 60, preset.cooldown},
+			Recommendation{plans.MarketLiquidityBelow, preset.name, liquidityBelow, "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketLiquidityDecrease, preset.name, preset.liquidityChangePercent, "percent", 60, preset.cooldown},
+			Recommendation{plans.MarketVolumeAbove, preset.name, moneyString(volume), "usd", 60, preset.cooldown},
+			Recommendation{plans.MarketVolumeSpike, preset.name, preset.volumeSpike, "ratio", 60, preset.cooldown},
+			Recommendation{plans.MarketTradeImbalance, preset.name, preset.imbalance, "percent", 60, preset.cooldown},
 			Recommendation{plans.MarketLargeBuy, preset.name, moneyString(trade), "usd", 15, preset.cooldown},
 			Recommendation{plans.MarketLargeSell, preset.name, moneyString(trade), "usd", 15, preset.cooldown},
-			Recommendation{plans.MarketPriceIncrease, preset.name, preset.price, "percent", 60, preset.cooldown},
-			Recommendation{plans.MarketPriceDecrease, preset.name, preset.price, "percent", 60, preset.cooldown},
-			Recommendation{plans.MarketLiquidityDecrease, preset.name, preset.liquidity, "percent", 60, preset.cooldown},
-			Recommendation{plans.MarketVolumeSpike, preset.name, preset.volume, "ratio", 60, preset.cooldown},
-			Recommendation{plans.MarketTradeImbalance, preset.name, preset.imbalance, "percent", 60, preset.cooldown},
+			Recommendation{plans.MarketConsecutiveLargeBuy, preset.name, moneyString(trade), "usd", 15, preset.cooldown},
+			Recommendation{plans.MarketConsecutiveLargeSell, preset.name, moneyString(trade), "usd", 15, preset.cooldown},
+			Recommendation{plans.MarketLiquidityAdded, preset.name, moneyString(liquidityEvent), "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketLiquidityRemoved, preset.name, moneyString(liquidityEvent), "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketHolderIncrease, preset.name, preset.holderChange, "percent", 0, preset.cooldown},
+			Recommendation{plans.MarketHolderDecrease, preset.name, preset.holderChange, "percent", 0, preset.cooldown},
+			Recommendation{plans.MarketHolderRankEntered, preset.name, preset.holderRank, "count", 0, preset.cooldown},
+			Recommendation{plans.MarketHolderRankExited, preset.name, preset.holderRank, "count", 0, preset.cooldown},
+			Recommendation{plans.MarketFourMemeLargeTrade, preset.name, moneyString(trade), "usd", 0, preset.cooldown},
+			Recommendation{plans.MarketFourMemeProgress, preset.name, preset.fourMemeProgress, "percent", 0, preset.cooldown},
 		)
 	}
 	return result
+}
+
+func recommendedVolumeAbove(snapshot store.MarketSnapshot) *big.Rat {
+	if value, ok := pointerRat(snapshot.Volume1hUSD); ok && value.Sign() > 0 {
+		return value
+	}
+	if value, ok := pointerRat(snapshot.Volume24hUSD); ok && value.Sign() > 0 {
+		return new(big.Rat).Quo(value, big.NewRat(24, 1))
+	}
+	return big.NewRat(10_000, 1)
+}
+
+func recommendedLiquidityChange(snapshot store.MarketSnapshot) *big.Rat {
+	if liquidity, ok := pointerRat(snapshot.LiquidityUSD); ok && liquidity.Sign() > 0 {
+		return clampRat(
+			new(big.Rat).Mul(liquidity, big.NewRat(5, 1000)),
+			big.NewRat(500, 1),
+			big.NewRat(10_000_000, 1),
+		)
+	}
+	return big.NewRat(5_000, 1)
 }
 
 func recommendedLargeTrade(
@@ -110,4 +196,12 @@ func moneyString(value *big.Rat) string {
 	rounded := new(big.Rat).Add(value, big.NewRat(1, 2))
 	integer := new(big.Int).Quo(rounded.Num(), rounded.Denom())
 	return integer.String()
+}
+
+func recommendationDecimalString(value *big.Rat) string {
+	result := strings.TrimRight(strings.TrimRight(value.FloatString(18), "0"), ".")
+	if result == "" {
+		return "0"
+	}
+	return result
 }

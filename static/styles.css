@@ -2577,6 +2577,35 @@ label.market-pool-card {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.market-sensitivity-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.market-recommendation-refresh.is-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.market-recommendation-refresh.is-loading::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid rgba(3, 16, 10, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: market-button-spin 700ms linear infinite;
+}
+
+.market-rule-form input:disabled,
+.market-rule-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 .input-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(110px, 0.45fr);

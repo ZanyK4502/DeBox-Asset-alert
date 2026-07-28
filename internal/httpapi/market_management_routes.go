@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -186,7 +187,33 @@ func (h handler) getMarketRecommendations(w http.ResponseWriter, r *http.Request
 		writeMarketError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"recommendations": recommendations})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recommendations": recommendations,
+		"generated_at":    time.Now().UTC(),
+	})
+}
+
+func (h handler) postMarketRecommendationPreview(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireMarketSession(w, r)
+	if !ok {
+		return
+	}
+	var input marketview.RecommendationPreviewInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	recommendations, err := h.deps.Market.PreviewRecommendations(
+		r.Context(), session.DeBoxUserID, input,
+	)
+	if err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recommendations": recommendations,
+		"generated_at":    time.Now().UTC(),
+	})
 }
 
 func (h handler) getMarketEvents(w http.ResponseWriter, r *http.Request) {

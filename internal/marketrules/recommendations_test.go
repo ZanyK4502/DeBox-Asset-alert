@@ -14,8 +14,8 @@ func TestRecommendThresholdsUsesMarketDepthAndPresetOrder(t *testing.T) {
 		store.MarketSnapshot{LiquidityUSD: &liquidity, Volume24hUSD: &volume},
 		[]store.MarketEvent{{USDValue: &trade100}, {USDValue: &trade1000}},
 	)
-	if len(values) != 21 {
-		t.Fatalf("recommendations = %d, want 21", len(values))
+	if len(values) != 63 {
+		t.Fatalf("recommendations = %d, want 63", len(values))
 	}
 	var largeBuy []Recommendation
 	for _, value := range values {
@@ -25,6 +25,19 @@ func TestRecommendThresholdsUsesMarketDepthAndPresetOrder(t *testing.T) {
 	}
 	if len(largeBuy) != 3 {
 		t.Fatalf("large buy presets = %d, want 3", len(largeBuy))
+	}
+	counts := make(map[string]int)
+	for _, value := range values {
+		counts[value.RuleType]++
+	}
+	for ruleType, count := range counts {
+		if count != 3 {
+			t.Fatalf("%s presets = %d, want 3", ruleType, count)
+		}
+	}
+	if counts[plans.MarketNewPool] != 0 ||
+		counts[plans.MarketFourMemeMigration] != 0 {
+		t.Fatalf("event-only rules unexpectedly have recommendations: %#v", counts)
 	}
 	if largeBuy[0].Sensitivity != "sensitive" ||
 		largeBuy[1].Sensitivity != "balanced" ||

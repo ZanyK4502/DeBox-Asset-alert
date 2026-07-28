@@ -166,6 +166,16 @@ type MultiTokenQueryResult struct {
 	Groups []ChainPoolGroup `json:"groups"`
 }
 
+type RecommendationPreviewInput struct {
+	Deployments []RecommendationPreviewDeployment `json:"deployments"`
+}
+
+type RecommendationPreviewDeployment struct {
+	ChainKey      string   `json:"chain_key"`
+	TokenAddress  string   `json:"token_address"`
+	PoolAddresses []string `json:"pool_addresses"`
+}
+
 type CreateProjectInput struct {
 	ChainKey         string                         `json:"chain_key"`
 	TokenAddress     string                         `json:"token_address"`
@@ -346,6 +356,159 @@ func (s *Service) QueryTokens(
 			supportedChainOrder(groups[j].ChainKey)
 	})
 	return MultiTokenQueryResult{Groups: groups}, nil
+}
+
+func (s *Service) PreviewRecommendations(
+	ctx context.Context,
+	deboxUserID string,
+	input RecommendationPreviewInput,
+) ([]marketrules.Recommendation, error) {
+	if err := s.requireMarketQuery(ctx, deboxUserID); err != nil {
+		return nil, err
+	}
+	if len(input.Deployments) == 0 ||
+		len(input.Deployments) > len(chain.SupportedChains()) {
+		return nil, errors.New("请选择 1 到 6 条链上的监控池。")
+	}
+
+	var selectedPair *marketdata.Pair
+	var selectedToken string
+	var selectedProfile chain.Profile
+	selectedLiquidity := new(big.Rat).SetInt64(-1)
+	seenChains := make(map[string]struct{}, len(input.Deployments))
+	for _, deployment := range input.Deployments {
+		profile, err := chain.ChainProfile(deployment.ChainKey, "")
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seenChains[profile.Key]; exists {
+			return nil, errors.New("每条链只能提交一次推荐值查询。")
+		}
+		seenChains[profile.Key] = struct{}{}
+		tokenAddress, err := chain.ValidateAddress(deployment.TokenAddress)
+		if err != nil {
+			return nil, errors.New("代币合约地址无效。")
+		}
+		if len(deployment.PoolAddresses) == 0 || len(deployment.PoolAddresses) > 20 {
+			return nil, errors.New("每条链请选择 1 到 20 个交易池。")
+		}
+		poolAddresses := make([]string, 0, len(deployment.PoolAddresses))
+		for _, address := range deployment.PoolAddresses {
+			normalized, normalizeErr := chain.ValidateAddress(address)
+			if normalizeErr != nil {
+				return nil, errors.New("交易池地址无效。")
+			}
+			poolAddresses = append(poolAddresses, normalized)
+		}
+		pairs, err := s.deps.Market.PairsByAddresses(
+			ctx, profile.Key, poolAddresses,
+		)
+		if err != nil {
+			if marketdata.IsTemporaryError(err) {
+				return nil, ErrMarketDataUnavailable
+			}
+			return nil, fmt.Errorf("刷新推荐行情失败：%w", err)
+		}
+		for index := range pairs {
+			pair := &pairs[index]
+			if !strings.EqualFold(pair.BaseToken.Address, tokenAddress) &&
+				!strings.EqualFold(pair.QuoteToken.Address, tokenAddress) {
+				continue
+			}
+			liquidity := new(big.Rat)
+			if _, ok := liquidity.SetString(pair.Liquidity.USD.String()); !ok {
+				liquidity.SetInt64(0)
+			}
+			if selectedPair == nil || liquidity.Cmp(selectedLiquidity) > 0 {
+				selectedPair = pair
+				selectedToken = tokenAddress
+				selectedProfile = profile
+				selectedLiquidity.Set(liquidity)
+			}
+		}
+	}
+	if selectedPair == nil {
+		return nil, errors.New("暂时无法读取所选交易池的最新行情。")
+	}
+	snapshot := recommendationSnapshotFromPair(
+		*selectedPair, selectedToken, selectedProfile,
+	)
+	return marketrules.RecommendThresholds(snapshot, nil), nil
+}
+
+func recommendationSnapshotFromPair(
+	pair marketdata.Pair,
+	tokenAddress string,
+	profile chain.Profile,
+) store.MarketSnapshot {
+	price := recommendationPairPrice(pair, tokenAddress)
+	buys5m, sells5m := recommendationTransactionPointers(pair.Transactions["m5"])
+	buys1h, sells1h := recommendationTransactionPointers(pair.Transactions["h1"])
+	buys24h, sells24h := recommendationTransactionPointers(pair.Transactions["h24"])
+	return store.MarketSnapshot{
+		ChainKey:     profile.Key,
+		ChainID:      profile.ChainID,
+		TokenAddress: tokenAddress,
+		PriceUSD:     price,
+		LiquidityUSD: recommendationDecimalPointer(pair.Liquidity.USD),
+		FDVUSD:       recommendationDecimalPointer(pair.FDV),
+		MarketCapUSD: recommendationDecimalPointer(pair.MarketCap),
+		Volume5mUSD:  recommendationDecimalPointer(pair.Volume["m5"]),
+		Volume15mUSD: recommendationDecimalPointer(pair.Volume["m15"]),
+		Volume1hUSD:  recommendationDecimalPointer(pair.Volume["h1"]),
+		Volume6hUSD:  recommendationDecimalPointer(pair.Volume["h6"]),
+		Volume24hUSD: recommendationDecimalPointer(pair.Volume["h24"]),
+		Buys5m:       buys5m,
+		Sells5m:      sells5m,
+		Buys1h:       buys1h,
+		Sells1h:      sells1h,
+		Buys24h:      buys24h,
+		Sells24h:     sells24h,
+		Source:       marketdata.SourceDexScreener,
+		CapturedAt:   time.Now().UTC(),
+	}
+}
+
+func recommendationPairPrice(
+	pair marketdata.Pair,
+	tokenAddress string,
+) *string {
+	if strings.EqualFold(pair.BaseToken.Address, tokenAddress) {
+		return recommendationDecimalPointer(pair.PriceUSD)
+	}
+	if !strings.EqualFold(pair.QuoteToken.Address, tokenAddress) ||
+		!pair.PriceUSD.Valid() || !pair.PriceNative.Valid() {
+		return nil
+	}
+	baseUSD, ok := new(big.Rat).SetString(pair.PriceUSD.String())
+	if !ok {
+		return nil
+	}
+	basePerQuote, ok := new(big.Rat).SetString(pair.PriceNative.String())
+	if !ok || basePerQuote.Sign() == 0 {
+		return nil
+	}
+	value := new(big.Rat).Quo(baseUSD, basePerQuote)
+	result := strings.TrimRight(strings.TrimRight(value.FloatString(18), "0"), ".")
+	if result == "" {
+		result = "0"
+	}
+	return &result
+}
+
+func recommendationDecimalPointer(value marketdata.Decimal) *string {
+	if !value.Valid() {
+		return nil
+	}
+	result := value.String()
+	return &result
+}
+
+func recommendationTransactionPointers(
+	value marketdata.TransactionCounts,
+) (*int64, *int64) {
+	buys, sells := value.Buys, value.Sells
+	return &buys, &sells
 }
 
 func (s *Service) queryToken(

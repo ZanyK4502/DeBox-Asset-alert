@@ -46,6 +46,9 @@ const state = {
   marketRuleMode: "single",
   marketHolderChain: "",
   marketRecommendations: [],
+  marketRecommendationUpdatedAt: "",
+  marketRecommendationLoading: false,
+  marketRecommendationError: "",
   marketEvents: [],
   marketEventsNextBeforeId: null,
   marketEventFilters: freshMarketEventFilters(),
@@ -63,6 +66,10 @@ function freshMarketWizard() {
     verification: null,
     poolResult: null,
     poolSelections: {},
+    recommendations: [],
+    recommendationUpdatedAt: "",
+    recommendationLoading: false,
+    recommendationError: "",
     searchRequest: 0,
     busy: false,
   };
@@ -541,6 +548,9 @@ function resetConnectionState() {
   state.marketRuleMode = "single";
   state.marketHolderChain = "";
   state.marketRecommendations = [];
+  state.marketRecommendationUpdatedAt = "";
+  state.marketRecommendationLoading = false;
+  state.marketRecommendationError = "";
   state.marketEvents = [];
   state.marketEventsNextBeforeId = null;
   state.marketEventFilters = freshMarketEventFilters();
@@ -2161,6 +2171,11 @@ const MARKET_GOAL_RULES = {
   four_meme: ["market_four_meme_large_trade", "market_four_meme_progress", "market_four_meme_migration"],
 };
 
+const MARKET_EVENT_ONLY_RULES = new Set([
+  "market_new_pool",
+  "market_four_meme_migration",
+]);
+
 const MARKET_GOAL_HINT_KEYS = {
   price: "marketGoalPriceHint",
   liquidity: "marketGoalLiquidityHint",
@@ -2648,12 +2663,7 @@ function renderMarketWizardRuleEditor() {
   $("marketWizardThresholdUnitSelect").value = units.includes(oldUnit)
     ? oldUnit
     : (definition?.default_unit || units[0]);
-  if ($("marketWizardSensitivitySelect").value !== "custom" && definition) {
-    $("marketWizardThresholdInput").value = definition.default_threshold;
-    $("marketWizardCooldownInput").value = 300;
-    $("marketWizardWindowInput").value = definition.default_window_minutes || 60;
-  }
-  $("marketWizardWindowWrap").hidden = !Number(definition?.default_window_minutes);
+  applyMarketRecommendationEditor("wizard", definition, true);
   const groupAllowed = currentPlan()?.code === "professional" && state.groups.length > 0;
   const groupOption = [...$("marketWizardTargetTypeSelect").options]
     .find((option) => option.value === "group");
@@ -3017,13 +3027,6 @@ function renderMarketRuleEditor() {
     <option value="${escapeHtml(unit)}">${escapeHtml(t(MARKET_UNIT_KEYS[unit] || unit))}</option>
   `).join("");
   $("marketThresholdUnitSelect").value = units.includes(oldUnit) ? oldUnit : (definition?.default_unit || units[0]);
-  if ($("marketSensitivitySelect").value !== "custom" && definition) {
-    const recommendation = selectedMarketRecommendation(definition.code, $("marketSensitivitySelect").value);
-    $("marketThresholdInput").value = recommendation?.threshold || definition.default_threshold;
-    $("marketCooldownInput").value = recommendation?.cooldown_seconds || 300;
-    $("marketWindowInput").value = recommendation?.window_minutes || definition.default_window_minutes || 60;
-  }
-  $("marketWindowWrap").hidden = !Number(definition?.default_window_minutes);
   const pools = (state.marketDetail?.pools || []).filter((pool) => Number(pool.selected) === 1);
   $("marketRulePoolSelect").innerHTML = `
     <option value="">${escapeHtml(t("marketAllSelectedPools"))}</option>
@@ -3040,6 +3043,7 @@ function renderMarketRuleEditor() {
   if (!groupAllowed && $("marketTargetTypeSelect").value === "group") {
     $("marketTargetTypeSelect").value = "private";
   }
+  applyMarketRecommendationEditor("detail", definition, editable && Boolean(definition?.allowed));
   updateMarketDeliveryFields();
   renderMarketGroupOptions();
   renderMarketRuleMode();
@@ -3095,10 +3099,214 @@ function renderMarketCombinationEditor() {
   });
 }
 
-function selectedMarketRecommendation(ruleType, sensitivity) {
-  return state.marketRecommendations.find(
+function selectedMarketRecommendation(ruleType, sensitivity, recommendations = state.marketRecommendations) {
+  return recommendations.find(
     (item) => item.rule_type === ruleType && item.sensitivity === sensitivity,
   ) || null;
+}
+
+function marketRecommendationControls(mode) {
+  const wizard = mode === "wizard";
+  return {
+    sensitivityWrap: $(wizard ? "marketWizardSensitivityWrap" : "marketSensitivityWrap"),
+    sensitivity: $(wizard ? "marketWizardSensitivitySelect" : "marketSensitivitySelect"),
+    refresh: $(wizard ? "marketWizardRecommendationRefreshBtn" : "marketRecommendationRefreshBtn"),
+    status: $(wizard ? "marketWizardRecommendationStatus" : "marketRecommendationStatus"),
+    thresholdWrap: $(wizard ? "marketWizardThresholdWrap" : "marketThresholdWrap"),
+    threshold: $(wizard ? "marketWizardThresholdInput" : "marketThresholdInput"),
+    unit: $(wizard ? "marketWizardThresholdUnitSelect" : "marketThresholdUnitSelect"),
+    windowWrap: $(wizard ? "marketWizardWindowWrap" : "marketWindowWrap"),
+    window: $(wizard ? "marketWizardWindowInput" : "marketWindowInput"),
+    cooldownWrap: $(wizard ? "marketWizardCooldownWrap" : "marketCooldownWrap"),
+    cooldown: $(wizard ? "marketWizardCooldownInput" : "marketCooldownInput"),
+  };
+}
+
+function marketRecommendationState(mode) {
+  if (mode === "wizard") {
+    return {
+      recommendations: state.marketWizard.recommendations,
+      updatedAt: state.marketWizard.recommendationUpdatedAt,
+      loading: state.marketWizard.recommendationLoading,
+      error: state.marketWizard.recommendationError,
+    };
+  }
+  return {
+    recommendations: state.marketRecommendations,
+    updatedAt: state.marketRecommendationUpdatedAt,
+    loading: state.marketRecommendationLoading,
+    error: state.marketRecommendationError,
+  };
+}
+
+function formatRecommendationTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(state.uiLanguage === "en" ? "en-GB" : "zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+}
+
+function applyMarketRecommendationEditor(mode, definition, editable) {
+  const controls = marketRecommendationControls(mode);
+  const recommendationState = marketRecommendationState(mode);
+  const eventOnly = MARKET_EVENT_ONLY_RULES.has(definition?.code);
+  const custom = controls.sensitivity.value === "custom";
+  const systemRecommended = !eventOnly && !custom;
+
+  controls.sensitivityWrap.hidden = eventOnly;
+  controls.thresholdWrap.hidden = eventOnly;
+  controls.cooldownWrap.hidden = eventOnly;
+  controls.windowWrap.hidden = eventOnly || !Number(definition?.default_window_minutes);
+  controls.refresh.hidden = !systemRecommended;
+  controls.refresh.disabled = !editable || recommendationState.loading ||
+    (mode === "wizard" && state.marketWizard.busy);
+  controls.refresh.classList.toggle("is-loading", recommendationState.loading);
+  controls.refresh.setAttribute("aria-busy", String(recommendationState.loading));
+  controls.refresh.dataset.i18n = recommendationState.loading
+    ? "refreshingRecommendation"
+    : "refreshRecommendation";
+  controls.refresh.textContent = t(controls.refresh.dataset.i18n);
+
+  if (eventOnly && definition) {
+    controls.threshold.value = definition.default_threshold;
+    controls.unit.value = definition.default_unit || definition.units?.[0] || "count";
+    controls.window.value = definition.default_window_minutes || 60;
+    controls.cooldown.value = 300;
+  } else if (systemRecommended && definition) {
+    const recommendation = selectedMarketRecommendation(
+      definition.code,
+      controls.sensitivity.value,
+      recommendationState.recommendations,
+    );
+    controls.threshold.value = recommendation?.threshold || definition.default_threshold;
+    if (recommendation?.threshold_unit &&
+      [...controls.unit.options].some((option) => option.value === recommendation.threshold_unit)) {
+      controls.unit.value = recommendation.threshold_unit;
+    }
+    controls.window.value = recommendation?.window_minutes ||
+      definition.default_window_minutes || 60;
+    controls.cooldown.value = recommendation?.cooldown_seconds || 300;
+  }
+
+  const lockRecommended = systemRecommended || !editable;
+  controls.threshold.disabled = lockRecommended;
+  controls.unit.disabled = lockRecommended;
+  controls.window.disabled = lockRecommended;
+  controls.cooldown.disabled = lockRecommended;
+
+  if (recommendationState.error) {
+    controls.status.textContent = t("recommendationRefreshFailed");
+  } else {
+    const updatedTime = formatRecommendationTime(recommendationState.updatedAt);
+    controls.status.textContent = systemRecommended && updatedTime
+      ? t("recommendationUpdatedAt", { time: updatedTime })
+      : "";
+  }
+}
+
+function marketWizardRecommendationInput() {
+  return selectedWizardDeployments().map((deployment) => {
+    const selection = marketPoolSelection(deployment.chain_key);
+    return {
+      chain_key: deployment.chain_key,
+      token_address: deployment.contract_address,
+      pool_addresses: selection.primary ? [selection.primary] : [],
+    };
+  }).filter((deployment) => deployment.pool_addresses.length > 0);
+}
+
+function marketDetailRecommendationInput() {
+  const detail = state.marketDetail;
+  if (!detail) return [];
+  const primaryByChain = new Map(
+    (detail.pools || [])
+      .filter((pool) => Number(pool.selected) === 1 && Number(pool.is_primary) === 1 && pool.pool_address)
+      .map((pool) => [pool.chain_key, pool.pool_address]),
+  );
+  const deployments = (detail.deployments || []).map((deployment) => ({
+    chain_key: deployment.chain_key,
+    token_address: deployment.token_address,
+    pool_addresses: primaryByChain.has(deployment.chain_key)
+      ? [primaryByChain.get(deployment.chain_key)]
+      : [],
+  })).filter((deployment) => deployment.pool_addresses.length > 0);
+  if (deployments.length > 0) return deployments;
+  const project = detail.project;
+  const primary = (detail.pools || []).find(
+    (pool) => Number(pool.is_primary) === 1 && pool.pool_address,
+  );
+  return project?.chain_key && project?.token_address && primary
+    ? [{
+        chain_key: project.chain_key,
+        token_address: project.token_address,
+        pool_addresses: [primary.pool_address],
+      }]
+    : [];
+}
+
+async function refreshMarketRecommendations(mode) {
+  const wizard = mode === "wizard";
+  const deployments = wizard
+    ? marketWizardRecommendationInput()
+    : marketDetailRecommendationInput();
+  if (!deployments.length) {
+    toast(t("marketNotLoaded"));
+    return;
+  }
+  if (wizard) {
+    state.marketWizard.recommendationLoading = true;
+    state.marketWizard.recommendationError = "";
+    renderMarketWizardRuleEditor();
+  } else {
+    state.marketRecommendationLoading = true;
+    state.marketRecommendationError = "";
+    renderMarketRuleEditor();
+  }
+  try {
+    const result = await api("/api/market/recommendations/preview", {
+      method: "POST",
+      body: JSON.stringify({ deployments }),
+    });
+    if (!Array.isArray(result.recommendations) || !result.recommendations.length) {
+      throw new Error(t("recommendationRefreshFailed"));
+    }
+    if (wizard) {
+      state.marketWizard.recommendations = result.recommendations;
+      state.marketWizard.recommendationUpdatedAt = result.generated_at || new Date().toISOString();
+      state.marketWizard.recommendationError = "";
+    } else {
+      state.marketRecommendations = result.recommendations;
+      state.marketRecommendationUpdatedAt = result.generated_at || new Date().toISOString();
+      state.marketRecommendationError = "";
+    }
+  } catch (_) {
+    if (wizard) {
+      state.marketWizard.recommendationError = "refresh_failed";
+      if (!state.marketWizard.recommendations.length) {
+        $("marketWizardSensitivitySelect").value = "custom";
+      }
+    } else {
+      state.marketRecommendationError = "refresh_failed";
+      if (!state.marketRecommendations.length) {
+        $("marketSensitivitySelect").value = "custom";
+      }
+    }
+    toast(t("recommendationRefreshFailed"));
+  } finally {
+    if (wizard) {
+      state.marketWizard.recommendationLoading = false;
+      renderMarketWizardRuleEditor();
+      renderMarketWizardSummary();
+    } else {
+      state.marketRecommendationLoading = false;
+      renderMarketRuleEditor();
+    }
+  }
 }
 
 function renderMarketGroupOptions() {
@@ -3313,6 +3521,7 @@ function setMarketWizardBusy(busy) {
     "resolveMarketManualBtn",
     "marketVerifyAndDiscoverBtn",
     "marketPoolsContinueBtn",
+    "marketWizardRecommendationRefreshBtn",
     "createMarketProjectBtn",
   ].forEach((id) => {
     const control = $(id);
@@ -3571,9 +3780,13 @@ function continueMarketWizardToRules() {
     toast(t("marketSelectPoolEachChain"));
     return;
   }
+  state.marketWizard.recommendations = [];
+  state.marketWizard.recommendationUpdatedAt = "";
+  state.marketWizard.recommendationError = "";
   state.marketWizard.step = 4;
   renderMarketWizard();
   $("marketWizard").scrollIntoView({ behavior: "smooth", block: "start" });
+  guardAsync(() => refreshMarketRecommendations("wizard"))();
 }
 
 function setMarketWizardStep(step) {
@@ -3699,6 +3912,8 @@ async function loadMarketProjectExtras(projectId) {
     loadMarketEvents(projectId),
   ]);
   state.marketRecommendations = recommendations.recommendations || [];
+  state.marketRecommendationUpdatedAt = recommendations.generated_at || "";
+  state.marketRecommendationError = "";
   renderMarketDetail();
 }
 
@@ -4041,6 +4256,10 @@ function bindEvents() {
     renderMarketWizardSummary();
   });
   $("marketWizardSensitivitySelect").addEventListener("change", renderMarketWizardRuleEditor);
+  $("marketWizardRecommendationRefreshBtn").addEventListener(
+    "click",
+    guardAsync(() => refreshMarketRecommendations("wizard")),
+  );
   $("marketWizardThresholdInput").addEventListener("input", () => {
     $("marketWizardSensitivitySelect").value = "custom";
   });
@@ -4053,6 +4272,9 @@ function bindEvents() {
   $("closeMarketDetailBtn").addEventListener("click", () => {
     state.marketDetail = null;
     state.marketRecommendations = [];
+    state.marketRecommendationUpdatedAt = "";
+    state.marketRecommendationLoading = false;
+    state.marketRecommendationError = "";
     state.marketEvents = [];
     state.marketEventsNextBeforeId = null;
     state.marketDetailTab = "overview";
@@ -4102,6 +4324,10 @@ function bindEvents() {
   $("loadMoreMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents(undefined, true)));
   $("marketRuleTypeSelect").addEventListener("change", renderMarketRuleEditor);
   $("marketSensitivitySelect").addEventListener("change", renderMarketRuleEditor);
+  $("marketRecommendationRefreshBtn").addEventListener(
+    "click",
+    guardAsync(() => refreshMarketRecommendations("detail")),
+  );
   $("marketDeliveryModeSelect").addEventListener("change", updateMarketDeliveryFields);
   $("marketTargetTypeSelect").addEventListener("change", renderMarketGroupOptions);
   $("marketThresholdInput").addEventListener("input", () => {

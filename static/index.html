@@ -186,16 +186,20 @@
                   </select>
                   <small id="marketWizardPoolScopeDescription" class="field-note"></small>
                 </label>
-                <label data-i18n-label="sensitivity">
+                <label id="marketWizardSensitivityWrap" data-i18n-label="sensitivity">
                   灵敏度
-                  <select id="marketWizardSensitivitySelect">
-                    <option value="sensitive" data-i18n="sensitivitySensitive">灵敏</option>
-                    <option value="balanced" selected data-i18n="sensitivityBalanced">均衡</option>
-                    <option value="stable" data-i18n="sensitivityStable">稳健</option>
-                    <option value="custom" data-i18n="sensitivityCustom">自定义</option>
-                  </select>
+                  <div class="market-sensitivity-control">
+                    <select id="marketWizardSensitivitySelect">
+                      <option value="sensitive" data-i18n="sensitivitySensitive">灵敏</option>
+                      <option value="balanced" selected data-i18n="sensitivityBalanced">均衡</option>
+                      <option value="stable" data-i18n="sensitivityStable">稳健</option>
+                      <option value="custom" data-i18n="sensitivityCustom">自定义</option>
+                    </select>
+                    <button id="marketWizardRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
+                  </div>
+                  <small id="marketWizardRecommendationStatus" class="field-note"></small>
                 </label>
-                <label data-i18n-label="threshold">
+                <label id="marketWizardThresholdWrap" data-i18n-label="threshold">
                   阈值
                   <div class="input-pair">
                     <input id="marketWizardThresholdInput" type="number" min="0" step="any" value="5" />
@@ -206,7 +210,7 @@
                   统计窗口（分钟）
                   <input id="marketWizardWindowInput" type="number" min="1" step="1" value="60" />
                 </label>
-                <label data-i18n-label="cooldown">
+                <label id="marketWizardCooldownWrap" data-i18n-label="cooldown">
                   冷却时间（秒）
                   <input id="marketWizardCooldownInput" type="number" min="0" step="1" value="300" />
                 </label>
@@ -336,16 +340,20 @@
                   交易池范围
                   <select id="marketRulePoolSelect"></select>
                 </label>
-                <label data-i18n-label="sensitivity">
+                <label id="marketSensitivityWrap" data-i18n-label="sensitivity">
                   灵敏度
-                  <select id="marketSensitivitySelect">
-                    <option value="sensitive" data-i18n="sensitivitySensitive">灵敏</option>
-                    <option value="balanced" selected data-i18n="sensitivityBalanced">均衡</option>
-                    <option value="stable" data-i18n="sensitivityStable">稳健</option>
-                    <option value="custom" data-i18n="sensitivityCustom">自定义</option>
-                  </select>
+                  <div class="market-sensitivity-control">
+                    <select id="marketSensitivitySelect">
+                      <option value="sensitive" data-i18n="sensitivitySensitive">灵敏</option>
+                      <option value="balanced" selected data-i18n="sensitivityBalanced">均衡</option>
+                      <option value="stable" data-i18n="sensitivityStable">稳健</option>
+                      <option value="custom" data-i18n="sensitivityCustom">自定义</option>
+                    </select>
+                    <button id="marketRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
+                  </div>
+                  <small id="marketRecommendationStatus" class="field-note"></small>
                 </label>
-                <label data-i18n-label="threshold">
+                <label id="marketThresholdWrap" data-i18n-label="threshold">
                   阈值
                   <div class="input-pair">
                     <input id="marketThresholdInput" type="number" min="0" step="any" value="5" />
@@ -356,7 +364,7 @@
                   统计窗口（分钟）
                   <input id="marketWindowInput" type="number" min="1" step="1" value="60" />
                 </label>
-                <label data-i18n-label="cooldown">
+                <label id="marketCooldownWrap" data-i18n-label="cooldown">
                   冷却时间（秒）
                   <input id="marketCooldownInput" type="number" min="0" step="1" value="300" />
                 </label>
