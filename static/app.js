@@ -3201,6 +3201,7 @@ function marketRecommendationControls(mode) {
     cooldownWrap: $(wizard ? "marketWizardCooldownWrap" : "marketCooldownWrap"),
     cooldown: $(wizard ? "marketWizardCooldownInput" : "marketCooldownInput"),
     repeatWrap: $(wizard ? "marketWizardRepeatWrap" : "marketRepeatWrap"),
+    repeatLabel: $(wizard ? "marketWizardRepeatLabel" : "marketRepeatLabel"),
     repeat: $(wizard ? "marketWizardRepeatInput" : "marketRepeatInput"),
     repeatHelp: $(wizard ? "marketWizardRepeatHelpText" : "marketRepeatHelpText"),
   };
@@ -3260,6 +3261,9 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.repeatWrap.hidden = !repeatSupported;
   if (!repeatSupported) controls.repeat.checked = false;
   controls.repeat.disabled = !repeatSupported || !editable;
+  controls.repeatLabel.textContent = t(definition?.code === "market_price_decrease"
+    ? "repeatPriceDecreaseLabel"
+    : "repeatPriceIncreaseLabel");
   controls.repeatHelp.textContent = t(definition?.code === "market_price_decrease"
     ? "repeatPriceDecreaseHelp"
     : "repeatPriceIncreaseHelp");
