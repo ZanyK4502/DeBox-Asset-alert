@@ -291,13 +291,15 @@ button:disabled {
   opacity: 0.55;
 }
 
-#marketVerifyAndDiscoverBtn.is-loading {
+#marketVerifyAndDiscoverBtn.is-loading,
+#createMarketProjectBtn.is-loading {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-#marketVerifyAndDiscoverBtn.is-loading::before {
+#marketVerifyAndDiscoverBtn.is-loading::before,
+#createMarketProjectBtn.is-loading::before {
   content: "";
   width: 14px;
   height: 14px;

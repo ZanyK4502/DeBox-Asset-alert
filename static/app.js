@@ -3331,6 +3331,14 @@ function setMarketVerifyLoading(loading) {
   button.textContent = t(button.dataset.i18n);
 }
 
+function setMarketCreateLoading(loading) {
+  const button = $("createMarketProjectBtn");
+  button.classList.toggle("is-loading", loading);
+  button.setAttribute("aria-busy", String(loading));
+  button.dataset.i18n = loading ? "marketCreatingProject" : "marketCreateProjectAndRule";
+  button.textContent = t(button.dataset.i18n);
+}
+
 function clearMarketWizardVerification() {
   state.marketWizard.verification = null;
   state.marketWizard.poolResult = null;
@@ -3602,6 +3610,7 @@ async function createMarketProject() {
     };
   });
   setMarketWizardBusy(true);
+  setMarketCreateLoading(true);
   $("marketWizardCreateStatus").textContent = t("marketCreatingProject");
   renderMarketWizardRuleEditor();
   let detail;
@@ -3662,6 +3671,7 @@ async function createMarketProject() {
     throw error;
   } finally {
     wizard.busy = false;
+    setMarketCreateLoading(false);
     setMarketWizardBusy(false);
     renderMarketWizardRuleEditor();
   }
