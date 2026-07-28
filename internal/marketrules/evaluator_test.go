@@ -63,6 +63,110 @@ func TestEvaluateSnapshotRuleCrossesAndRearms(t *testing.T) {
 	}
 }
 
+func TestEvaluateAbsolutePriceDoesNotRepeatAfterCooldownWhileConditionRemainsActive(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	price := "120"
+	input := EvaluationInput{
+		Rule: store.MarketRule{
+			RuleType:        plans.MarketPriceAbove,
+			ThresholdValue:  "100",
+			ThresholdUnit:   "usd",
+			CooldownSeconds: 60,
+		},
+		Project: store.MarketProject{TokenSymbol: "TEST"},
+		Snapshots: []store.MarketSnapshot{{
+			ID: 1, MarketPoolID: 10, PriceUSD: &price, CapturedAt: now,
+		}},
+		Now: now,
+	}
+	first, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("first evaluation: %v", err)
+	}
+	if len(first.Triggers) != 1 {
+		t.Fatalf("first triggers = %d, want 1", len(first.Triggers))
+	}
+
+	input.Rule.State = first.State
+	input.Rule.LastTriggeredAt = &now
+	input.Now = now.Add(61 * time.Second)
+	input.Snapshots[0].ID = 2
+	input.Snapshots[0].CapturedAt = input.Now
+	repeated, err := Evaluate(input)
+	if err != nil {
+		t.Fatalf("post-cooldown evaluation: %v", err)
+	}
+	if len(repeated.Triggers) != 0 {
+		t.Fatalf("post-cooldown triggers = %d, want 0", len(repeated.Triggers))
+	}
+}
+
+func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	window := int32(60)
+	tests := []struct {
+		name        string
+		ruleType    string
+		latestPrice string
+	}{
+		{name: "increase", ruleType: plans.MarketPriceIncrease, latestPrice: "120"},
+		{name: "decrease", ruleType: plans.MarketPriceDecrease, latestPrice: "80"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baselinePrice := "100"
+			latestPrice := test.latestPrice
+			input := EvaluationInput{
+				Rule: store.MarketRule{
+					RuleType:        test.ruleType,
+					ThresholdValue:  "10",
+					ThresholdUnit:   "percent",
+					WindowMinutes:   &window,
+					CooldownSeconds: 60,
+				},
+				Project: store.MarketProject{TokenSymbol: "TEST"},
+				Snapshots: []store.MarketSnapshot{
+					{ID: 2, MarketPoolID: 10, PriceUSD: &latestPrice, CapturedAt: now},
+					{ID: 1, MarketPoolID: 10, PriceUSD: &baselinePrice, CapturedAt: now.Add(-time.Hour)},
+				},
+				Now: now,
+			}
+			first, err := Evaluate(input)
+			if err != nil {
+				t.Fatalf("first evaluation: %v", err)
+			}
+			if len(first.Triggers) != 1 {
+				t.Fatalf("first triggers = %d, want 1", len(first.Triggers))
+			}
+
+			input.Rule.State = first.State
+			input.Rule.LastTriggeredAt = &now
+			input.Now = now.Add(30 * time.Second)
+			input.Snapshots[0].ID = 3
+			input.Snapshots[0].CapturedAt = input.Now
+			duringCooldown, err := Evaluate(input)
+			if err != nil {
+				t.Fatalf("cooldown evaluation: %v", err)
+			}
+			if len(duringCooldown.Triggers) != 0 {
+				t.Fatalf("cooldown triggers = %d, want 0", len(duringCooldown.Triggers))
+			}
+
+			input.Rule.State = duringCooldown.State
+			input.Now = now.Add(61 * time.Second)
+			input.Snapshots[0].ID = 4
+			input.Snapshots[0].CapturedAt = input.Now
+			afterCooldown, err := Evaluate(input)
+			if err != nil {
+				t.Fatalf("post-cooldown evaluation: %v", err)
+			}
+			if len(afterCooldown.Triggers) != 1 {
+				t.Fatalf("post-cooldown triggers = %d, want 1", len(afterCooldown.Triggers))
+			}
+		})
+	}
+}
+
 func TestEvaluateEventCooldownLimitsOneTriggerPerBatch(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	firstValue, secondValue := "1000", "2000"

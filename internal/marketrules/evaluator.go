@@ -284,7 +284,11 @@ func evaluateSnapshotRule(
 		return nil, false, false, true, nil
 	}
 	crossed := condition && !state.ConditionActive
-	pending := state.PendingCrossing || crossed
+	repeatReady := condition && state.ConditionActive &&
+		repeatsWhileConditionActive(rule.RuleType) &&
+		latest.ID != state.LastSnapshotID &&
+		!cooldownActive(rule, now)
+	pending := state.PendingCrossing || crossed || repeatReady
 	if !condition {
 		pending = false
 	}
@@ -308,6 +312,11 @@ func evaluateSnapshotRule(
 		Details:       details,
 		OccurredAt:    latest.CapturedAt.UTC(),
 	}, condition, false, true, nil
+}
+
+func repeatsWhileConditionActive(ruleType string) bool {
+	return ruleType == plans.MarketPriceIncrease ||
+		ruleType == plans.MarketPriceDecrease
 }
 
 func snapshotCondition(
