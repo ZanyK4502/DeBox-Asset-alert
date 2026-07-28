@@ -84,7 +84,7 @@ var marketRuleDefinitions = []RuleDefinition{
 	rule(plans.MarketHolderRankEntered, "进入大户榜", "Entered holder ranking", "地址进入指定大户排名时提醒。", "Alert when an address enters the configured holder ranking.", []string{"count"}, "count", "20", 0, false),
 	rule(plans.MarketHolderRankExited, "退出大户榜", "Exited holder ranking", "地址退出指定大户排名时提醒。", "Alert when an address exits the configured holder ranking.", []string{"count"}, "count", "20", 0, false),
 	rule(plans.MarketFourMemeLargeTrade, "Four.meme 大额交易", "Four.meme large trade", "Four.meme 内盘出现大额买卖时提醒。", "Alert on a large Four.meme bonding-curve trade.", []string{"usd", "token", "percent"}, "usd", "1000", 0, false),
-	rule(plans.MarketFourMemeProgress, "Four.meme 进度", "Four.meme progress", "内盘进度达到阈值时提醒。", "Alert when Four.meme progress reaches the threshold.", []string{"progress", "percent"}, "percent", "80", 0, false),
+	rule(plans.MarketFourMemeProgress, "Four.meme 进度", "Four.meme progress", "内盘进度达到阈值时提醒。", "Alert when Four.meme progress reaches the threshold.", []string{"percent"}, "percent", "80", 0, false),
 	rule(plans.MarketFourMemeMigration, "Four.meme 迁移", "Four.meme migration", "项目迁移到外盘时提醒。", "Alert when the token migrates to an external pool.", []string{"count"}, "count", "1", 0, false),
 }
 
