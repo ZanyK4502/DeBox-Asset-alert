@@ -26,6 +26,11 @@ func TestRecommendThresholdsUsesMarketDepthAndPresetOrder(t *testing.T) {
 	if len(largeBuy) != 3 {
 		t.Fatalf("large buy presets = %d, want 3", len(largeBuy))
 	}
+	for _, value := range largeBuy {
+		if value.WindowMinutes != 0 {
+			t.Fatalf("single large buy window = %d, want 0", value.WindowMinutes)
+		}
+	}
 	counts := make(map[string]int)
 	for _, value := range values {
 		counts[value.RuleType]++

@@ -242,8 +242,8 @@ func ruleDisplay(ruleType string, english bool) string {
 		"market_volume_above":           "成交量超过",
 		"market_volume_spike":           "成交量异动",
 		"market_trade_imbalance":        "买卖失衡",
-		"market_large_buy":              "大额买入",
-		"market_large_sell":             "大额卖出",
+		"market_large_buy":              "单笔大额买入",
+		"market_large_sell":             "单笔大额卖出",
 		"market_consecutive_large_buy":  "连续大额买入",
 		"market_consecutive_large_sell": "连续大额卖出",
 		"market_liquidity_added":        "加池",
@@ -262,6 +262,12 @@ func ruleDisplay(ruleType string, english bool) string {
 			return value
 		}
 		return ruleType
+	}
+	if ruleType == "market_large_buy" {
+		return "single large buy"
+	}
+	if ruleType == "market_large_sell" {
+		return "single large sell"
 	}
 	return strings.ReplaceAll(strings.TrimPrefix(ruleType, "market_"), "_", " ")
 }

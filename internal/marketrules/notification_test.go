@@ -146,7 +146,7 @@ func TestStageAndCombinationMarketEventsKeepMultichainContext(t *testing.T) {
 	})
 	for _, expected := range []string{
 		"⏳ Incomplete",
-		"Market rule / large sell",
+		"Market rule / single large sell",
 		"1/2",
 		"Chain：Arbitrum",
 		"Contract：0x9999999999999999999999999999999999999999",
