@@ -197,15 +197,22 @@
                     </select>
                     <button id="marketWizardRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
                   </div>
+                  <small class="field-note market-recommendation-explanation">
+                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。</span>
+                  </small>
                   <small id="marketWizardRecommendationStatus" class="field-note"></small>
                 </label>
-                <label id="marketWizardThresholdWrap" data-i18n-label="threshold">
-                  阈值
-                  <div class="input-pair">
+                <div id="marketWizardThresholdWrap" class="market-threshold-field">
+                  <label data-i18n-label="threshold">
+                    阈值
                     <input id="marketWizardThresholdInput" type="number" min="0" step="any" value="5" />
+                  </label>
+                  <label data-i18n-label="unitLabel">
+                    单位
                     <select id="marketWizardThresholdUnitSelect"></select>
-                  </div>
-                </label>
+                  </label>
+                  <small id="marketWizardThresholdHelp" class="field-note"></small>
+                </div>
                 <label id="marketWizardWindowWrap" data-i18n-label="marketWindow">
                   统计窗口（分钟）
                   <input id="marketWizardWindowInput" type="number" min="1" step="1" value="60" />
@@ -351,15 +358,22 @@
                     </select>
                     <button id="marketRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
                   </div>
+                  <small class="field-note market-recommendation-explanation">
+                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。</span>
+                  </small>
                   <small id="marketRecommendationStatus" class="field-note"></small>
                 </label>
-                <label id="marketThresholdWrap" data-i18n-label="threshold">
-                  阈值
-                  <div class="input-pair">
+                <div id="marketThresholdWrap" class="market-threshold-field">
+                  <label data-i18n-label="threshold">
+                    阈值
                     <input id="marketThresholdInput" type="number" min="0" step="any" value="5" />
+                  </label>
+                  <label data-i18n-label="unitLabel">
+                    单位
                     <select id="marketThresholdUnitSelect"></select>
-                  </div>
-                </label>
+                  </label>
+                  <small id="marketThresholdHelp" class="field-note"></small>
+                </div>
                 <label id="marketWindowWrap" data-i18n-label="marketWindow">
                   统计窗口（分钟）
                   <input id="marketWindowInput" type="number" min="1" step="1" value="60" />

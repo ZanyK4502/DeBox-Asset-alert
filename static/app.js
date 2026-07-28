@@ -2194,6 +2194,79 @@ const MARKET_UNIT_KEYS = {
   progress: "unitProgress",
 };
 
+const MARKET_THRESHOLD_HELP_KEYS = {
+  market_price_above: "marketThresholdHelpPriceUsd",
+  market_price_below: "marketThresholdHelpPriceUsd",
+  market_price_increase: "marketThresholdHelpPriceChangePercent",
+  market_price_decrease: "marketThresholdHelpPriceChangePercent",
+  market_liquidity_below: "marketThresholdHelpLiquidityUsd",
+  market_liquidity_decrease: "marketThresholdHelpLiquidityChangePercent",
+  market_volume_above: "marketThresholdHelpVolumeUsd",
+  market_volume_spike: "marketThresholdHelpVolumeRatio",
+  market_trade_imbalance: "marketThresholdHelpImbalancePercent",
+  market_large_buy: {
+    usd: "marketThresholdHelpTradeUsd",
+    token: "marketThresholdHelpTradeToken",
+    percent: "marketThresholdHelpTradePercent",
+  },
+  market_large_sell: {
+    usd: "marketThresholdHelpTradeUsd",
+    token: "marketThresholdHelpTradeToken",
+    percent: "marketThresholdHelpTradePercent",
+  },
+  market_consecutive_large_buy: {
+    usd: "marketThresholdHelpTradeUsd",
+    token: "marketThresholdHelpTradeToken",
+    percent: "marketThresholdHelpTradePercent",
+  },
+  market_consecutive_large_sell: {
+    usd: "marketThresholdHelpTradeUsd",
+    token: "marketThresholdHelpTradeToken",
+    percent: "marketThresholdHelpTradePercent",
+  },
+  market_liquidity_added: {
+    usd: "marketThresholdHelpLiquidityEventUsd",
+    percent: "marketThresholdHelpLiquidityEventPercent",
+  },
+  market_liquidity_removed: {
+    usd: "marketThresholdHelpLiquidityEventUsd",
+    percent: "marketThresholdHelpLiquidityEventPercent",
+  },
+  market_holder_increase: {
+    usd: "marketThresholdHelpHolderUsd",
+    token: "marketThresholdHelpHolderToken",
+    percent: "marketThresholdHelpHolderPercent",
+  },
+  market_holder_decrease: {
+    usd: "marketThresholdHelpHolderUsd",
+    token: "marketThresholdHelpHolderToken",
+    percent: "marketThresholdHelpHolderPercent",
+  },
+  market_holder_rank_entered: "marketThresholdHelpHolderRankEntered",
+  market_holder_rank_exited: "marketThresholdHelpHolderRankExited",
+  market_four_meme_large_trade: {
+    usd: "marketThresholdHelpTradeUsd",
+    token: "marketThresholdHelpTradeToken",
+    percent: "marketThresholdHelpTradePercent",
+  },
+  market_four_meme_progress: "marketThresholdHelpFourMemeProgress",
+};
+
+const MARKET_THRESHOLD_UNIT_HELP_KEYS = {
+  usd: "marketThresholdHelpGenericUsd",
+  token: "marketThresholdHelpGenericToken",
+  percent: "marketThresholdHelpGenericPercent",
+  ratio: "marketThresholdHelpGenericRatio",
+  count: "marketThresholdHelpGenericCount",
+  progress: "marketThresholdHelpGenericProgress",
+};
+
+function marketThresholdHelpKey(ruleType, unit) {
+  const configured = MARKET_THRESHOLD_HELP_KEYS[ruleType];
+  if (typeof configured === "string") return configured;
+  return configured?.[unit] || MARKET_THRESHOLD_UNIT_HELP_KEYS[unit] || "";
+}
+
 function marketRuleDefinition(code) {
   return state.marketCatalog?.rules?.find((rule) => rule.code === code) || null;
 }
@@ -3117,11 +3190,22 @@ function marketRecommendationControls(mode) {
     thresholdWrap: $(wizard ? "marketWizardThresholdWrap" : "marketThresholdWrap"),
     threshold: $(wizard ? "marketWizardThresholdInput" : "marketThresholdInput"),
     unit: $(wizard ? "marketWizardThresholdUnitSelect" : "marketThresholdUnitSelect"),
+    thresholdHelp: $(wizard ? "marketWizardThresholdHelp" : "marketThresholdHelp"),
     windowWrap: $(wizard ? "marketWizardWindowWrap" : "marketWindowWrap"),
     window: $(wizard ? "marketWizardWindowInput" : "marketWindowInput"),
     cooldownWrap: $(wizard ? "marketWizardCooldownWrap" : "marketCooldownWrap"),
     cooldown: $(wizard ? "marketWizardCooldownInput" : "marketCooldownInput"),
   };
+}
+
+function updateMarketThresholdHelp(mode, definition = null) {
+  const controls = marketRecommendationControls(mode);
+  const rule = definition || marketRuleDefinition(
+    $(mode === "wizard" ? "marketWizardRuleTypeSelect" : "marketRuleTypeSelect").value,
+  );
+  controls.thresholdHelp.textContent = !rule || MARKET_EVENT_ONLY_RULES.has(rule.code)
+    ? ""
+    : t(marketThresholdHelpKey(rule.code, controls.unit.value));
 }
 
 function marketRecommendationState(mode) {
@@ -3186,9 +3270,11 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
       recommendationState.recommendations,
     );
     controls.threshold.value = recommendation?.threshold || definition.default_threshold;
-    if (recommendation?.threshold_unit &&
-      [...controls.unit.options].some((option) => option.value === recommendation.threshold_unit)) {
-      controls.unit.value = recommendation.threshold_unit;
+    const recommendedUnit = recommendation?.threshold_unit ||
+      definition.default_unit || definition.units?.[0];
+    if (recommendedUnit &&
+      [...controls.unit.options].some((option) => option.value === recommendedUnit)) {
+      controls.unit.value = recommendedUnit;
     }
     controls.window.value = recommendation?.window_minutes ||
       definition.default_window_minutes || 60;
@@ -3200,6 +3286,7 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.unit.disabled = lockRecommended;
   controls.window.disabled = lockRecommended;
   controls.cooldown.disabled = lockRecommended;
+  updateMarketThresholdHelp(mode, definition);
 
   if (recommendationState.error) {
     controls.status.textContent = t("recommendationRefreshFailed");
@@ -4269,6 +4356,10 @@ function bindEvents() {
   $("marketWizardThresholdInput").addEventListener("input", () => {
     $("marketWizardSensitivitySelect").value = "custom";
   });
+  $("marketWizardThresholdUnitSelect").addEventListener(
+    "change",
+    () => updateMarketThresholdHelp("wizard"),
+  );
   $("marketWizardTargetTypeSelect").addEventListener("change", () => {
     renderMarketWizardRuleEditor();
     renderMarketWizardSummary();
@@ -4339,6 +4430,10 @@ function bindEvents() {
   $("marketThresholdInput").addEventListener("input", () => {
     $("marketSensitivitySelect").value = "custom";
   });
+  $("marketThresholdUnitSelect").addEventListener(
+    "change",
+    () => updateMarketThresholdHelp("detail"),
+  );
   document.querySelectorAll("[data-market-goal]").forEach((button) => {
     button.addEventListener("click", () => {
       state.marketGoal = button.dataset.marketGoal;

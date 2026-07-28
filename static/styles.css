@@ -2583,6 +2583,21 @@ label.market-pool-card {
   gap: 7px;
 }
 
+.market-recommendation-explanation strong {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.market-threshold-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.45fr);
+  gap: 7px;
+}
+
+.market-threshold-field > .field-note {
+  grid-column: 1 / -1;
+}
+
 .market-recommendation-refresh.is-loading {
   display: inline-flex;
   align-items: center;
