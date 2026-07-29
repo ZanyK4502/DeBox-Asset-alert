@@ -115,6 +115,11 @@ assert.match(
   /id="marketLabelInput"[^>]*\brequired\b/,
   "holder label input must be required",
 );
+assert.ok(
+  !app.includes("data-clear-market-label") &&
+    !app.includes("clearMarketLabel("),
+  "holder label actions must not include the duplicate remove-label action",
+);
 for (const filterID of [
   "marketEventChainFilter",
   "marketEventTypeFilter",

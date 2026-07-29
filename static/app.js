@@ -3548,7 +3548,6 @@ function renderMarketHolders() {
       <span class="market-label-actions">
         <button type="button" data-edit-market-label="${label.id}">${escapeHtml(t("holderLabelEdit"))}</button>
         ${Number(label.excluded) ? `<button type="button" data-restore-market-label="${label.id}">${escapeHtml(t("holderLabelRestore"))}</button>` : ""}
-        ${label.label && !Number(label.excluded) ? `<button type="button" data-clear-market-label="${label.id}">${escapeHtml(t("holderLabelClear"))}</button>` : ""}
         <button type="button" data-delete-market-label="${label.id}">${escapeHtml(t("holderLabelDeleteSetting"))}</button>
       </span>
     </div>
@@ -3559,10 +3558,6 @@ function renderMarketHolders() {
   $("marketLabelsList").querySelectorAll("[data-restore-market-label]").forEach((button) => {
     button.addEventListener("click", guardAsync(() =>
       restoreMarketLabel(Number(button.dataset.restoreMarketLabel))));
-  });
-  $("marketLabelsList").querySelectorAll("[data-clear-market-label]").forEach((button) => {
-    button.addEventListener("click", guardAsync(() =>
-      clearMarketLabel(Number(button.dataset.clearMarketLabel))));
   });
   $("marketLabelsList").querySelectorAll("[data-delete-market-label]").forEach((button) => {
     button.addEventListener("click", guardAsync(() => deleteMarketLabel(Number(button.dataset.deleteMarketLabel))));
@@ -4377,14 +4372,6 @@ async function restoreMarketLabel(labelId) {
     await refreshMarketProject();
   }
   toast(t("holderLabelRestored"));
-}
-
-async function clearMarketLabel(labelId) {
-  const label = marketLabelById(labelId);
-  if (!label) return;
-  await api(`/api/market/labels/${label.id}`, { method: "DELETE" });
-  await refreshMarketProject();
-  toast(t("holderLabelCleared"));
 }
 
 async function deleteMarketLabel(labelId) {
