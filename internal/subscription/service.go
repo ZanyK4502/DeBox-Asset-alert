@@ -583,6 +583,10 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 		return fmt.Errorf("当前套餐最多支持 %d 个持续监控代币。", plan.MarketProjectLimit)
 	case errors.Is(err, store.ErrMarketProjectExists):
 		return errors.New("已创建，请先删除此代币相关监控项目。")
+	case errors.Is(err, store.ErrMarketRuleExists):
+		return errors.New("该监控规则已创建，请恢复或删除原规则。")
+	case errors.Is(err, store.ErrMarketCombinationExists):
+		return errors.New("该组合监控已创建，请恢复或删除原组合。")
 	case errors.Is(err, store.ErrMarketPoolMismatch):
 		return errors.New("当前套餐只能监控项目主池；多池监控需要专业版。")
 	case errors.Is(err, store.ErrCombinationRulesDenied):

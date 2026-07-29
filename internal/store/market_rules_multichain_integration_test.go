@@ -248,14 +248,25 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 		)
 	}
 
-	first, err := database.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{
+	firstParams := CreateMarketRuleParams{
 		DeBoxUserID: userID, MarketProjectID: project.ID,
 		RuleType: "market_price_above", ThresholdValue: "1",
 		ThresholdUnit: "usd", DeploymentScope: "all", PoolScope: "all",
 		CooldownScope: "chain", NotificationChatID: userID,
-	}, policy)
+	}
+	first, err := database.CreateMarketRuleWithinQuota(ctx, firstParams, policy)
 	if err != nil {
 		t.Fatalf("create all-deployment rule: %v", err)
+	}
+	duplicateFirstParams := firstParams
+	duplicateFirstParams.ThresholdValue = "1.00"
+	duplicateFirstParams.NotificationLanguage = "en"
+	if _, err := database.CreateMarketRuleWithinQuota(
+		ctx,
+		duplicateFirstParams,
+		policy,
+	); !errors.Is(err, ErrMarketRuleExists) {
+		t.Fatalf("duplicate market rule error = %v, want ErrMarketRuleExists", err)
 	}
 	targets, err := database.ListMarketRuleTargets(ctx, first, project)
 	if err != nil {
@@ -339,6 +350,25 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 	)
 	if err != nil {
 		t.Fatalf("create market combination: %v", err)
+	}
+	if _, err := database.CreateMarketCombinationWithinQuota(
+		ctx,
+		CreateMarketCombinationParams{
+			DeBoxUserID: userID, Note: "different note",
+			CycleType: "follow", CycleMinutes: 15,
+			NotificationChatID:   userID,
+			NotificationLanguage: "en",
+			Members: []CreateMarketCombinationMemberParams{
+				{SourceType: "market", MarketRuleID: &second.ID},
+				{SourceType: "market", MarketRuleID: &first.ID},
+			},
+		},
+		policy,
+	); !errors.Is(err, ErrMarketCombinationExists) {
+		t.Fatalf(
+			"duplicate market combination error = %v, want ErrMarketCombinationExists",
+			err,
+		)
 	}
 	var projectLinks int64
 	if err := pool.QueryRow(ctx, `

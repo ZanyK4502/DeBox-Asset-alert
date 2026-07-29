@@ -192,6 +192,13 @@ func (s *Store) CreateMarketRuleWithinQuota(
 				return MarketRule{}, ErrMarketPoolMismatch
 			}
 		}
+		duplicate, err := hasDuplicateMarketRule(ctx, tx, params)
+		if err != nil {
+			return MarketRule{}, err
+		}
+		if duplicate {
+			return MarketRule{}, ErrMarketRuleExists
+		}
 		count, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {
 			return MarketRule{}, err

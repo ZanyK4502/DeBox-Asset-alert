@@ -315,6 +315,22 @@ func (s *Store) CreateMarketCombinationWithinQuota(
 				return MarketCombinationRule{}, ErrInvalidCombinationRule
 			}
 			seenMembers[key] = struct{}{}
+			if err := validateMarketCombinationMember(
+				ctx,
+				tx,
+				params.DeBoxUserID,
+				member,
+				policy,
+			); err != nil {
+				return MarketCombinationRule{}, err
+			}
+		}
+		duplicate, err := hasDuplicateMarketCombination(ctx, tx, params)
+		if err != nil {
+			return MarketCombinationRule{}, err
+		}
+		if duplicate {
+			return MarketCombinationRule{}, ErrMarketCombinationExists
 		}
 		count, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {
@@ -348,15 +364,6 @@ func (s *Store) CreateMarketCombinationWithinQuota(
 			return MarketCombinationRule{}, fmt.Errorf("create market combination: %w", err)
 		}
 		for _, member := range params.Members {
-			if err := validateMarketCombinationMember(
-				ctx,
-				tx,
-				params.DeBoxUserID,
-				member,
-				policy,
-			); err != nil {
-				return MarketCombinationRule{}, err
-			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO market_combination_members (
 					market_combination_rule_id, source_type, watch_rule_id,
