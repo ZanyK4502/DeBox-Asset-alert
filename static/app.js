@@ -3500,6 +3500,7 @@ function renderMarketCombinations() {
           <div class="list-item-actions">
             ${!active && projectActive ? `<button type="button" class="secondary compact" data-restore-market-combination="${combination.id}">${escapeHtml(t("restoreMonitor"))}</button>` : ""}
             ${active ? `<button type="button" class="secondary compact danger" data-delete-market-combination="${combination.id}">${escapeHtml(t("pause"))}</button>` : ""}
+            ${!active ? `<button type="button" class="secondary compact danger" data-permanently-delete-market-combination="${combination.id}">${escapeHtml(t("delete"))}</button>` : ""}
           </div>
         </div>
       `;
@@ -3512,6 +3513,10 @@ function renderMarketCombinations() {
   $("marketCombinationsList").querySelectorAll("[data-restore-market-combination]").forEach((button) => {
     button.addEventListener("click", guardAsync(() =>
       restoreMarketCombination(Number(button.dataset.restoreMarketCombination))));
+  });
+  $("marketCombinationsList").querySelectorAll("[data-permanently-delete-market-combination]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() =>
+      deletePausedMarketCombination(Number(button.dataset.permanentlyDeleteMarketCombination))));
   });
 }
 
@@ -4291,6 +4296,15 @@ async function restoreMarketCombination(combinationId) {
   state.marketRuleMode = "combination";
   renderMarketRuleMode();
   toast(t("marketCombinationRestored"));
+}
+
+async function deletePausedMarketCombination(combinationId) {
+  if (!confirm(t("marketCombinationDeleteConfirm"))) return;
+  await api(`/api/market/combinations/${combinationId}/permanent`, { method: "DELETE" });
+  await refreshMarketProject();
+  state.marketRuleMode = "combination";
+  renderMarketRuleMode();
+  toast(t("marketCombinationDeleted"));
 }
 
 async function applyMarketEventFilters(event) {

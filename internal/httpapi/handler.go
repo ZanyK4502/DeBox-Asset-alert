@@ -112,6 +112,7 @@ type MarketManagementService interface {
 	ListCombinations(context.Context, string) ([]store.MarketCombinationRule, error)
 	CreateCombination(context.Context, string, marketview.CreateCombinationInput) (store.MarketCombinationRule, error)
 	ArchiveCombination(context.Context, string, int64) error
+	DeletePausedCombination(context.Context, string, int64) error
 	RestoreCombination(context.Context, string, int64) (store.MarketCombinationRule, error)
 	Recommendations(context.Context, string, int64) ([]marketrules.Recommendation, error)
 	PreviewRecommendations(
@@ -230,6 +231,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/market/combinations", h.getMarketCombinations)
 	mux.HandleFunc("POST /api/market/combinations", h.postMarketCombination)
 	mux.HandleFunc("DELETE /api/market/combinations/{combination_id}", h.deleteMarketCombination)
+	mux.HandleFunc("DELETE /api/market/combinations/{combination_id}/permanent", h.deletePausedMarketCombination)
 	mux.HandleFunc("POST /api/market/combinations/{combination_id}/restore", h.postRestoreMarketCombination)
 	mux.HandleFunc("POST /api/market/projects/{project_id}/labels", h.postMarketAddressLabel)
 	mux.HandleFunc("DELETE /api/market/labels/{label_id}", h.deleteMarketAddressLabel)

@@ -251,6 +251,64 @@ func TestDeleteArchivedMarketProjectRejectsActiveProject(t *testing.T) {
 	}
 }
 
+func TestDeletePausedMarketCombinationDeletesOwnedRule(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "delete-market-combination-user"
+	const combinationID int64 = 51
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT run_status").
+		WithArgs(combinationID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"run_status"}).AddRow("paused"))
+	mock.ExpectExec("DELETE FROM market_combination_rules").
+		WithArgs(combinationID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	if err := newWithDB(mock).DeletePausedMarketCombinationRule(
+		context.Background(), combinationID, userID,
+	); err != nil {
+		t.Fatalf("DeletePausedMarketCombinationRule(): %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestDeletePausedMarketCombinationRejectsActiveRule(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "active-market-combination-user"
+	const combinationID int64 = 52
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT run_status").
+		WithArgs(combinationID, userID).
+		WillReturnRows(pgxmock.NewRows([]string{"run_status"}).AddRow("active"))
+	mock.ExpectRollback()
+
+	err = newWithDB(mock).DeletePausedMarketCombinationRule(
+		context.Background(), combinationID, userID,
+	)
+	if !errors.Is(err, ErrMarketCombinationNotPaused) {
+		t.Fatalf("error = %v, want ErrMarketCombinationNotPaused", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func marketProjectRowsForDelete(projectID int64, userID, status string) *pgxmock.Rows {
 	now := time.Now().UTC()
 	return pgxmock.NewRows([]string{

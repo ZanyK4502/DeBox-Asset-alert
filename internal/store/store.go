@@ -37,6 +37,7 @@ var (
 	ErrMarketProjectExists        = errors.New("market project already exists")
 	ErrMarketProjectLimitReached  = errors.New("market project limit reached")
 	ErrMarketProjectNotArchived   = errors.New("only archived market projects can be deleted")
+	ErrMarketCombinationNotPaused = errors.New("only paused market combinations can be deleted")
 	ErrMarketRuleTypeDenied       = errors.New("market rule type is not allowed")
 	ErrNotFound                   = errors.New("record not found")
 	ErrOrderConflict              = errors.New("payment order conflict")

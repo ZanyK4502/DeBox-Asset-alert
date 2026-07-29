@@ -358,6 +358,20 @@ func (h handler) deleteMarketCombination(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (h handler) deletePausedMarketCombination(w http.ResponseWriter, r *http.Request) {
+	session, combinationID, ok := h.marketResourceRequest(w, r, "combination_id")
+	if !ok {
+		return
+	}
+	if err := h.deps.Market.DeletePausedCombination(
+		r.Context(), session.DeBoxUserID, combinationID,
+	); err != nil {
+		writeMarketError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h handler) postRestoreMarketCombination(w http.ResponseWriter, r *http.Request) {
 	session, combinationID, ok := h.marketResourceRequest(w, r, "combination_id")
 	if !ok {

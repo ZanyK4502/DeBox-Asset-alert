@@ -1275,6 +1275,26 @@ func (s *Service) ArchiveCombination(
 	return nil
 }
 
+func (s *Service) DeletePausedCombination(
+	ctx context.Context,
+	deboxUserID string,
+	combinationID int64,
+) error {
+	repository, available := s.deps.Repository.(interface {
+		DeletePausedMarketCombinationRule(context.Context, int64, string) error
+	})
+	if !available {
+		return errors.New("market combination repository is unavailable")
+	}
+	err := repository.DeletePausedMarketCombinationRule(
+		ctx, combinationID, deboxUserID,
+	)
+	if errors.Is(err, store.ErrMarketCombinationNotPaused) {
+		return errors.New("请先暂停市场组合规则后再删除。")
+	}
+	return err
+}
+
 func (s *Service) RestoreCombination(
 	ctx context.Context,
 	deboxUserID string,

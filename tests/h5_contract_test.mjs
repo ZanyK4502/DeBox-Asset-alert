@@ -130,6 +130,11 @@ assert.ok(
     app.includes('t("marketEventCombinationNote")'),
   "market event history must render combination notes",
 );
+assert.ok(
+  app.includes("data-permanently-delete-market-combination") &&
+    app.includes("/api/market/combinations/${combinationId}/permanent"),
+  "paused market combinations must support permanent deletion",
+);
 for (const filterID of [
   "marketEventChainFilter",
   "marketEventTypeFilter",

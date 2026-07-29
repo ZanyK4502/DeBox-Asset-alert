@@ -439,6 +439,47 @@ func (s *Store) ArchiveMarketCombinationRule(
 	return tag.RowsAffected() > 0, nil
 }
 
+func (s *Store) DeletePausedMarketCombinationRule(
+	ctx context.Context,
+	combinationID int64,
+	deboxUserID string,
+) error {
+	_, err := withTxValue(ctx, s.db, func(tx DBTX) (bool, error) {
+		var runStatus string
+		err := tx.QueryRow(ctx, `
+			SELECT run_status
+			FROM market_combination_rules
+			WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
+			FOR UPDATE
+		`, combinationID, strings.TrimSpace(deboxUserID)).Scan(&runStatus)
+		if isNoRows(err) {
+			return false, ErrNotFound
+		}
+		if err != nil {
+			return false, fmt.Errorf(
+				"lock paused market combination for deletion: %w",
+				err,
+			)
+		}
+		if runStatus != "paused" {
+			return false, ErrMarketCombinationNotPaused
+		}
+		command, err := tx.Exec(ctx, `
+			DELETE FROM market_combination_rules
+			WHERE id = $1 AND debox_user_id = $2
+			  AND enabled = 1 AND run_status = 'paused'
+		`, combinationID, strings.TrimSpace(deboxUserID))
+		if err != nil {
+			return false, fmt.Errorf("delete paused market combination: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return false, ErrNotFound
+		}
+		return true, nil
+	})
+	return err
+}
+
 func (s *Store) RestoreMarketCombinationWithinQuota(
 	ctx context.Context,
 	combinationID int64,
