@@ -856,7 +856,22 @@ func (s *Store) ListMarketRuleEventHistory(
 			(mre.notification_status = 'sent') AS notification_successful,
 			COALESCE(mre.details->>'address_label', '') AS address_label,
 			LOWER(COALESCE(mre.details->>'address_excluded', 'false')) = 'true'
-				AS address_excluded
+				AS address_excluded,
+			COALESCE(
+				ARRAY(
+					SELECT DISTINCT BTRIM(mcr.note)
+					FROM market_combination_trigger_events mcte
+					JOIN market_combination_windows mcw
+					  ON mcw.id = mcte.market_combination_window_id
+					JOIN market_combination_rules mcr
+					  ON mcr.id = mcw.market_combination_rule_id
+					WHERE mcte.source_type = 'market'
+					  AND mcte.market_rule_event_id = mre.id
+					  AND BTRIM(mcr.note) <> ''
+					ORDER BY BTRIM(mcr.note)
+				),
+				ARRAY[]::text[]
+			) AS combination_notes
 		FROM market_rule_events mre
 		JOIN market_rules mr ON mr.id = mre.market_rule_id
 		JOIN market_events me ON me.id = mre.market_event_id

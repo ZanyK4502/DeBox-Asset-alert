@@ -120,6 +120,11 @@ assert.ok(
     !app.includes("clearMarketLabel("),
   "holder label actions must not include the duplicate remove-label action",
 );
+assert.ok(
+  app.includes("event.combination_notes") &&
+    app.includes('t("marketEventCombinationNote")'),
+  "market event history must render combination notes",
+);
 for (const filterID of [
   "marketEventChainFilter",
   "marketEventTypeFilter",
@@ -162,7 +167,7 @@ for (const key of translationKeys) {
   assert.ok(Object.hasOwn(translations.en, key), `English translation is missing: ${key}`);
 }
 
-const i18nScript = html.indexOf('<script src="/static/i18n.js"></script>');
+const i18nScript = html.search(/<script src="\/static\/i18n\.js(?:\?[^"]*)?"><\/script>/);
 const timeScript = html.indexOf('<script src="/static/time.js"></script>');
 const appScript = html.search(/<script src="\/static\/app\.js(?:\?[^"]*)?"><\/script>/);
 assert.ok(

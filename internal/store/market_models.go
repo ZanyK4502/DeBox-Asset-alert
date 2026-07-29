@@ -315,6 +315,7 @@ type MarketRuleEventHistory struct {
 	NotificationSuccessful bool       `db:"notification_successful" json:"notification_successful"`
 	AddressLabel           string     `db:"address_label" json:"address_label"`
 	AddressExcluded        bool       `db:"address_excluded" json:"address_excluded"`
+	CombinationNotes       []string   `db:"combination_notes" json:"combination_notes"`
 }
 
 type MarketRuleEvent struct {

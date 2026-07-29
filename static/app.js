@@ -3671,6 +3671,9 @@ function renderMarketEvents() {
             : ""}
         </span>
         ${event.note ? `<small>${escapeHtml(event.note)}</small>` : ""}
+        ${Array.isArray(event.combination_notes) ? event.combination_notes.map((note) => `
+          <small>${escapeHtml(t("marketEventCombinationNote"))}：${escapeHtml(note)}</small>
+        `).join("") : ""}
         ${event.address_label ? `<small>${escapeHtml(t("marketEventAddressLabel"))}：${escapeHtml(event.address_label)}</small>` : ""}
         ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
         <small>${escapeHtml(event.market_pool_id && pools.get(event.market_pool_id)
