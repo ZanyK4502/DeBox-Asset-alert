@@ -853,7 +853,10 @@ func (s *Store) ListMarketRuleEventHistory(
 			me.usd_value::text AS usd_value,
 			me.source,
 			me.occurred_at,
-			(mre.notification_status = 'sent') AS notification_successful
+			(mre.notification_status = 'sent') AS notification_successful,
+			COALESCE(mre.details->>'address_label', '') AS address_label,
+			LOWER(COALESCE(mre.details->>'address_excluded', 'false')) = 'true'
+				AS address_excluded
 		FROM market_rule_events mre
 		JOIN market_rules mr ON mr.id = mre.market_rule_id
 		JOIN market_events me ON me.id = mre.market_event_id

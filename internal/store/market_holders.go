@@ -52,6 +52,7 @@ type UpsertMarketHolderParams struct {
 type UpsertMarketAddressLabelParams struct {
 	DeBoxUserID     string
 	MarketProjectID int64
+	ChainKey        string
 	Address         string
 	LabelType       string
 	Label           string
@@ -358,31 +359,69 @@ func (s *Store) UpsertMarketAddressLabel(
 	params UpsertMarketAddressLabelParams,
 ) (MarketAddressLabel, error) {
 	params.DeBoxUserID = strings.TrimSpace(params.DeBoxUserID)
+	params.ChainKey = strings.ToLower(strings.TrimSpace(params.ChainKey))
 	params.LabelType = strings.ToLower(strings.TrimSpace(params.LabelType))
 	if params.LabelType == "" {
 		params.LabelType = "custom"
 	}
 	address, err := normalizeMarketAddress(params.Address)
-	if err != nil || params.DeBoxUserID == "" {
+	if err != nil || params.DeBoxUserID == "" || params.ChainKey == "" {
 		return MarketAddressLabel{}, ErrInvalidMarketAddressLabel
 	}
 	params.Address = address
 	label, err := collectOne[MarketAddressLabel](ctx, s.db, `
+		WITH target AS (
+			SELECT
+				mpd.id AS market_project_deployment_id,
+				mad.chain_key,
+				mad.chain_id
+			FROM market_projects mp
+			JOIN market_project_deployments mpd
+			  ON mpd.market_project_id = mp.id
+			 AND mpd.status <> 'removed'
+			JOIN market_asset_deployments mad
+			  ON mad.id = mpd.market_asset_deployment_id
+			WHERE mp.id = $2
+			  AND mp.debox_user_id = $1
+			  AND mad.chain_key = $3
+			UNION ALL
+			SELECT
+				NULL::bigint,
+				mp.chain_key,
+				mp.chain_id
+			FROM market_projects mp
+			WHERE mp.id = $2
+			  AND mp.debox_user_id = $1
+			  AND mp.chain_key = $3
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM market_project_deployments mpd
+				JOIN market_asset_deployments mad
+				  ON mad.id = mpd.market_asset_deployment_id
+				WHERE mpd.market_project_id = mp.id
+				  AND mpd.status <> 'removed'
+				  AND mad.chain_key = $3
+			  )
+			LIMIT 1
+		)
 		INSERT INTO market_address_labels (
-			debox_user_id, market_project_id, chain_key, chain_id,
+			debox_user_id, market_project_id, market_project_deployment_id,
+			chain_key, chain_id,
 			address, label_type, label, excluded
 		)
-		SELECT $1, $2, mp.chain_key, mp.chain_id, $3, $4, $5, $6
-		FROM market_projects mp
-		WHERE mp.id = $2 AND mp.debox_user_id = $1
-		ON CONFLICT (market_project_id, address) DO UPDATE
+		SELECT $1, $2, target.market_project_deployment_id,
+		       target.chain_key, target.chain_id, $4, $5, $6, $7
+		FROM target
+		ON CONFLICT (market_project_id, chain_id, address) DO UPDATE
 		SET label_type = EXCLUDED.label_type,
 		    label = EXCLUDED.label,
 		    excluded = EXCLUDED.excluded,
+		    market_project_deployment_id = EXCLUDED.market_project_deployment_id,
 		    updated_at = NOW()
 		RETURNING `+marketAddressLabelColumns,
 		params.DeBoxUserID,
 		params.MarketProjectID,
+		params.ChainKey,
 		params.Address,
 		params.LabelType,
 		params.Label,

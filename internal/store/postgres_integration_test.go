@@ -100,8 +100,8 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 14 ||
-		latestName != "0014_repair_multichain_collection_links.sql" {
+	if latestVersion != 16 ||
+		latestName != "0016_chain_scoped_market_address_labels.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
 	}
 }
@@ -540,6 +540,7 @@ func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
 	label, err := database.UpsertMarketAddressLabel(ctx, UpsertMarketAddressLabelParams{
 		DeBoxUserID:     firstUser,
 		MarketProjectID: firstProject.ID,
+		ChainKey:        "bsc",
 		Address:         holder,
 		LabelType:       "team",
 		Label:           "Team wallet",

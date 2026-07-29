@@ -524,32 +524,22 @@
                   <p class="eyebrow">Holders</p>
                   <h3 data-i18n="marketHolders">大户与地址标签</h3>
                 </div>
-                <label class="compact-filter" data-i18n-label="chain">
-                  链
-                  <select id="marketHolderChainFilter"></select>
-                </label>
               </div>
               <p class="field-note" data-i18n="marketHolderChangeHint">按链查看当前大户及其最近一次增持、减持、进榜或退榜变化。</p>
               <details class="market-advanced-card">
                 <summary data-i18n="marketManageAddressLabels">添加地址备注或排除地址</summary>
                 <form id="marketLabelForm" class="form-grid">
+                  <label data-i18n-label="holderLabelChain">
+                    适用链
+                    <select id="marketLabelChainSelect" required></select>
+                  </label>
                   <label data-i18n-label="holderAddress">
                     地址
-                    <input id="marketLabelAddressInput" placeholder="0x..." autocomplete="off" />
+                    <input id="marketLabelAddressInput" placeholder="0x..." autocomplete="off" required />
                   </label>
                   <label data-i18n-label="holderLabel">
                     标签
                     <input id="marketLabelInput" placeholder="例如：项目方金库、做市钱包" data-i18n-placeholder="holderLabelPlaceholder" autocomplete="off" />
-                  </label>
-                  <label data-i18n-label="holderType">
-                    类型
-                    <select id="marketLabelTypeSelect">
-                      <option value="treasury" data-i18n="holderTreasury">项目方金库</option>
-                      <option value="market_maker" data-i18n="holderMarketMaker">做市钱包</option>
-                      <option value="kol">KOL</option>
-                      <option value="risk" data-i18n="holderRisk">风险地址</option>
-                      <option value="custom" data-i18n="holderCustom">自定义</option>
-                    </select>
                   </label>
                   <label class="switch-line" data-i18n-label="excludeHolder">
                     <input id="marketLabelExcludedInput" type="checkbox" />
@@ -561,6 +551,12 @@
                 </form>
               </details>
               <div id="marketLabelsList" class="market-label-list"></div>
+              <div class="market-holder-toolbar">
+                <label class="compact-filter" data-i18n-label="holderRankingChain">
+                  排行榜链
+                  <select id="marketHolderChainFilter"></select>
+                </label>
+              </div>
               <div id="marketHoldersList" class="market-holder-list"></div>
             </article>
           </section>

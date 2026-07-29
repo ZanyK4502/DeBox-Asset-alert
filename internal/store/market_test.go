@@ -94,11 +94,12 @@ func TestListMarketRuleEventHistoryReturnsOnlyRuleAuditRows(t *testing.T) {
 			"notification_sent_at", "created_at", "market_pool_id", "chain_key",
 			"event_type", "transaction_hash", "wallet_address", "token_amount",
 			"usd_value", "source", "occurred_at", "notification_successful",
+			"address_label", "address_excluded",
 		}).AddRow(
 			int64(12), int64(8), int64(9), "market_large_buy",
 			"500", "usd", nil, &currentValue, "large buy", "sent", "",
 			&now, now, &poolID, "bsc", "buy", &transactionHash, nil, &tokenAmount,
-			&usdValue, "nodit", now, true,
+			&usdValue, "nodit", now, true, "项目方金库", false,
 		))
 
 	events, err := newWithDB(mock).ListMarketRuleEventHistory(
@@ -112,6 +113,7 @@ func TestListMarketRuleEventHistoryReturnsOnlyRuleAuditRows(t *testing.T) {
 	}
 	if len(events) != 1 || !events[0].NotificationSuccessful ||
 		events[0].RuleType != "market_large_buy" ||
+		events[0].AddressLabel != "项目方金库" ||
 		events[0].CurrentValue == nil || *events[0].CurrentValue != "750" {
 		t.Fatalf("unexpected history rows: %#v", events)
 	}

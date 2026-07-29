@@ -104,6 +104,12 @@ for (const tab of ["overview", "rules", "pools", "holders", "events"]) {
     `market project detail is missing the ${tab} tab or panel`,
   );
 }
+assert.ok(
+  htmlIDs.has("marketLabelChainSelect") &&
+    htmlIDs.has("marketHolderChainFilter") &&
+    !htmlIDs.has("marketLabelTypeSelect"),
+  "holder labels need a dedicated chain selector, a separate ranking filter, and no type field",
+);
 for (const filterID of [
   "marketEventChainFilter",
   "marketEventTypeFilter",
@@ -112,7 +118,7 @@ for (const filterID of [
 ]) {
   assert.ok(htmlIDs.has(filterID), `market event filter is missing: ${filterID}`);
 }
-for (const queryKey of ["chain_key", "event_type", "pool_id", "address"]) {
+for (const queryKey of ["chain_key", "rule_type", "pool_id", "address"]) {
   assert.ok(
     app.includes(`query.set("${queryKey}"`),
     `market event request is missing query filter: ${queryKey}`,

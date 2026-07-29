@@ -1245,6 +1245,7 @@ func (s *Store) loadRealtimeMarketDelivery(
 		StartsAt:             event.OccurredAt,
 		EndsAt:               event.OccurredAt,
 		Note:                 ruleEvent.Note,
+		AddressLabel:         marketRuleEventAddressLabel(ruleEvent.Details),
 	}
 	delivery.Timezone = s.marketNotificationTimezone(ctx, rule.DeBoxUserID)
 	if event.MarketPoolID != nil {
@@ -1482,14 +1483,25 @@ func (s *Store) loadMarketNotificationEvent(
 		}
 	}
 	result := MarketNotificationEvent{
-		Project: project,
-		Event:   event,
-		Note:    ruleEvent.Note,
+		Project:      project,
+		Event:        event,
+		Note:         ruleEvent.Note,
+		AddressLabel: marketRuleEventAddressLabel(ruleEvent.Details),
 	}
 	if event.MarketPoolID != nil {
 		result.Pool, _ = s.GetMarketPool(ctx, *event.MarketPoolID)
 	}
 	return result, nil
+}
+
+func marketRuleEventAddressLabel(details json.RawMessage) string {
+	values := struct {
+		AddressLabel string `json:"address_label"`
+	}{}
+	if err := json.Unmarshal(details, &values); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values.AddressLabel)
 }
 
 func (s *Store) marketNotificationTimezone(ctx context.Context, deboxUserID string) string {

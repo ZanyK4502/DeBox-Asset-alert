@@ -470,3 +470,107 @@ func TestMergeMarketEventsDoesNotJumpAcrossBacklog(t *testing.T) {
 		t.Fatalf("merged event ids = %#v", seen)
 	}
 }
+
+func TestEvaluateHolderRuleCarriesAddressLabel(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	address := "0x1111111111111111111111111111111111111111"
+	value := "25"
+	evaluation, err := Evaluate(EvaluationInput{
+		Rule: store.MarketRule{
+			RuleType:       plans.MarketHolderIncrease,
+			ThresholdValue: "10",
+			ThresholdUnit:  "usd",
+		},
+		Project: store.MarketProject{ChainID: 56, TokenSymbol: "TEST"},
+		Events: []store.MarketEvent{{
+			ID:            1,
+			ChainID:       56,
+			EventType:     "holder_increase",
+			EventKey:      "holder-increase:1",
+			WalletAddress: &address,
+			USDValue:      &value,
+			Confirmed:     1,
+			OccurredAt:    now,
+		}},
+		Holders: []store.MarketHolder{{
+			ChainID: 56, HolderAddress: address,
+		}},
+		Labels: []store.MarketAddressLabel{{
+			ChainID: 56, Address: address, Label: "项目方金库",
+		}},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate(): %v", err)
+	}
+	if len(evaluation.Triggers) != 1 || len(evaluation.Suppressed) != 0 {
+		t.Fatalf("triggers/suppressed = %d/%d, want 1/0",
+			len(evaluation.Triggers), len(evaluation.Suppressed))
+	}
+	var details struct {
+		AddressLabel    string `json:"address_label"`
+		AddressExcluded bool   `json:"address_excluded"`
+	}
+	if err := json.Unmarshal(evaluation.Triggers[0].Details, &details); err != nil {
+		t.Fatalf("decode trigger details: %v", err)
+	}
+	if details.AddressLabel != "项目方金库" || details.AddressExcluded {
+		t.Fatalf("unexpected trigger details: %#v", details)
+	}
+}
+
+func TestEvaluateHolderRuleAuditsExcludedAddressWithoutNotification(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	address := "0x2222222222222222222222222222222222222222"
+	value := "25"
+	evaluation, err := Evaluate(EvaluationInput{
+		Rule: store.MarketRule{
+			RuleType:       plans.MarketHolderDecrease,
+			ThresholdValue: "10",
+			ThresholdUnit:  "usd",
+		},
+		Project: store.MarketProject{ChainID: 56, TokenSymbol: "TEST"},
+		Events: []store.MarketEvent{{
+			ID:            1,
+			ChainID:       56,
+			EventType:     "holder_decrease",
+			EventKey:      "holder-decrease:1",
+			WalletAddress: &address,
+			USDValue:      &value,
+			Confirmed:     1,
+			OccurredAt:    now,
+		}},
+		Holders: []store.MarketHolder{{
+			ChainID: 56, HolderAddress: address,
+		}},
+		Labels: []store.MarketAddressLabel{{
+			ChainID: 56, Address: address, Label: "内部钱包", Excluded: 1,
+		}},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("Evaluate(): %v", err)
+	}
+	if len(evaluation.Triggers) != 0 || len(evaluation.Suppressed) != 1 {
+		t.Fatalf("triggers/suppressed = %d/%d, want 0/1",
+			len(evaluation.Triggers), len(evaluation.Suppressed))
+	}
+	if evaluation.Suppressed[0].Reason != "holder_excluded" {
+		t.Fatalf("suppression reason = %q, want holder_excluded",
+			evaluation.Suppressed[0].Reason)
+	}
+	var details struct {
+		AddressLabel    string `json:"address_label"`
+		AddressExcluded bool   `json:"address_excluded"`
+	}
+	if err := json.Unmarshal(evaluation.Suppressed[0].Details, &details); err != nil {
+		t.Fatalf("decode suppressed details: %v", err)
+	}
+	if details.AddressLabel != "内部钱包" || !details.AddressExcluded {
+		t.Fatalf("unexpected suppressed details: %#v", details)
+	}
+}

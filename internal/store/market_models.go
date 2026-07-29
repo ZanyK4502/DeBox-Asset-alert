@@ -313,6 +313,8 @@ type MarketRuleEventHistory struct {
 	Source                 string     `db:"source" json:"source"`
 	OccurredAt             time.Time  `db:"occurred_at" json:"occurred_at"`
 	NotificationSuccessful bool       `db:"notification_successful" json:"notification_successful"`
+	AddressLabel           string     `db:"address_label" json:"address_label"`
+	AddressExcluded        bool       `db:"address_excluded" json:"address_excluded"`
 }
 
 type MarketRuleEvent struct {
@@ -425,13 +427,15 @@ type MarketNotificationDelivery struct {
 	RecentNotes             []string                    `db:"-" json:"recent_notes"`
 	RecentEvents            []MarketNotificationEvent   `db:"-" json:"recent_events"`
 	CombinationMembers      []MarketCombinationProgress `db:"-" json:"combination_members"`
+	AddressLabel            string                      `db:"-" json:"address_label,omitempty"`
 }
 
 type MarketNotificationEvent struct {
-	Project MarketProject `db:"-" json:"project"`
-	Event   MarketEvent   `db:"-" json:"event"`
-	Pool    *MarketPool   `db:"-" json:"pool,omitempty"`
-	Note    string        `db:"note" json:"note"`
+	Project      MarketProject `db:"-" json:"project"`
+	Event        MarketEvent   `db:"-" json:"event"`
+	Pool         *MarketPool   `db:"-" json:"pool,omitempty"`
+	Note         string        `db:"note" json:"note"`
+	AddressLabel string        `db:"-" json:"address_label,omitempty"`
 }
 
 type MarketCombinationProgress struct {

@@ -35,9 +35,10 @@ func marketRealtimeText(delivery store.MarketNotificationDelivery) string {
 		title = "📊 Token market alert"
 	}
 	item := store.MarketNotificationEvent{
-		Project: delivery.Project,
-		Event:   *event,
-		Pool:    delivery.Pool,
+		Project:      delivery.Project,
+		Event:        *event,
+		Pool:         delivery.Pool,
+		AddressLabel: delivery.AddressLabel,
 	}
 	lines := []string{"<b>" + title + "</b>"}
 	lines = append(lines, marketEventDetailLines(item, delivery.Timezone, english)...)
@@ -175,7 +176,7 @@ func marketEventDetailLines(
 			pool: "Pool", wallet: "Wallet", tx: "Transaction", occurred: "Occurred at",
 		}
 	}
-	return []string{
+	lines := []string{
 		fmt.Sprintf("%s：%s", labels.project, projectDisplay(item.Project)),
 		fmt.Sprintf("%s：%s", labels.chain, escape(chainDisplay(event.ChainKey))),
 		fmt.Sprintf("%s：%s", labels.contract, escape(event.TokenAddress)),
@@ -190,6 +191,14 @@ func marketEventDetailLines(
 		fmt.Sprintf("%s：%s", labels.occurred,
 			escape(localTime(event.OccurredAt, timezone, "2006-01-02 15:04:05"))),
 	}
+	if strings.TrimSpace(item.AddressLabel) != "" {
+		label := "地址标签"
+		if english {
+			label = "Address label"
+		}
+		lines = append(lines, fmt.Sprintf("%s：%s", label, escape(item.AddressLabel)))
+	}
+	return lines
 }
 
 func projectDisplay(project store.MarketProject) string {

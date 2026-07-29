@@ -271,10 +271,10 @@ type CreateCombinationMemberInput struct {
 }
 
 type AddressLabelInput struct {
-	Address   string `json:"address"`
-	LabelType string `json:"label_type"`
-	Label     string `json:"label"`
-	Excluded  bool   `json:"excluded"`
+	ChainKey string `json:"chain_key"`
+	Address  string `json:"address"`
+	Label    string `json:"label"`
+	Excluded bool   `json:"excluded"`
 }
 
 func (s *Service) QueryToken(
@@ -1385,8 +1385,9 @@ func (s *Service) SaveAddressLabel(
 		store.UpsertMarketAddressLabelParams{
 			DeBoxUserID:     deboxUserID,
 			MarketProjectID: projectID,
+			ChainKey:        input.ChainKey,
 			Address:         input.Address,
-			LabelType:       input.LabelType,
+			LabelType:       "custom",
 			Label:           strings.TrimSpace(input.Label),
 			Excluded:        input.Excluded,
 		},

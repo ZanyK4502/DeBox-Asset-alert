@@ -16,6 +16,7 @@ func TestMarketRealtimeNotificationEscapesUserAndChainData(t *testing.T) {
 		Kind:                 "realtime",
 		NotificationLanguage: "zh",
 		Timezone:             "Asia/Shanghai",
+		AddressLabel:         "项目方金库",
 		Project: store.MarketProject{
 			TokenName:   "<script>alert(1)</script>",
 			TokenSymbol: "T&ST",
@@ -50,6 +51,7 @@ func TestMarketRealtimeNotificationEscapesUserAndChainData(t *testing.T) {
 		"DEX：uniswap v3",
 		"交易池：TEST/USDC · 0x2222222222222222222222222222222222222222",
 		"钱包：" + wallet,
+		"地址标签：项目方金库",
 		"交易哈希：" + tx,
 		"金额：$2500",
 		"发生时间：2026-07-26 20:00:00 (Asia/Shanghai)",

@@ -2714,32 +2714,60 @@ label.market-pool-card {
 }
 
 .market-label-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
   margin: 12px 0;
 }
 
 .market-label-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 12px;
   color: var(--muted);
   background: var(--surface-2);
 }
 
-.market-label-chip button {
+.market-label-chip > span:first-child {
   display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
+  gap: 2px;
+}
+
+.market-label-chip small {
   color: var(--muted);
+}
+
+.market-label-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.market-label-actions button {
+  padding: 6px 9px;
+  color: var(--accent);
   background: transparent;
+}
+
+.market-holder-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0;
+}
+
+.market-address-label {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface-3);
+  font-size: 0.75rem;
+  vertical-align: middle;
 }
 
 .market-holder-row,

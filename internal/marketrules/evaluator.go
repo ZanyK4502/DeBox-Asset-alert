@@ -64,7 +64,8 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 	}
 	snapshots := eligibleSnapshots(input)
 	events := eligibleEvents(input)
-	holders := holderIndex(input.Holders, input.Labels)
+	holders := holderIndex(input.Holders, input.Labels, input.Project.ChainID)
+	holderLabels := holderLabelIndex(input.Labels, input.Project.ChainID)
 
 	var triggers []Trigger
 	var suppressed []SuppressedTrigger
@@ -110,6 +111,7 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 			snapshots,
 			events,
 			holders,
+			holderLabels,
 			state.LastEventID,
 			now,
 		)
@@ -426,6 +428,7 @@ func evaluateEventRule(
 	snapshots []store.MarketSnapshot,
 	events []store.MarketEvent,
 	holders map[string]store.MarketHolder,
+	holderLabels map[string]store.MarketAddressLabel,
 	lastEventID int64,
 	now time.Time,
 ) ([]Trigger, []SuppressedTrigger, int64, error) {
@@ -458,6 +461,14 @@ func evaluateEventRule(
 		if !matched {
 			continue
 		}
+		excluded := false
+		if isHolderRule(rule.RuleType) {
+			address := holderEventAddress(rule.RuleType, event)
+			if label, ok := holderLabels[address]; ok {
+				details = holderTriggerDetails(details, address, label)
+				excluded = label.Excluded == 1
+			}
+		}
 		eventCopy := event
 		trigger := Trigger{
 			Event:        &eventCopy,
@@ -467,6 +478,13 @@ func evaluateEventRule(
 			Note:         note,
 			Details:      details,
 			OccurredAt:   event.OccurredAt.UTC(),
+		}
+		if excluded {
+			suppressed = append(suppressed, SuppressedTrigger{
+				Trigger: trigger,
+				Reason:  "holder_excluded",
+			})
+			continue
 		}
 		if !cooldownAvailable {
 			suppressed = append(suppressed, SuppressedTrigger{
@@ -597,13 +615,7 @@ func holderEventCondition(
 	event store.MarketEvent,
 	holders map[string]store.MarketHolder,
 ) (bool, *string, string, json.RawMessage) {
-	address := ""
-	if event.WalletAddress != nil {
-		address = strings.ToLower(*event.WalletAddress)
-	}
-	if address == "" {
-		address = metadataString(event.Metadata, "holder_address")
-	}
+	address := holderEventAddress(rule.RuleType, event)
 	if _, tracked := holders[address]; !tracked {
 		return false, nil, "", nil
 	}
@@ -636,12 +648,6 @@ func holderEventCondition(
 				return false, nil, "", nil
 			}
 		} else if event.EventType == marketparse.EventTokenTransfer {
-			from := metadataString(event.Metadata, "from_address")
-			to := metadataString(event.Metadata, "to_address")
-			address := to
-			if rule.RuleType == plans.MarketHolderDecrease {
-				address = from
-			}
 			if _, tracked := holders[address]; !tracked {
 				return false, nil, "", nil
 			}
@@ -688,22 +694,76 @@ func consecutiveCount(
 func holderIndex(
 	holders []store.MarketHolder,
 	labels []store.MarketAddressLabel,
+	chainID int64,
 ) map[string]store.MarketHolder {
-	excluded := make(map[string]bool)
-	for _, label := range labels {
-		if label.Excluded == 1 {
-			excluded[strings.ToLower(label.Address)] = true
-		}
-	}
 	result := make(map[string]store.MarketHolder)
 	for _, holder := range holders {
 		address := strings.ToLower(holder.HolderAddress)
-		if holder.Excluded == 1 || excluded[address] {
+		if holder.Excluded == 1 ||
+			(holder.ChainID != 0 && chainID != 0 && holder.ChainID != chainID) {
 			continue
 		}
 		result[address] = holder
 	}
+	for _, label := range labels {
+		if label.ChainID != 0 && chainID != 0 && label.ChainID != chainID {
+			continue
+		}
+		address := strings.ToLower(label.Address)
+		if _, exists := result[address]; !exists {
+			result[address] = store.MarketHolder{
+				ChainID:       label.ChainID,
+				ChainKey:      label.ChainKey,
+				HolderAddress: address,
+			}
+		}
+	}
 	return result
+}
+
+func holderLabelIndex(
+	labels []store.MarketAddressLabel,
+	chainID int64,
+) map[string]store.MarketAddressLabel {
+	result := make(map[string]store.MarketAddressLabel)
+	for _, label := range labels {
+		if label.ChainID != 0 && chainID != 0 && label.ChainID != chainID {
+			continue
+		}
+		result[strings.ToLower(label.Address)] = label
+	}
+	return result
+}
+
+func holderEventAddress(ruleType string, event store.MarketEvent) string {
+	if event.EventType == marketparse.EventTokenTransfer {
+		key := "to_address"
+		if ruleType == plans.MarketHolderDecrease {
+			key = "from_address"
+		}
+		return strings.ToLower(metadataString(event.Metadata, key))
+	}
+	if event.WalletAddress != nil {
+		return strings.ToLower(*event.WalletAddress)
+	}
+	return strings.ToLower(metadataString(event.Metadata, "holder_address"))
+}
+
+func holderTriggerDetails(
+	details json.RawMessage,
+	address string,
+	label store.MarketAddressLabel,
+) json.RawMessage {
+	values := map[string]any{}
+	_ = json.Unmarshal(details, &values)
+	values["holder_address"] = address
+	values["address_label"] = strings.TrimSpace(label.Label)
+	values["address_excluded"] = label.Excluded == 1
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return details
+	}
+	return encoded
 }
 
 func cooldownActive(rule store.MarketRule, now time.Time) bool {

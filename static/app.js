@@ -45,6 +45,7 @@ const state = {
   marketDetailTab: "overview",
   marketRuleMode: "single",
   marketHolderChain: "",
+  marketLabelChain: "",
   marketRecommendations: [],
   marketRecommendationUpdatedAt: "",
   marketRecommendationLoading: false,
@@ -547,6 +548,7 @@ function resetConnectionState() {
   state.marketDetailTab = "overview";
   state.marketRuleMode = "single";
   state.marketHolderChain = "";
+  state.marketLabelChain = "";
   state.marketRecommendations = [];
   state.marketRecommendationUpdatedAt = "";
   state.marketRecommendationLoading = false;
@@ -3517,7 +3519,18 @@ function renderMarketHolders() {
   const detail = state.marketDetail;
   if (!detail) return;
   const deployments = marketDetailDeployments();
+  const availableChains = new Set(deployments.map((deployment) => deployment.chain_key));
+  if (!availableChains.has(state.marketLabelChain)) {
+    state.marketLabelChain = deployments[0]?.chain_key || "";
+  }
+  if (state.marketHolderChain && !availableChains.has(state.marketHolderChain)) {
+    state.marketHolderChain = "";
+  }
   const selectedChain = state.marketHolderChain;
+  $("marketLabelChainSelect").innerHTML = deployments.map((deployment) =>
+    `<option value="${escapeHtml(deployment.chain_key)}">${escapeHtml(marketChainName(deployment.chain_key))}</option>`
+  ).join("");
+  $("marketLabelChainSelect").value = state.marketLabelChain;
   $("marketHolderChainFilter").innerHTML = `
     <option value="">${escapeHtml(t("allChains"))}</option>
     ${deployments.map((deployment) => `<option value="${escapeHtml(deployment.chain_key)}">${escapeHtml(marketChainName(deployment.chain_key))}</option>`).join("")}
@@ -3528,19 +3541,45 @@ function renderMarketHolders() {
   });
   $("marketLabelsList").innerHTML = (detail.labels || []).map((label) => `
     <div class="market-label-chip">
-      <span>${escapeHtml(label.label || label.label_type)} · ${escapeHtml(shortAddress(label.address))}${Number(label.excluded) ? " · ⊘" : ""}</span>
-      <button type="button" data-delete-market-label="${label.id}" aria-label="${escapeHtml(t("delete"))}">×</button>
+      <span>
+        <strong>${escapeHtml(label.label || t("holderLabelNone"))}</strong>
+        <small>${escapeHtml(marketChainName(label.chain_key))} · ${escapeHtml(shortAddress(label.address))}${Number(label.excluded) ? ` · ${escapeHtml(t("holderLabelExcluded"))}` : ""}</small>
+      </span>
+      <span class="market-label-actions">
+        <button type="button" data-edit-market-label="${label.id}">${escapeHtml(t("holderLabelEdit"))}</button>
+        ${Number(label.excluded) ? `<button type="button" data-restore-market-label="${label.id}">${escapeHtml(t("holderLabelRestore"))}</button>` : ""}
+        ${label.label ? `<button type="button" data-clear-market-label="${label.id}">${escapeHtml(t("holderLabelClear"))}</button>` : ""}
+        <button type="button" data-delete-market-label="${label.id}">${escapeHtml(t("holderLabelDeleteSetting"))}</button>
+      </span>
     </div>
   `).join("");
+  $("marketLabelsList").querySelectorAll("[data-edit-market-label]").forEach((button) => {
+    button.addEventListener("click", () => editMarketLabel(Number(button.dataset.editMarketLabel)));
+  });
+  $("marketLabelsList").querySelectorAll("[data-restore-market-label]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() =>
+      restoreMarketLabel(Number(button.dataset.restoreMarketLabel))));
+  });
+  $("marketLabelsList").querySelectorAll("[data-clear-market-label]").forEach((button) => {
+    button.addEventListener("click", guardAsync(() =>
+      clearMarketLabel(Number(button.dataset.clearMarketLabel))));
+  });
   $("marketLabelsList").querySelectorAll("[data-delete-market-label]").forEach((button) => {
     button.addEventListener("click", guardAsync(() => deleteMarketLabel(Number(button.dataset.deleteMarketLabel))));
   });
-  const labels = new Map((detail.labels || []).map((label) => [label.address, label]));
+  const labels = new Map((detail.labels || []).map((label) => [
+    marketAddressLabelKey(label.chain_key, label.address),
+    label,
+  ]));
   const holders = (detail.holders || []).filter(
-    (holder) => !selectedChain || holder.chain_key === selectedChain,
+    (holder) => {
+      if (selectedChain && holder.chain_key !== selectedChain) return false;
+      const label = labels.get(marketAddressLabelKey(holder.chain_key, holder.holder_address));
+      return !Number(holder.excluded) && !Number(label?.excluded);
+    },
   );
   $("marketHoldersList").innerHTML = holders.map((holder) => {
-    const label = labels.get(holder.holder_address);
+    const label = labels.get(marketAddressLabelKey(holder.chain_key, holder.holder_address));
     const changeKey = {
       increased: "marketHolderIncreased",
       decreased: "marketHolderDecreased",
@@ -3551,8 +3590,8 @@ function renderMarketHolders() {
     return `
       <div class="market-holder-row">
         <div>
-          <strong>#${holder.rank ?? "-"} · ${escapeHtml(label?.label || shortAddress(holder.holder_address))}</strong>
-          <small>${escapeHtml(marketChainName(holder.chain_key))} · ${escapeHtml(holder.address_kind || "wallet")}${Number(holder.excluded) ? ` · ${escapeHtml(t("marketExcluded"))}` : ""}</small>
+          <strong>#${holder.rank ?? "-"} · ${escapeHtml(shortAddress(holder.holder_address))}${label?.label ? ` <span class="market-address-label">${escapeHtml(label.label)}</span>` : ""}</strong>
+          <small>${escapeHtml(marketChainName(holder.chain_key))} · ${escapeHtml(holder.address_kind || "wallet")}</small>
         </div>
         <span>${escapeHtml(holder.balance)} ${escapeHtml(detail.asset?.symbol || detail.project.token_symbol)} · ${escapeHtml(holder.supply_percent || "-")}%</span>
         <span class="market-holder-change ${escapeHtml(holder.change_type || "unchanged")}">${escapeHtml(t(changeKey))}</span>
@@ -3604,6 +3643,7 @@ function marketRuleEventValue(value, unit) {
 function marketRuleEventReason(event) {
   if (event.notification_successful) return "";
   if (event.notification_error === "cooldown_active") return t("marketEventReasonCooldown");
+  if (event.notification_error === "holder_excluded") return t("marketEventReasonHolderExcluded");
   return t({
     pending: "marketEventReasonPending",
     sending: "marketEventReasonPending",
@@ -3626,6 +3666,7 @@ function renderMarketEvents() {
           <span class="market-notification-status ${event.notification_successful ? "notified" : "not-notified"}">
             ${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}
           </span>
+          ${event.address_excluded ? `<span class="badge">${escapeHtml(t("marketEventExcluded"))}</span>` : ""}
         </span>
         <span>
           ${escapeHtml(marketEventLabel(event.event_type))}
@@ -3635,6 +3676,7 @@ function renderMarketEvents() {
             : ""}
         </span>
         ${event.note ? `<small>${escapeHtml(event.note)}</small>` : ""}
+        ${event.address_label ? `<small>${escapeHtml(t("marketEventAddressLabel"))}：${escapeHtml(event.address_label)}</small>` : ""}
         ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
         <small>${escapeHtml(event.market_pool_id && pools.get(event.market_pool_id)
           ? `${pools.get(event.market_pool_id).protocol} ${pools.get(event.market_pool_id).protocol_version} · ${pools.get(event.market_pool_id).token0_symbol}/${pools.get(event.market_pool_id).token1_symbol}`
@@ -4035,6 +4077,7 @@ async function createMarketProject() {
     state.marketDetailTab = "overview";
     state.marketRuleMode = "single";
     state.marketHolderChain = "";
+    state.marketLabelChain = "";
     state.marketEventFilters = freshMarketEventFilters();
     state.marketEvents = [];
     state.marketEventsNextBeforeId = null;
@@ -4058,6 +4101,7 @@ async function openMarketProject(projectId) {
   state.marketDetailTab = "overview";
   state.marketRuleMode = "single";
   state.marketHolderChain = "";
+  state.marketLabelChain = "";
   state.marketEventFilters = freshMarketEventFilters();
   state.marketEvents = [];
   state.marketEventsNextBeforeId = null;
@@ -4273,8 +4317,8 @@ async function saveMarketLabel(event) {
   await api(`/api/market/projects/${projectId}/labels`, {
     method: "POST",
     body: JSON.stringify({
+      chain_key: $("marketLabelChainSelect").value,
       address: $("marketLabelAddressInput").value.trim(),
-      label_type: $("marketLabelTypeSelect").value,
       label: $("marketLabelInput").value.trim(),
       excluded: $("marketLabelExcludedInput").checked,
     }),
@@ -4284,6 +4328,67 @@ async function saveMarketLabel(event) {
   $("marketLabelExcludedInput").checked = false;
   await refreshMarketProject();
   toast(t("holderLabelSaved"));
+}
+
+function marketAddressLabelKey(chainKey, address) {
+  return `${String(chainKey || "").toLowerCase()}:${String(address || "").toLowerCase()}`;
+}
+
+function marketLabelById(labelId) {
+  return (state.marketDetail?.labels || []).find(
+    (label) => Number(label.id) === Number(labelId),
+  );
+}
+
+function editMarketLabel(labelId) {
+  const label = marketLabelById(labelId);
+  if (!label) return;
+  state.marketLabelChain = label.chain_key;
+  renderMarketHolders();
+  $("marketLabelAddressInput").value = label.address;
+  $("marketLabelInput").value = label.label || "";
+  $("marketLabelExcludedInput").checked = Number(label.excluded) === 1;
+  $("marketLabelForm").closest("details").open = true;
+  $("marketLabelAddressInput").focus();
+}
+
+async function updateMarketLabel(label, changes) {
+  const projectId = state.marketDetail?.project?.id;
+  if (!projectId || !label) return;
+  await api(`/api/market/projects/${projectId}/labels`, {
+    method: "POST",
+    body: JSON.stringify({
+      chain_key: label.chain_key,
+      address: label.address,
+      label: changes.label ?? label.label ?? "",
+      excluded: changes.excluded ?? Boolean(Number(label.excluded)),
+    }),
+  });
+  await refreshMarketProject();
+}
+
+async function restoreMarketLabel(labelId) {
+  const label = marketLabelById(labelId);
+  if (!label) return;
+  if (label.label) {
+    await updateMarketLabel(label, { excluded: false });
+  } else {
+    await api(`/api/market/labels/${label.id}`, { method: "DELETE" });
+    await refreshMarketProject();
+  }
+  toast(t("holderLabelRestored"));
+}
+
+async function clearMarketLabel(labelId) {
+  const label = marketLabelById(labelId);
+  if (!label) return;
+  if (Number(label.excluded)) {
+    await updateMarketLabel(label, { label: "" });
+  } else {
+    await api(`/api/market/labels/${label.id}`, { method: "DELETE" });
+    await refreshMarketProject();
+  }
+  toast(t("holderLabelCleared"));
 }
 
 async function deleteMarketLabel(labelId) {
@@ -4446,6 +4551,7 @@ function bindEvents() {
     state.marketDetailTab = "overview";
     state.marketRuleMode = "single";
     state.marketHolderChain = "";
+    state.marketLabelChain = "";
     state.marketEventFilters = freshMarketEventFilters();
     renderMarketDetail();
     $("marketProjectsList").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -4465,6 +4571,9 @@ function bindEvents() {
       $("marketCombinationTargetTypeSelect").value !== "group";
   });
   $("marketLabelForm").addEventListener("submit", guardAsync(saveMarketLabel));
+  $("marketLabelChainSelect").addEventListener("change", () => {
+    state.marketLabelChain = $("marketLabelChainSelect").value;
+  });
   $("marketHolderChainFilter").addEventListener("change", () => {
     state.marketHolderChain = $("marketHolderChainFilter").value;
     renderMarketHolders();
