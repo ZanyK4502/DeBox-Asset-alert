@@ -247,7 +247,7 @@ func (h handler) getMarketEvents(w http.ResponseWriter, r *http.Request) {
 			BeforeID:      beforeID,
 			Limit:         limit,
 			ChainKey:      r.URL.Query().Get("chain_key"),
-			EventType:     r.URL.Query().Get("event_type"),
+			RuleType:      r.URL.Query().Get("rule_type"),
 			MarketPoolID:  poolID,
 			WalletAddress: r.URL.Query().Get("address"),
 		},

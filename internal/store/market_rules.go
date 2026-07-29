@@ -827,7 +827,7 @@ func (s *Store) ListMarketRuleEventHistory(
 ) ([]MarketRuleEventHistory, error) {
 	filter.Limit = clamp(filter.Limit, 1, 100)
 	filter.ChainKey = strings.ToLower(strings.TrimSpace(filter.ChainKey))
-	filter.EventType = strings.ToLower(strings.TrimSpace(filter.EventType))
+	filter.RuleType = strings.ToLower(strings.TrimSpace(filter.RuleType))
 	filter.WalletAddress = strings.ToLower(strings.TrimSpace(filter.WalletAddress))
 	events, err := collectMany[MarketRuleEventHistory](ctx, s.db, `
 		SELECT
@@ -862,7 +862,7 @@ func (s *Store) ListMarketRuleEventHistory(
 		  AND mre.created_at >= NOW() - INTERVAL '30 days'
 		  AND ($3::bigint = 0 OR mre.id < $3)
 		  AND ($4::text = '' OR me.chain_key = $4)
-		  AND ($5::text = '' OR me.event_type = $5)
+		  AND ($5::text = '' OR mr.rule_type = $5)
 		  AND ($6::bigint = 0 OR me.market_pool_id = $6)
 		  AND ($7::text = '' OR me.wallet_address = $7)
 		ORDER BY mre.id DESC
@@ -872,7 +872,7 @@ func (s *Store) ListMarketRuleEventHistory(
 		strings.TrimSpace(deboxUserID),
 		filter.BeforeID,
 		filter.ChainKey,
-		filter.EventType,
+		filter.RuleType,
 		filter.MarketPoolID,
 		filter.WalletAddress,
 		filter.Limit,

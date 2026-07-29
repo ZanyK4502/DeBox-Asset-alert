@@ -217,7 +217,7 @@ type EventFilterInput struct {
 	BeforeID      int64
 	Limit         int
 	ChainKey      string
-	EventType     string
+	RuleType      string
 	MarketPoolID  int64
 	WalletAddress string
 }
@@ -1340,7 +1340,7 @@ func (s *Service) Events(
 		return nil, errors.New("市场事件分页参数无效。")
 	}
 	input.ChainKey = strings.ToLower(strings.TrimSpace(input.ChainKey))
-	input.EventType = strings.ToLower(strings.TrimSpace(input.EventType))
+	input.RuleType = strings.ToLower(strings.TrimSpace(input.RuleType))
 	input.WalletAddress = strings.ToLower(strings.TrimSpace(input.WalletAddress))
 	if input.WalletAddress != "" {
 		address, err := chain.ValidateAddress(input.WalletAddress)
@@ -1356,8 +1356,8 @@ func (s *Service) Events(
 		}
 		input.ChainKey = profile.Key
 	}
-	if len(input.EventType) > 64 {
-		return nil, errors.New("事件类型筛选无效。")
+	if len(input.RuleType) > 64 {
+		return nil, errors.New("规则类型筛选无效。")
 	}
 	return s.deps.Repository.ListMarketRuleEventHistory(
 		ctx,
@@ -1367,7 +1367,7 @@ func (s *Service) Events(
 			BeforeID:      input.BeforeID,
 			Limit:         input.Limit,
 			ChainKey:      input.ChainKey,
-			EventType:     input.EventType,
+			RuleType:      input.RuleType,
 			MarketPoolID:  input.MarketPoolID,
 			WalletAddress: input.WalletAddress,
 		},

@@ -86,7 +86,7 @@ func TestListMarketRuleEventHistoryReturnsOnlyRuleAuditRows(t *testing.T) {
 	tokenAmount := "100"
 	usdValue := "750"
 	mock.ExpectQuery("FROM market_rule_events mre").
-		WithArgs(int64(7), "user-7", int64(0), "bsc", "buy", int64(0), "", 50).
+		WithArgs(int64(7), "user-7", int64(0), "bsc", "market_large_buy", int64(0), "", 50).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "market_rule_id", "market_event_id", "rule_type",
 			"threshold_value", "threshold_unit", "previous_value", "current_value",
@@ -105,7 +105,7 @@ func TestListMarketRuleEventHistoryReturnsOnlyRuleAuditRows(t *testing.T) {
 		context.Background(),
 		7,
 		"user-7",
-		MarketEventFilter{Limit: 50, ChainKey: " BSC ", EventType: " BUY "},
+		MarketEventFilter{Limit: 50, ChainKey: " BSC ", RuleType: " MARKET_LARGE_BUY "},
 	)
 	if err != nil {
 		t.Fatalf("ListMarketRuleEventHistory(): %v", err)

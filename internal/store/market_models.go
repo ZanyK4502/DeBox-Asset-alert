@@ -284,6 +284,7 @@ type MarketEventFilter struct {
 	Limit         int
 	ChainKey      string
 	EventType     string
+	RuleType      string
 	MarketPoolID  int64
 	WalletAddress string
 }

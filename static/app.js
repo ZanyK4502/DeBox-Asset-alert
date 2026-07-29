@@ -78,7 +78,7 @@ function freshMarketWizard() {
 function freshMarketEventFilters() {
   return {
     chainKey: "",
-    eventType: "",
+    ruleType: "",
     poolId: "",
     address: "",
   };
@@ -3576,19 +3576,16 @@ function renderMarketEventFilters() {
     ${deployments.map((deployment) => `<option value="${escapeHtml(deployment.chain_key)}">${escapeHtml(marketChainName(deployment.chain_key))}</option>`).join("")}
   `;
   $("marketEventChainFilter").value = filters.chainKey;
-  const eventTypes = [
-    "buy", "sell", "liquidity_added", "liquidity_removed",
-    "holder_increase", "holder_decrease", "holder_rank_entered",
-    "holder_rank_exited", "pool_initialized", "migrated", "token_transfer",
-  ];
+  const ruleTypes = state.marketCatalog?.rules || [];
   $("marketEventTypeFilter").innerHTML = `
     <option value="">${escapeHtml(t("allEventTypes"))}</option>
-    ${eventTypes.map((type) => `<option value="${type}">${escapeHtml(marketEventLabel(type))}</option>`).join("")}
+    ${ruleTypes.map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(localizedRuleLabel(rule.code))}</option>`).join("")}
   `;
-  $("marketEventTypeFilter").value = filters.eventType;
+  $("marketEventTypeFilter").value = filters.ruleType;
+  const monitorablePools = pools.filter((pool) => Number(pool.supports_event_parsing) === 1);
   const filteredPools = filters.chainKey
-    ? pools.filter((pool) => pool.chain_key === filters.chainKey)
-    : pools;
+    ? monitorablePools.filter((pool) => pool.chain_key === filters.chainKey)
+    : monitorablePools;
   $("marketEventPoolFilter").innerHTML = `
     <option value="">${escapeHtml(t("allPools"))}</option>
     ${filteredPools.map((pool) => `<option value="${pool.id}">${escapeHtml(marketChainName(pool.chain_key))} · ${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
@@ -4093,7 +4090,7 @@ async function loadMarketEvents(projectId = state.marketDetail?.project?.id, app
   }
   const filters = state.marketEventFilters;
   if (filters.chainKey) query.set("chain_key", filters.chainKey);
-  if (filters.eventType) query.set("event_type", filters.eventType);
+  if (filters.ruleType) query.set("rule_type", filters.ruleType);
   if (filters.poolId) query.set("pool_id", filters.poolId);
   if (filters.address) query.set("address", filters.address);
   const result = await api(`/api/market/projects/${projectId}/events?${query}`);
@@ -4257,7 +4254,7 @@ async function applyMarketEventFilters(event) {
   event.preventDefault();
   state.marketEventFilters = {
     chainKey: $("marketEventChainFilter").value,
-    eventType: $("marketEventTypeFilter").value,
+    ruleType: $("marketEventTypeFilter").value,
     poolId: $("marketEventPoolFilter").value,
     address: $("marketEventAddressFilter").value.trim(),
   };
