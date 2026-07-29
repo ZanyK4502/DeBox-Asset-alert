@@ -164,7 +164,7 @@ for (const key of translationKeys) {
 
 const i18nScript = html.indexOf('<script src="/static/i18n.js"></script>');
 const timeScript = html.indexOf('<script src="/static/time.js"></script>');
-const appScript = html.indexOf('<script src="/static/app.js"></script>');
+const appScript = html.search(/<script src="\/static\/app\.js(?:\?[^"]*)?"><\/script>/);
 assert.ok(
   i18nScript >= 0 && timeScript > i18nScript && appScript > timeScript,
   "i18n.js and time.js must load before app.js",
