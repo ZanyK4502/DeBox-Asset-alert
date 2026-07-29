@@ -361,11 +361,12 @@ func (s *Store) UpsertMarketAddressLabel(
 	params.DeBoxUserID = strings.TrimSpace(params.DeBoxUserID)
 	params.ChainKey = strings.ToLower(strings.TrimSpace(params.ChainKey))
 	params.LabelType = strings.ToLower(strings.TrimSpace(params.LabelType))
+	params.Label = strings.TrimSpace(params.Label)
 	if params.LabelType == "" {
 		params.LabelType = "custom"
 	}
 	address, err := normalizeMarketAddress(params.Address)
-	if err != nil || params.DeBoxUserID == "" || params.ChainKey == "" {
+	if err != nil || params.DeBoxUserID == "" || params.ChainKey == "" || params.Label == "" {
 		return MarketAddressLabel{}, ErrInvalidMarketAddressLabel
 	}
 	params.Address = address

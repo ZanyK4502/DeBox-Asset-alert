@@ -110,6 +110,11 @@ assert.ok(
     !htmlIDs.has("marketLabelTypeSelect"),
   "holder labels need a dedicated chain selector, a separate ranking filter, and no type field",
 );
+assert.match(
+  html,
+  /id="marketLabelInput"[^>]*\brequired\b/,
+  "holder label input must be required",
+);
 for (const filterID of [
   "marketEventChainFilter",
   "marketEventTypeFilter",

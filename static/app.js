@@ -3548,7 +3548,7 @@ function renderMarketHolders() {
       <span class="market-label-actions">
         <button type="button" data-edit-market-label="${label.id}">${escapeHtml(t("holderLabelEdit"))}</button>
         ${Number(label.excluded) ? `<button type="button" data-restore-market-label="${label.id}">${escapeHtml(t("holderLabelRestore"))}</button>` : ""}
-        ${label.label ? `<button type="button" data-clear-market-label="${label.id}">${escapeHtml(t("holderLabelClear"))}</button>` : ""}
+        ${label.label && !Number(label.excluded) ? `<button type="button" data-clear-market-label="${label.id}">${escapeHtml(t("holderLabelClear"))}</button>` : ""}
         <button type="button" data-delete-market-label="${label.id}">${escapeHtml(t("holderLabelDeleteSetting"))}</button>
       </span>
     </div>
@@ -4382,12 +4382,8 @@ async function restoreMarketLabel(labelId) {
 async function clearMarketLabel(labelId) {
   const label = marketLabelById(labelId);
   if (!label) return;
-  if (Number(label.excluded)) {
-    await updateMarketLabel(label, { label: "" });
-  } else {
-    await api(`/api/market/labels/${label.id}`, { method: "DELETE" });
-    await refreshMarketProject();
-  }
+  await api(`/api/market/labels/${label.id}`, { method: "DELETE" });
+  await refreshMarketProject();
   toast(t("holderLabelCleared"));
 }
 

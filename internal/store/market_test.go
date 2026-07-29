@@ -25,6 +25,24 @@ func TestNormalizeMarketAddress(t *testing.T) {
 	}
 }
 
+func TestUpsertMarketAddressLabelRequiresLabel(t *testing.T) {
+	t.Parallel()
+
+	_, err := (&Store{}).UpsertMarketAddressLabel(
+		context.Background(),
+		UpsertMarketAddressLabelParams{
+			DeBoxUserID:     "user-1",
+			MarketProjectID: 1,
+			ChainKey:        "bsc",
+			Address:         "0x1111111111111111111111111111111111111111",
+			Label:           "   ",
+		},
+	)
+	if !errors.Is(err, ErrInvalidMarketAddressLabel) {
+		t.Fatalf("empty label error = %v, want ErrInvalidMarketAddressLabel", err)
+	}
+}
+
 func TestNormalizeMarketRuleParamsUsesStableDefaults(t *testing.T) {
 	t.Parallel()
 
