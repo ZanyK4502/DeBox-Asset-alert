@@ -4236,6 +4236,13 @@ async function restoreMarketRule(ruleId) {
 
 async function createMarketCombination(event) {
   event.preventDefault();
+  const noteInput = $("marketCombinationNoteInput");
+  const note = noteInput.value.trim();
+  if (!note) {
+    toast(t("marketCombinationNoteRequired"));
+    noteInput.focus();
+    return;
+  }
   const members = [...document.querySelectorAll("[data-market-combination-member]:checked")]
     .map((checkbox) => ({
       source_type: "market",
@@ -4252,7 +4259,7 @@ async function createMarketCombination(event) {
   await api("/api/market/combinations", {
     method: "POST",
     body: JSON.stringify({
-      note: $("marketCombinationNoteInput").value.trim(),
+      note,
       cycle_type: "fixed",
       cycle_minutes: Number($("marketCombinationCycleInput").value),
       notification_chat_type: targetType,

@@ -115,6 +115,11 @@ assert.match(
   /id="marketLabelInput"[^>]*\brequired\b/,
   "holder label input must be required",
 );
+assert.match(
+  html,
+  /id="marketCombinationNoteInput"[^>]*\brequired\b/,
+  "market combination note input must be required",
+);
 assert.ok(
   !app.includes("data-clear-market-label") &&
     !app.includes("clearMarketLabel("),

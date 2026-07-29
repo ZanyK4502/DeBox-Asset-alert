@@ -22,9 +22,10 @@ const (
 )
 
 type fakeEntitlements struct {
-	plan              plans.Plan
-	err               error
-	createdRuleParams *store.CreateMarketRuleParams
+	plan                     plans.Plan
+	err                      error
+	createdRuleParams        *store.CreateMarketRuleParams
+	createdCombinationParams *store.CreateMarketCombinationParams
 }
 
 func (f fakeEntitlements) ActivePlan(context.Context, string) (plans.Plan, error) {
@@ -52,8 +53,45 @@ func (f fakeEntitlements) CreateMarketRule(_ context.Context, params store.Creat
 func (fakeEntitlements) RestoreMarketRule(context.Context, string, int64) (store.MarketRule, error) {
 	return store.MarketRule{}, errors.New("not used")
 }
-func (fakeEntitlements) CreateMarketCombination(context.Context, store.CreateMarketCombinationParams) (store.MarketCombinationRule, error) {
+func (f fakeEntitlements) CreateMarketCombination(_ context.Context, params store.CreateMarketCombinationParams) (store.MarketCombinationRule, error) {
+	if f.createdCombinationParams != nil {
+		*f.createdCombinationParams = params
+		return store.MarketCombinationRule{Note: params.Note}, nil
+	}
 	return store.MarketCombinationRule{}, errors.New("not used")
+}
+
+func TestCreateCombinationRequiresAndTrimsNote(t *testing.T) {
+	t.Parallel()
+
+	var captured store.CreateMarketCombinationParams
+	service := New(Dependencies{Entitlements: fakeEntitlements{
+		createdCombinationParams: &captured,
+	}})
+	firstRuleID, secondRuleID := int64(11), int64(12)
+	input := CreateCombinationInput{
+		Note:         "   ",
+		CycleMinutes: 15,
+		Members: []CreateCombinationMemberInput{
+			{SourceType: "market", MarketRuleID: &firstRuleID, RequiredTriggerCount: 1},
+			{SourceType: "market", MarketRuleID: &secondRuleID, RequiredTriggerCount: 1},
+		},
+	}
+	if _, err := service.CreateCombination(
+		context.Background(), "user", input,
+	); err == nil || !strings.Contains(err.Error(), "组合备注不能为空") {
+		t.Fatalf("blank combination note error = %v", err)
+	}
+	input.Note = "  放量上涨组合  "
+	combination, err := service.CreateCombination(
+		context.Background(), "user", input,
+	)
+	if err != nil {
+		t.Fatalf("CreateCombination() error = %v", err)
+	}
+	if captured.Note != "放量上涨组合" || combination.Note != captured.Note {
+		t.Fatalf("combination note = %q, captured = %q", combination.Note, captured.Note)
+	}
 }
 
 type fakeChain struct {

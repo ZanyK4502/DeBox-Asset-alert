@@ -1215,6 +1215,10 @@ func (s *Service) CreateCombination(
 	deboxUserID string,
 	input CreateCombinationInput,
 ) (store.MarketCombinationRule, error) {
+	note := strings.TrimSpace(input.Note)
+	if note == "" {
+		return store.MarketCombinationRule{}, errors.New("组合备注不能为空。")
+	}
 	chatType := strings.ToLower(strings.TrimSpace(input.NotificationChatType))
 	if chatType != "group" {
 		chatType = "private"
@@ -1236,7 +1240,7 @@ func (s *Service) CreateCombination(
 		ctx,
 		store.CreateMarketCombinationParams{
 			DeBoxUserID:          deboxUserID,
-			Note:                 strings.TrimSpace(input.Note),
+			Note:                 note,
 			CycleType:            strings.ToLower(strings.TrimSpace(input.CycleType)),
 			CycleMinutes:         input.CycleMinutes,
 			NotificationChatID:   chatID,
