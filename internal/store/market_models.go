@@ -288,6 +288,32 @@ type MarketEventFilter struct {
 	WalletAddress string
 }
 
+type MarketRuleEventHistory struct {
+	ID                     int64      `db:"id" json:"id"`
+	MarketRuleID           int64      `db:"market_rule_id" json:"market_rule_id"`
+	MarketEventID          int64      `db:"market_event_id" json:"market_event_id"`
+	RuleType               string     `db:"rule_type" json:"rule_type"`
+	ThresholdValue         string     `db:"threshold_value" json:"threshold_value"`
+	ThresholdUnit          string     `db:"threshold_unit" json:"threshold_unit"`
+	PreviousValue          *string    `db:"previous_value" json:"previous_value"`
+	CurrentValue           *string    `db:"current_value" json:"current_value"`
+	Note                   string     `db:"note" json:"note"`
+	NotificationStatus     string     `db:"notification_status" json:"notification_status"`
+	NotificationError      string     `db:"notification_error" json:"notification_error"`
+	NotificationSentAt     *time.Time `db:"notification_sent_at" json:"notification_sent_at"`
+	CreatedAt              time.Time  `db:"created_at" json:"created_at"`
+	MarketPoolID           *int64     `db:"market_pool_id" json:"market_pool_id"`
+	ChainKey               string     `db:"chain_key" json:"chain_key"`
+	EventType              string     `db:"event_type" json:"event_type"`
+	TransactionHash        *string    `db:"transaction_hash" json:"transaction_hash"`
+	WalletAddress          *string    `db:"wallet_address" json:"wallet_address"`
+	TokenAmount            *string    `db:"token_amount" json:"token_amount"`
+	USDValue               *string    `db:"usd_value" json:"usd_value"`
+	Source                 string     `db:"source" json:"source"`
+	OccurredAt             time.Time  `db:"occurred_at" json:"occurred_at"`
+	NotificationSuccessful bool       `db:"notification_successful" json:"notification_successful"`
+}
+
 type MarketRuleEvent struct {
 	ID                      int64           `db:"id" json:"id"`
 	MarketRuleID            int64           `db:"market_rule_id" json:"market_rule_id"`

@@ -38,6 +38,12 @@ type Repository interface {
 	ListMarketRules(context.Context, string, *int64) ([]store.MarketRule, error)
 	DeleteMarketRule(context.Context, int64, string) (bool, error)
 	ListMarketEvents(context.Context, int64, string, int64, int) ([]store.MarketEvent, error)
+	ListMarketRuleEventHistory(
+		context.Context,
+		int64,
+		string,
+		store.MarketEventFilter,
+	) ([]store.MarketRuleEventHistory, error)
 	ListMarketHolders(context.Context, int64, string, bool, int) ([]store.MarketHolder, error)
 	ListMarketAddressLabels(context.Context, int64, string) ([]store.MarketAddressLabel, error)
 	UpsertMarketAddressLabel(context.Context, store.UpsertMarketAddressLabelParams) (store.MarketAddressLabel, error)
@@ -1325,7 +1331,7 @@ func (s *Service) Events(
 	deboxUserID string,
 	projectID int64,
 	input EventFilterInput,
-) ([]store.MarketEvent, error) {
+) ([]store.MarketRuleEventHistory, error) {
 	if input.Limit == 0 {
 		input.Limit = 50
 	}
@@ -1353,30 +1359,18 @@ func (s *Service) Events(
 	if len(input.EventType) > 64 {
 		return nil, errors.New("事件类型筛选无效。")
 	}
-	if repository, ok := s.deps.Repository.(interface {
-		ListMarketEventsFiltered(
-			context.Context,
-			int64,
-			string,
-			store.MarketEventFilter,
-		) ([]store.MarketEvent, error)
-	}); ok {
-		return repository.ListMarketEventsFiltered(
-			ctx,
-			projectID,
-			deboxUserID,
-			store.MarketEventFilter{
-				BeforeID:      input.BeforeID,
-				Limit:         input.Limit,
-				ChainKey:      input.ChainKey,
-				EventType:     input.EventType,
-				MarketPoolID:  input.MarketPoolID,
-				WalletAddress: input.WalletAddress,
-			},
-		)
-	}
-	return s.deps.Repository.ListMarketEvents(
-		ctx, projectID, deboxUserID, input.BeforeID, input.Limit,
+	return s.deps.Repository.ListMarketRuleEventHistory(
+		ctx,
+		projectID,
+		deboxUserID,
+		store.MarketEventFilter{
+			BeforeID:      input.BeforeID,
+			Limit:         input.Limit,
+			ChainKey:      input.ChainKey,
+			EventType:     input.EventType,
+			MarketPoolID:  input.MarketPoolID,
+			WalletAddress: input.WalletAddress,
+		},
 	)
 }
 

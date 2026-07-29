@@ -107,6 +107,7 @@ type CreateMarketRuleEventParams struct {
 	Note               string
 	Details            json.RawMessage
 	NotificationStatus string
+	NotificationError  string
 }
 
 func (s *Store) CreateMarketRuleWithinQuota(
@@ -818,6 +819,70 @@ func (s *Store) ListMarketEventsFiltered(
 	return events, nil
 }
 
+func (s *Store) ListMarketRuleEventHistory(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+	filter MarketEventFilter,
+) ([]MarketRuleEventHistory, error) {
+	filter.Limit = clamp(filter.Limit, 1, 100)
+	filter.ChainKey = strings.ToLower(strings.TrimSpace(filter.ChainKey))
+	filter.EventType = strings.ToLower(strings.TrimSpace(filter.EventType))
+	filter.WalletAddress = strings.ToLower(strings.TrimSpace(filter.WalletAddress))
+	events, err := collectMany[MarketRuleEventHistory](ctx, s.db, `
+		SELECT
+			mre.id,
+			mre.market_rule_id,
+			mre.market_event_id,
+			mr.rule_type,
+			mr.threshold_value::text AS threshold_value,
+			mr.threshold_unit,
+			mre.previous_value,
+			mre.current_value,
+			mre.note,
+			mre.notification_status,
+			mre.notification_error,
+			mre.notification_sent_at,
+			mre.created_at,
+			me.market_pool_id,
+			me.chain_key,
+			me.event_type,
+			me.transaction_hash,
+			me.wallet_address,
+			me.token_amount::text AS token_amount,
+			me.usd_value::text AS usd_value,
+			me.source,
+			me.occurred_at,
+			(mre.notification_status = 'sent') AS notification_successful
+		FROM market_rule_events mre
+		JOIN market_rules mr ON mr.id = mre.market_rule_id
+		JOIN market_events me ON me.id = mre.market_event_id
+		WHERE mr.market_project_id = $1
+		  AND mr.debox_user_id = $2
+		  AND mre.created_at >= NOW() - INTERVAL '30 days'
+		  AND ($3::bigint = 0 OR mre.id < $3)
+		  AND ($4::text = '' OR me.chain_key = $4)
+		  AND ($5::text = '' OR me.event_type = $5)
+		  AND ($6::bigint = 0 OR me.market_pool_id = $6)
+		  AND ($7::text = '' OR me.wallet_address = $7)
+		ORDER BY mre.id DESC
+		LIMIT $8
+	`,
+		projectID,
+		strings.TrimSpace(deboxUserID),
+		filter.BeforeID,
+		filter.ChainKey,
+		filter.EventType,
+		filter.MarketPoolID,
+		filter.WalletAddress,
+		filter.Limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list market rule event history: %w", err)
+	}
+	return events, nil
+}
+
 func (s *Store) ListMarketEventsAfter(
 	ctx context.Context,
 	projectID int64,
@@ -973,9 +1038,10 @@ func (s *Store) CreateMarketRuleEvent(
 	value, err := collectOne[MarketRuleEvent](ctx, s.db, `
 		INSERT INTO market_rule_events (
 			market_rule_id, market_event_id, trigger_key,
-			previous_value, current_value, note, details, notification_status
+			previous_value, current_value, note, details,
+			notification_status, notification_error
 		)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
 		FROM market_rules mr
 		JOIN market_projects mp ON mp.id = mr.market_project_id
 		JOIN market_events me ON me.id = $2
@@ -1013,6 +1079,7 @@ func (s *Store) CreateMarketRuleEvent(
 		truncate(params.Note, 2000),
 		normalizedJSON(params.Details),
 		params.NotificationStatus,
+		truncate(params.NotificationError, 2000),
 	)
 	if err == nil {
 		return value, true, nil
@@ -1042,6 +1109,8 @@ func normalizeInitialMarketNotificationStatus(value string) string {
 		return "staged"
 	case "combined":
 		return "combined"
+	case "skipped":
+		return "skipped"
 	default:
 		return "pending"
 	}

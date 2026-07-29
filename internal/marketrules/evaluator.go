@@ -32,9 +32,15 @@ type Trigger struct {
 	OccurredAt    time.Time
 }
 
+type SuppressedTrigger struct {
+	Trigger
+	Reason string
+}
+
 type Evaluation struct {
-	State    json.RawMessage
-	Triggers []Trigger
+	State      json.RawMessage
+	Triggers   []Trigger
+	Suppressed []SuppressedTrigger
 }
 
 type EvaluationInput struct {
@@ -61,6 +67,7 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 	holders := holderIndex(input.Holders, input.Labels)
 
 	var triggers []Trigger
+	var suppressed []SuppressedTrigger
 	if isSnapshotRule(input.Rule.RuleType) {
 		trigger, active, pending, evaluated, err := evaluateSnapshotRule(
 			input.Rule,
@@ -97,7 +104,7 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 		state.ConditionActive = active
 		state.PendingCrossing = pending
 	} else {
-		eventTriggers, lastEventID, err := evaluateEventRule(
+		eventTriggers, suppressedTriggers, lastEventID, err := evaluateEventRule(
 			input.Rule,
 			input.Project,
 			snapshots,
@@ -110,13 +117,18 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 			return Evaluation{}, err
 		}
 		triggers = append(triggers, eventTriggers...)
+		suppressed = append(suppressed, suppressedTriggers...)
 		state.LastEventID = lastEventID
 	}
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return Evaluation{}, fmt.Errorf("encode market rule state: %w", err)
 	}
-	return Evaluation{State: encoded, Triggers: triggers}, nil
+	return Evaluation{
+		State:      encoded,
+		Triggers:   triggers,
+		Suppressed: suppressed,
+	}, nil
 }
 
 func evaluateProgressRule(
@@ -416,8 +428,9 @@ func evaluateEventRule(
 	holders map[string]store.MarketHolder,
 	lastEventID int64,
 	now time.Time,
-) ([]Trigger, int64, error) {
+) ([]Trigger, []SuppressedTrigger, int64, error) {
 	result := make([]Trigger, 0)
+	suppressed := make([]SuppressedTrigger, 0)
 	maxEventID := lastEventID
 	cooldownAvailable := !cooldownActive(rule, now)
 	for _, event := range events {
@@ -442,11 +455,11 @@ func evaluateEventRule(
 			event,
 			holders,
 		)
-		if !matched || !cooldownAvailable {
+		if !matched {
 			continue
 		}
 		eventCopy := event
-		result = append(result, Trigger{
+		trigger := Trigger{
 			Event:        &eventCopy,
 			EventType:    event.EventType,
 			EventKey:     event.EventKey,
@@ -454,12 +467,20 @@ func evaluateEventRule(
 			Note:         note,
 			Details:      details,
 			OccurredAt:   event.OccurredAt.UTC(),
-		})
+		}
+		if !cooldownAvailable {
+			suppressed = append(suppressed, SuppressedTrigger{
+				Trigger: trigger,
+				Reason:  "cooldown_active",
+			})
+			continue
+		}
+		result = append(result, trigger)
 		if rule.CooldownSeconds > 0 {
 			cooldownAvailable = false
 		}
 	}
-	return result, maxEventID, nil
+	return result, suppressed, maxEventID, nil
 }
 
 func eventCondition(

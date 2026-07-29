@@ -124,7 +124,7 @@ type MarketManagementService interface {
 		string,
 		int64,
 		marketview.EventFilterInput,
-	) ([]store.MarketEvent, error)
+	) ([]store.MarketRuleEventHistory, error)
 	SaveAddressLabel(context.Context, string, int64, marketview.AddressLabelInput) (store.MarketAddressLabel, error)
 	DeleteAddressLabel(context.Context, string, int64) error
 }

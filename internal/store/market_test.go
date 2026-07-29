@@ -59,6 +59,67 @@ func TestNormalizeMarketRuleParamsUsesStableDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeInitialMarketNotificationStatusAllowsAuditSkip(t *testing.T) {
+	t.Parallel()
+
+	if status := normalizeInitialMarketNotificationStatus(" skipped "); status != "skipped" {
+		t.Fatalf("normalized status = %q, want skipped", status)
+	}
+	if status := normalizeInitialMarketNotificationStatus("unknown"); status != "pending" {
+		t.Fatalf("fallback status = %q, want pending", status)
+	}
+}
+
+func TestListMarketRuleEventHistoryReturnsOnlyRuleAuditRows(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	now := time.Now().UTC()
+	currentValue := "750"
+	poolID := int64(4)
+	transactionHash := "0xabc"
+	tokenAmount := "100"
+	usdValue := "750"
+	mock.ExpectQuery("FROM market_rule_events mre").
+		WithArgs(int64(7), "user-7", int64(0), "bsc", "buy", int64(0), "", 50).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "market_rule_id", "market_event_id", "rule_type",
+			"threshold_value", "threshold_unit", "previous_value", "current_value",
+			"note", "notification_status", "notification_error",
+			"notification_sent_at", "created_at", "market_pool_id", "chain_key",
+			"event_type", "transaction_hash", "wallet_address", "token_amount",
+			"usd_value", "source", "occurred_at", "notification_successful",
+		}).AddRow(
+			int64(12), int64(8), int64(9), "market_large_buy",
+			"500", "usd", nil, &currentValue, "large buy", "sent", "",
+			&now, now, &poolID, "bsc", "buy", &transactionHash, nil, &tokenAmount,
+			&usdValue, "nodit", now, true,
+		))
+
+	events, err := newWithDB(mock).ListMarketRuleEventHistory(
+		context.Background(),
+		7,
+		"user-7",
+		MarketEventFilter{Limit: 50, ChainKey: " BSC ", EventType: " BUY "},
+	)
+	if err != nil {
+		t.Fatalf("ListMarketRuleEventHistory(): %v", err)
+	}
+	if len(events) != 1 || !events[0].NotificationSuccessful ||
+		events[0].RuleType != "market_large_buy" ||
+		events[0].CurrentValue == nil || *events[0].CurrentValue != "750" {
+		t.Fatalf("unexpected history rows: %#v", events)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestCreateMarketProjectWithinQuotaIsAtomic(t *testing.T) {
 	t.Parallel()
 

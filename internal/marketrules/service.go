@@ -433,6 +433,9 @@ func (service *Service) evaluateRule(
 			return createdCount, err
 		}
 	}
+	if err := service.persistSuppressedTriggers(ctx, rule, evaluation.Suppressed); err != nil {
+		return createdCount, err
+	}
 	_, err = service.repository.UpdateMarketRuleState(
 		ctx,
 		rule.ID,
@@ -637,7 +640,40 @@ func (service *Service) persistEvaluation(
 			return createdCount, err
 		}
 	}
+	if err := service.persistSuppressedTriggers(ctx, rule, evaluation.Suppressed); err != nil {
+		return createdCount, err
+	}
 	return createdCount, nil
+}
+
+func (service *Service) persistSuppressedTriggers(
+	ctx context.Context,
+	rule store.MarketRule,
+	suppressed []SuppressedTrigger,
+) error {
+	for _, item := range suppressed {
+		if item.Event == nil {
+			continue
+		}
+		_, _, err := service.repository.CreateMarketRuleEvent(
+			ctx,
+			store.CreateMarketRuleEventParams{
+				MarketRuleID:       rule.ID,
+				MarketEventID:      item.Event.ID,
+				TriggerKey:         item.EventKey,
+				PreviousValue:      item.PreviousValue,
+				CurrentValue:       item.CurrentValue,
+				Note:               item.Note,
+				Details:            item.Details,
+				NotificationStatus: "skipped",
+				NotificationError:  item.Reason,
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isHolderRule(ruleType string) bool {

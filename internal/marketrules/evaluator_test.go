@@ -348,6 +348,14 @@ func TestEvaluateEventCooldownLimitsOneTriggerPerBatch(t *testing.T) {
 	if len(evaluation.Triggers) != 1 || evaluation.Triggers[0].EventKey != "buy:1" {
 		t.Fatalf("triggers = %#v, want only first qualifying event", evaluation.Triggers)
 	}
+	if len(evaluation.Suppressed) != 1 ||
+		evaluation.Suppressed[0].EventKey != "buy:2" ||
+		evaluation.Suppressed[0].Reason != "cooldown_active" {
+		t.Fatalf(
+			"suppressed = %#v, want second qualifying event blocked by cooldown",
+			evaluation.Suppressed,
+		)
+	}
 	var state ruleState
 	if err := json.Unmarshal(evaluation.State, &state); err != nil {
 		t.Fatalf("decode state: %v", err)

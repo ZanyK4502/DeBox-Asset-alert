@@ -3601,6 +3601,28 @@ function renderMarketEventFilters() {
     : t("marketNoFilters");
 }
 
+function marketRuleEventValue(value, unit) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (unit === "usd") return marketMoney(value);
+  if (unit === "percent" || unit === "progress") return `${marketMoney(value, false)}%`;
+  if (unit === "ratio") return `${marketMoney(value, false)}×`;
+  const unitKey = unit === "count" ? "unitCount" : "unitToken";
+  return `${marketMoney(value, false)} ${t(unitKey)}`;
+}
+
+function marketRuleEventReason(event) {
+  if (event.notification_successful) return "";
+  if (event.notification_error === "cooldown_active") return t("marketEventReasonCooldown");
+  return t({
+    pending: "marketEventReasonPending",
+    sending: "marketEventReasonPending",
+    staged: "marketEventReasonStage",
+    combined: "marketEventReasonCombination",
+    failed: "marketEventReasonFailed",
+    skipped: "marketEventReasonSkipped",
+  }[event.notification_status] || "marketEventReasonPending");
+}
+
 function renderMarketEvents() {
   const list = $("marketEventsList");
   const pools = new Map((state.marketDetail?.pools || []).map((pool) => [pool.id, pool]));
@@ -3608,17 +3630,28 @@ function renderMarketEvents() {
     <div class="market-event-row">
       <div>
         <span class="market-event-title">
-          <strong>${escapeHtml(marketEventLabel(event.event_type))}</strong>
+          <strong>${escapeHtml(marketRuleName(marketRuleDefinition(event.rule_type)) || event.rule_type)}</strong>
           <span class="badge">${escapeHtml(marketChainName(event.chain_key))}</span>
+          <span class="market-notification-status ${event.notification_successful ? "notified" : "not-notified"}">
+            ${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}
+          </span>
         </span>
-        <span>${event.usd_value ? marketMoney(event.usd_value) : escapeHtml(event.token_amount || "-")} · ${escapeHtml(event.wallet_address ? shortAddress(event.wallet_address) : "-")}</span>
+        <span>
+          ${escapeHtml(marketEventLabel(event.event_type))}
+          ${event.current_value ? ` · ${escapeHtml(t("marketEventCurrentValue"))} ${escapeHtml(marketRuleEventValue(event.current_value, event.threshold_unit))}` : ""}
+          ${!["market_new_pool", "market_four_meme_migration"].includes(event.rule_type)
+            ? ` · ${escapeHtml(t("marketEventThreshold"))} ${escapeHtml(marketRuleEventValue(event.threshold_value, event.threshold_unit))}`
+            : ""}
+        </span>
+        ${event.note ? `<small>${escapeHtml(event.note)}</small>` : ""}
+        ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
         <small>${escapeHtml(event.market_pool_id && pools.get(event.market_pool_id)
           ? `${pools.get(event.market_pool_id).protocol} ${pools.get(event.market_pool_id).protocol_version} · ${pools.get(event.market_pool_id).token0_symbol}/${pools.get(event.market_pool_id).token1_symbol}`
-          : event.source || "-")}</small>
+          : event.wallet_address ? shortAddress(event.wallet_address) : event.source || "-")}</small>
       </div>
       <div>
         <time>${escapeHtml(marketDate(event.occurred_at))}</time>
-        <small>${escapeHtml(event.confirmed ? "✓" : "…")} ${escapeHtml(event.transaction_hash ? shortAddress(event.transaction_hash) : event.source || "")}</small>
+        <small>${escapeHtml(event.transaction_hash ? shortAddress(event.transaction_hash) : event.source || "")}</small>
       </div>
     </div>
   `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;

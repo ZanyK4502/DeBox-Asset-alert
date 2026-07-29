@@ -2775,6 +2775,26 @@ label.market-pool-card {
   text-align: right;
 }
 
+.market-notification-status {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.market-notification-status.notified {
+  color: var(--accent);
+}
+
+.market-notification-status.not-notified,
+.market-notification-reason {
+  color: var(--danger);
+}
+
 @media (max-width: 780px) {
   .market-guide,
   .market-metric-grid,
