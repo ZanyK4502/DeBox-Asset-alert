@@ -16,7 +16,7 @@ const marketProjectColumns = `
 	token_name, token_symbol, token_decimals,
 	total_supply_raw::text AS total_supply_raw,
 	status, pause_reason, four_meme_status, main_pool_id,
-	metadata, last_discovered_at, created_at, updated_at
+	metadata, last_discovered_at, frozen_at, created_at, updated_at
 `
 
 const marketPoolColumns = `
@@ -158,7 +158,7 @@ func (s *Store) CreateMarketProjectWithinQuota(
 		count, err := queryCount(ctx, tx, `
 			SELECT COUNT(*)
 			FROM market_projects
-			WHERE debox_user_id = $1 AND status <> 'archived'
+			WHERE debox_user_id = $1 AND status = 'active'
 		`, params.DeBoxUserID)
 		if err != nil {
 			return MarketProject{}, fmt.Errorf("count market projects: %w", err)
@@ -253,7 +253,7 @@ func (s *Store) CountMarketProjects(ctx context.Context, deboxUserID string) (in
 	return queryCount(ctx, s.db, `
 		SELECT COUNT(*)
 		FROM market_projects
-		WHERE debox_user_id = $1 AND status <> 'archived'
+		WHERE debox_user_id = $1 AND status = 'active'
 	`, deboxUserID)
 }
 
@@ -288,10 +288,13 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 		if project.Status == "active" {
 			return project, nil
 		}
+		if project.PauseReason == "subscription_expired" || project.FrozenAt != nil {
+			return MarketProject{}, ErrInvalidMarketStatus
+		}
 		count, err := queryCount(ctx, tx, `
 			SELECT COUNT(*)
 			FROM market_projects
-			WHERE debox_user_id = $1 AND status <> 'archived' AND id <> $2
+			WHERE debox_user_id = $1 AND status = 'active' AND id <> $2
 		`, deboxUserID, projectID)
 		if err != nil {
 			return MarketProject{}, fmt.Errorf("count active market projects: %w", err)
@@ -301,8 +304,11 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 		}
 		restored, err := collectOne[MarketProject](ctx, tx, `
 			UPDATE market_projects
-			SET status = 'active', pause_reason = '', updated_at = NOW()
+			SET status = 'active', pause_reason = '', frozen_at = NULL, updated_at = NOW()
 			WHERE id = $1 AND debox_user_id = $2
+			  AND NOT (
+				status = 'paused' AND pause_reason = 'subscription_expired'
+			  )
 			RETURNING `+marketProjectColumns,
 			projectID,
 			deboxUserID,
@@ -398,6 +404,9 @@ func (s *Store) ArchiveMarketProject(
 			    pause_reason = 'user_archived',
 			    updated_at = NOW()
 			WHERE id = $1 AND debox_user_id = $2
+			  AND NOT (
+				status = 'paused' AND pause_reason = 'subscription_expired'
+			  )
 			RETURNING `+marketProjectColumns,
 			projectID,
 			deboxUserID,
@@ -463,7 +472,9 @@ func (s *Store) DeleteArchivedMarketProject(
 		if err != nil {
 			return false, fmt.Errorf("lock archived market project for deletion: %w", err)
 		}
-		if project.Status != "archived" {
+		deletable := project.Status == "archived" ||
+			(project.Status == "paused" && project.PauseReason == "subscription_expired")
+		if !deletable {
 			return false, ErrMarketProjectNotArchived
 		}
 
@@ -480,7 +491,11 @@ func (s *Store) DeleteArchivedMarketProject(
 		}
 		command, err := tx.Exec(ctx, `
 			DELETE FROM market_projects
-			WHERE id = $1 AND debox_user_id = $2 AND status = 'archived'
+			WHERE id = $1 AND debox_user_id = $2
+			  AND (
+				status = 'archived'
+				OR (status = 'paused' AND pause_reason = 'subscription_expired')
+			  )
 		`, projectID, deboxUserID)
 		if err != nil {
 			return false, fmt.Errorf("delete archived market project: %w", err)
@@ -658,7 +673,8 @@ func linkMarketProjectPool(
 					OR mad.token_address = p.token1_address
 				  )
 			 )
-			WHERE mp.id = $1 AND mp.debox_user_id = $2 AND p.id = $3
+			WHERE mp.id = $1 AND mp.debox_user_id = $2
+			  AND mp.status = 'active' AND p.id = $3
 			FOR UPDATE OF mp
 		`, params.MarketProjectID, params.DeBoxUserID, params.MarketPoolID).Scan(
 		&projectChainID,
@@ -777,13 +793,24 @@ func (s *Store) ListMarketProjectPools(
 			p.pool_address, p.factory_address, p.factory_verified,
 			p.token0_address, p.token0_symbol, p.token0_decimals,
 			p.token1_address, p.token1_symbol, p.token1_decimals,
-			p.liquidity_usd::text AS liquidity_usd,
+			COALESCE(frozen_snapshot.liquidity_usd, p.liquidity_usd)::text
+				AS liquidity_usd,
 			p.supports_event_parsing, p.parser_adapter, p.verification_status,
 			p.metadata, p.first_seen_at, p.last_seen_at, p.created_at, p.updated_at
 		FROM market_project_pools mpp
 		JOIN market_projects mp ON mp.id = mpp.market_project_id
 		JOIN market_pools p ON p.id = mpp.market_pool_id
+		LEFT JOIN LATERAL (
+			SELECT ms.liquidity_usd
+			FROM market_snapshots ms
+			WHERE mp.frozen_at IS NOT NULL
+			  AND ms.market_pool_id = p.id
+			  AND ms.captured_at <= mp.frozen_at
+			ORDER BY ms.captured_at DESC, ms.id DESC
+			LIMIT 1
+		) frozen_snapshot ON TRUE
 		WHERE mpp.market_project_id = $1 AND mp.debox_user_id = $2
+		  AND (mp.frozen_at IS NULL OR mpp.created_at <= mp.frozen_at)
 		ORDER BY mpp.is_primary DESC, mpp.selected DESC, p.liquidity_usd DESC, p.id
 	`, projectID, deboxUserID)
 	if err != nil {
@@ -803,14 +830,25 @@ func (s *Store) ListMarketProjectPoolViews(
 			p.pool_address, p.factory_address, p.factory_verified,
 			p.token0_address, p.token0_symbol, p.token0_decimals,
 			p.token1_address, p.token1_symbol, p.token1_decimals,
-			p.liquidity_usd::text AS liquidity_usd,
+			COALESCE(frozen_snapshot.liquidity_usd, p.liquidity_usd)::text
+				AS liquidity_usd,
 			p.supports_event_parsing, p.parser_adapter, p.verification_status,
 			p.metadata, p.first_seen_at, p.last_seen_at, p.created_at, p.updated_at,
 			mpp.selected, mpp.is_primary, mpp.discovery_source
 		FROM market_project_pools mpp
 		JOIN market_projects mp ON mp.id = mpp.market_project_id
 		JOIN market_pools p ON p.id = mpp.market_pool_id
+		LEFT JOIN LATERAL (
+			SELECT ms.liquidity_usd
+			FROM market_snapshots ms
+			WHERE mp.frozen_at IS NOT NULL
+			  AND ms.market_pool_id = p.id
+			  AND ms.captured_at <= mp.frozen_at
+			ORDER BY ms.captured_at DESC, ms.id DESC
+			LIMIT 1
+		) frozen_snapshot ON TRUE
 		WHERE mpp.market_project_id = $1 AND mp.debox_user_id = $2
+		  AND (mp.frozen_at IS NULL OR mpp.created_at <= mp.frozen_at)
 		ORDER BY mpp.is_primary DESC, mpp.selected DESC, p.liquidity_usd DESC, p.id
 	`, projectID, deboxUserID)
 	if err != nil {

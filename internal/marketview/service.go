@@ -982,7 +982,7 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	if len(holderViews) == 0 {
+	if len(holderViews) == 0 && project.FrozenAt == nil {
 		holders, holderErr := s.deps.Repository.ListMarketHolders(
 			ctx, projectID, deboxUserID, true, 100,
 		)
@@ -1001,9 +1001,12 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	health, err := s.deps.Repository.ListMarketProviderHealth(ctx)
-	if err != nil {
-		return ProjectDetail{}, err
+	health := []store.MarketProviderHealth{}
+	if project.FrozenAt == nil {
+		health, err = s.deps.Repository.ListMarketProviderHealth(ctx)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
 	}
 	combinations := []store.MarketCombinationRule{}
 	if repository, ok := s.deps.Repository.(interface {
@@ -1038,6 +1041,18 @@ func (s *Service) Project(
 	)
 	if err != nil {
 		return ProjectDetail{}, err
+	}
+	if project.FrozenAt != nil {
+		snapshot = nil
+		for index := range snapshots {
+			if snapshots[index].ChainID == project.ChainID {
+				snapshot = &snapshots[index]
+				break
+			}
+		}
+		if snapshot == nil && len(snapshots) > 0 {
+			snapshot = &snapshots[0]
+		}
 	}
 	return ProjectDetail{
 		Project: *project, Asset: asset, Pools: pools,

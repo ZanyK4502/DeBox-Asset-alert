@@ -822,6 +822,7 @@ func (s *Store) ListLatestMarketProjectSnapshots(
 			)
 		 )
 		 AND mpp.selected = 1
+		 AND (mp.frozen_at IS NULL OR mpp.created_at <= mp.frozen_at)
 		JOIN market_snapshots ms
 		  ON ms.market_pool_id = mpp.market_pool_id
 		 AND ms.chain_id = mad.chain_id
@@ -829,6 +830,7 @@ func (s *Store) ListLatestMarketProjectSnapshots(
 		WHERE mpd.market_project_id = $1
 		  AND mp.debox_user_id = $2
 		  AND mpd.status <> 'removed'
+		  AND (mp.frozen_at IS NULL OR ms.captured_at <= mp.frozen_at)
 		ORDER BY
 			mpd.id,
 			(mpp.market_pool_id = mpd.default_market_pool_id) DESC,

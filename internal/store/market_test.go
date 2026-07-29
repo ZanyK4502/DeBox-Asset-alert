@@ -251,6 +251,41 @@ func TestDeleteArchivedMarketProjectRejectsActiveProject(t *testing.T) {
 	}
 }
 
+func TestDeleteArchivedMarketProjectDeletesExpiredFrozenProject(t *testing.T) {
+	t.Parallel()
+
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool(): %v", err)
+	}
+	defer mock.Close()
+
+	const userID = "expired-market-project-user"
+	const projectID int64 = 43
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT .* FROM market_projects").
+		WithArgs(projectID, userID).
+		WillReturnRows(marketProjectRowsForDelete(
+			projectID, userID, "paused", "subscription_expired",
+		))
+	mock.ExpectExec("DELETE FROM market_combination_rules").
+		WithArgs(projectID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM market_projects").
+		WithArgs(projectID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
+
+	if err := newWithDB(mock).DeleteArchivedMarketProject(
+		context.Background(), projectID, userID,
+	); err != nil {
+		t.Fatalf("DeleteArchivedMarketProject(): %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestDeletePausedMarketCombinationDeletesOwnedRule(t *testing.T) {
 	t.Parallel()
 
@@ -263,9 +298,9 @@ func TestDeletePausedMarketCombinationDeletesOwnedRule(t *testing.T) {
 	const userID = "delete-market-combination-user"
 	const combinationID int64 = 51
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT run_status").
+	mock.ExpectQuery("SELECT\\s+mcr.run_status").
 		WithArgs(combinationID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"run_status"}).AddRow("paused"))
+		WillReturnRows(pgxmock.NewRows([]string{"run_status", "frozen"}).AddRow("paused", false))
 	mock.ExpectExec("DELETE FROM market_combination_rules").
 		WithArgs(combinationID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
@@ -293,9 +328,9 @@ func TestDeletePausedMarketCombinationRejectsActiveRule(t *testing.T) {
 	const userID = "active-market-combination-user"
 	const combinationID int64 = 52
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT run_status").
+	mock.ExpectQuery("SELECT\\s+mcr.run_status").
 		WithArgs(combinationID, userID).
-		WillReturnRows(pgxmock.NewRows([]string{"run_status"}).AddRow("active"))
+		WillReturnRows(pgxmock.NewRows([]string{"run_status", "frozen"}).AddRow("active", false))
 	mock.ExpectRollback()
 
 	err = newWithDB(mock).DeletePausedMarketCombinationRule(
@@ -309,17 +344,32 @@ func TestDeletePausedMarketCombinationRejectsActiveRule(t *testing.T) {
 	}
 }
 
-func marketProjectRowsForDelete(projectID int64, userID, status string) *pgxmock.Rows {
+func marketProjectRowsForDelete(
+	projectID int64,
+	userID string,
+	status string,
+	pauseReasons ...string,
+) *pgxmock.Rows {
 	now := time.Now().UTC()
+	pauseReason := ""
+	var frozenAt *time.Time
+	if len(pauseReasons) > 0 {
+		pauseReason = pauseReasons[0]
+	}
+	if pauseReason == "subscription_expired" {
+		frozenAt = &now
+	}
 	return pgxmock.NewRows([]string{
 		"id", "debox_user_id", "market_asset_id", "chain_key", "chain_id",
 		"token_address", "token_name", "token_symbol", "token_decimals",
 		"total_supply_raw", "status", "pause_reason", "four_meme_status",
-		"main_pool_id", "metadata", "last_discovered_at", "created_at", "updated_at",
+		"main_pool_id", "metadata", "last_discovered_at", "frozen_at",
+		"created_at", "updated_at",
 	}).AddRow(
 		projectID, userID, nil, "bsc", int64(56),
 		"0x1111111111111111111111111111111111111111", "Token", "TKN", int32(18),
-		nil, status, "", "not_applicable", nil, []byte(`{}`), nil, now, now,
+		nil, status, pauseReason, "not_applicable", nil, []byte(`{}`), nil,
+		frozenAt, now, now,
 	)
 }
 
@@ -340,12 +390,13 @@ func TestListMarketProjectsIncludesCanonicalIdentityForDuplicateDetection(t *tes
 			"id", "debox_user_id", "market_asset_id", "chain_key", "chain_id",
 			"token_address", "token_name", "token_symbol", "token_decimals",
 			"total_supply_raw", "status", "pause_reason", "four_meme_status",
-			"main_pool_id", "metadata", "last_discovered_at", "created_at", "updated_at",
+			"main_pool_id", "metadata", "last_discovered_at", "frozen_at",
+			"created_at", "updated_at",
 			"identity_source", "canonical_asset_id",
 		}).AddRow(
 			int64(9), userID, nil, "bsc", int64(56),
 			"0x1111111111111111111111111111111111111111", "Token", "TKN", int32(18),
-			nil, "archived", "", "not_applicable", nil, []byte(`{}`), nil, now, now,
+			nil, "archived", "", "not_applicable", nil, []byte(`{}`), nil, nil, now, now,
 			"coingecko", "token-id",
 		))
 

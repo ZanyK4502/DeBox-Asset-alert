@@ -2139,6 +2139,15 @@ label.market-pool-card {
   opacity: 0.68;
 }
 
+.market-project-card.expired-frozen,
+.market-project-detail.expired-frozen {
+  filter: grayscale(0.72);
+}
+
+.market-project-card.expired-frozen {
+  opacity: 0.72;
+}
+
 .list-item-actions {
   display: flex;
   flex-wrap: wrap;

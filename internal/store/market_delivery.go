@@ -439,6 +439,14 @@ func (s *Store) ArchiveMarketCombinationRule(
 		    pause_reason = 'user_archived',
 		    updated_at = NOW()
 		WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM market_combination_rule_projects mcrp
+			JOIN market_projects mp ON mp.id = mcrp.market_project_id
+			WHERE mcrp.market_combination_rule_id = market_combination_rules.id
+			  AND mp.status = 'paused'
+			  AND mp.pause_reason = 'subscription_expired'
+		  )
 	`, combinationID, strings.TrimSpace(deboxUserID))
 	if err != nil {
 		return false, fmt.Errorf("archive market combination: %w", err)
@@ -453,12 +461,22 @@ func (s *Store) DeletePausedMarketCombinationRule(
 ) error {
 	_, err := withTxValue(ctx, s.db, func(tx DBTX) (bool, error) {
 		var runStatus string
+		var frozen bool
 		err := tx.QueryRow(ctx, `
-			SELECT run_status
-			FROM market_combination_rules
-			WHERE id = $1 AND debox_user_id = $2 AND enabled = 1
-			FOR UPDATE
-		`, combinationID, strings.TrimSpace(deboxUserID)).Scan(&runStatus)
+			SELECT
+				mcr.run_status,
+				EXISTS (
+					SELECT 1
+					FROM market_combination_rule_projects mcrp
+					JOIN market_projects mp ON mp.id = mcrp.market_project_id
+					WHERE mcrp.market_combination_rule_id = mcr.id
+					  AND mp.status = 'paused'
+					  AND mp.pause_reason = 'subscription_expired'
+				)
+			FROM market_combination_rules mcr
+			WHERE mcr.id = $1 AND mcr.debox_user_id = $2 AND mcr.enabled = 1
+			FOR UPDATE OF mcr
+		`, combinationID, strings.TrimSpace(deboxUserID)).Scan(&runStatus, &frozen)
 		if isNoRows(err) {
 			return false, ErrNotFound
 		}
@@ -470,6 +488,9 @@ func (s *Store) DeletePausedMarketCombinationRule(
 		}
 		if runStatus != "paused" {
 			return false, ErrMarketCombinationNotPaused
+		}
+		if frozen {
+			return false, ErrInvalidMarketStatus
 		}
 		command, err := tx.Exec(ctx, `
 			DELETE FROM market_combination_rules
@@ -517,6 +538,25 @@ func (s *Store) RestoreMarketCombinationWithinQuota(
 				"lock market combination: %w",
 				err,
 			)
+		}
+		var frozen bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM market_combination_rule_projects mcrp
+				JOIN market_projects mp ON mp.id = mcrp.market_project_id
+				WHERE mcrp.market_combination_rule_id = $1
+				  AND mp.status = 'paused'
+				  AND mp.pause_reason = 'subscription_expired'
+			)
+		`, combinationID).Scan(&frozen); err != nil {
+			return MarketCombinationRule{}, fmt.Errorf(
+				"check frozen market combination: %w",
+				err,
+			)
+		}
+		if frozen {
+			return MarketCombinationRule{}, ErrInvalidMarketStatus
 		}
 		members, err := listMarketCombinationMembers(ctx, tx, combinationID)
 		if err != nil {

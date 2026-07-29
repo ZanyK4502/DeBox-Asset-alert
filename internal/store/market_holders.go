@@ -211,6 +211,22 @@ func (s *Store) ListMarketHolderViews(
 	limit int,
 ) ([]MarketHolderView, error) {
 	limit = clamp(limit, 1, 500)
+	var frozenAt *time.Time
+	if err := s.db.QueryRow(ctx, `
+		SELECT frozen_at
+		FROM market_projects
+		WHERE id = $1 AND debox_user_id = $2
+	`, projectID, deboxUserID).Scan(&frozenAt); err != nil {
+		if isNoRows(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get market holder view cutoff: %w", err)
+	}
+	if frozenAt != nil {
+		return s.listFrozenMarketHolderViews(
+			ctx, projectID, deboxUserID, includeExcluded, limit, *frozenAt,
+		)
+	}
 	query := `
 		SELECT
 			mh.id, mh.market_asset_deployment_id,
@@ -268,6 +284,102 @@ func (s *Store) ListMarketHolderViews(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list market holder views: %w", err)
+	}
+	return values, nil
+}
+
+func (s *Store) listFrozenMarketHolderViews(
+	ctx context.Context,
+	projectID int64,
+	deboxUserID string,
+	includeExcluded bool,
+	limit int,
+	frozenAt time.Time,
+) ([]MarketHolderView, error) {
+	query := `
+		WITH ranked AS (
+			SELECT
+				mhs.*,
+				ROW_NUMBER() OVER (
+					PARTITION BY mhs.chain_id, mhs.token_address, mhs.holder_address
+					ORDER BY mhs.captured_at DESC, mhs.id DESC
+				) AS snapshot_rank,
+				LEAD(mhs.balance) OVER (
+					PARTITION BY mhs.chain_id, mhs.token_address, mhs.holder_address
+					ORDER BY mhs.captured_at DESC, mhs.id DESC
+				) AS previous_balance,
+				LEAD(mhs.rank) OVER (
+					PARTITION BY mhs.chain_id, mhs.token_address, mhs.holder_address
+					ORDER BY mhs.captured_at DESC, mhs.id DESC
+				) AS previous_rank
+			FROM market_holder_snapshots mhs
+			JOIN market_projects mp ON mp.id = $1
+			WHERE mp.debox_user_id = $2
+			  AND mhs.captured_at <= $4
+			  AND (
+				(mp.chain_id = mhs.chain_id AND mp.token_address = mhs.token_address)
+				OR EXISTS (
+					SELECT 1
+					FROM market_project_deployments mpd
+					JOIN market_asset_deployments mad
+					  ON mad.id = mpd.market_asset_deployment_id
+					WHERE mpd.market_project_id = mp.id
+					  AND mpd.status <> 'removed'
+					  AND mad.chain_id = mhs.chain_id
+					  AND mad.token_address = mhs.token_address
+				)
+			  )
+		)
+		SELECT
+			r.id, r.market_asset_deployment_id,
+			r.chain_key, r.chain_id, r.token_address, r.holder_address,
+			r.balance_raw::text AS balance_raw,
+			r.balance::text AS balance,
+			r.supply_percent::text AS supply_percent,
+			r.rank,
+			COALESCE(mh.address_kind, 'wallet') AS address_kind,
+			COALESCE(mal.excluded, 0) AS excluded,
+			CASE WHEN COALESCE(mal.excluded, 0) = 1 THEN mal.label ELSE '' END
+				AS exclusion_reason,
+			r.source,
+			r.captured_at AS first_seen_at,
+			r.captured_at AS last_seen_at,
+			r.captured_at AS updated_at,
+			r.previous_balance::text AS previous_balance,
+			r.previous_rank,
+			CASE
+				WHEN r.previous_rank IS NULL AND r.rank IS NOT NULL THEN 'entered'
+				WHEN r.previous_rank IS NOT NULL AND r.rank IS NULL THEN 'exited'
+				WHEN r.previous_balance IS NOT NULL AND r.balance > r.previous_balance
+					THEN 'increased'
+				WHEN r.previous_balance IS NOT NULL AND r.balance < r.previous_balance
+					THEN 'decreased'
+				ELSE 'unchanged'
+			END AS change_type
+		FROM ranked r
+		LEFT JOIN market_holders mh
+		  ON mh.chain_id = r.chain_id
+		 AND mh.token_address = r.token_address
+		 AND mh.holder_address = r.holder_address
+		LEFT JOIN market_address_labels mal
+		  ON mal.market_project_id = $1
+		 AND mal.debox_user_id = $2
+		 AND mal.chain_id = r.chain_id
+		 AND mal.address = r.holder_address
+		WHERE r.snapshot_rank = 1
+	`
+	if !includeExcluded {
+		query += " AND COALESCE(mal.excluded, 0) = 0"
+	}
+	query += `
+		ORDER BY r.chain_id, r.rank NULLS LAST, r.balance_raw DESC, r.holder_address
+		LIMIT $3
+	`
+	values, err := collectMany[MarketHolderView](
+		ctx, s.db, query, projectID, deboxUserID, limit, frozenAt.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list frozen market holder views: %w", err)
 	}
 	return values, nil
 }
@@ -384,6 +496,7 @@ func (s *Store) UpsertMarketAddressLabel(
 			  ON mad.id = mpd.market_asset_deployment_id
 			WHERE mp.id = $2
 			  AND mp.debox_user_id = $1
+			  AND mp.status = 'active'
 			  AND mad.chain_key = $3
 			UNION ALL
 			SELECT
@@ -393,6 +506,7 @@ func (s *Store) UpsertMarketAddressLabel(
 			FROM market_projects mp
 			WHERE mp.id = $2
 			  AND mp.debox_user_id = $1
+			  AND mp.status = 'active'
 			  AND mp.chain_key = $3
 			  AND NOT EXISTS (
 				SELECT 1
@@ -460,8 +574,11 @@ func (s *Store) DeleteMarketAddressLabel(
 	deboxUserID string,
 ) (bool, error) {
 	tag, err := s.db.Exec(ctx, `
-		DELETE FROM market_address_labels
-		WHERE id = $1 AND debox_user_id = $2
+		DELETE FROM market_address_labels mal
+		USING market_projects mp
+		WHERE mal.id = $1 AND mal.debox_user_id = $2
+		  AND mp.id = mal.market_project_id
+		  AND mp.status = 'active'
 	`, labelID, deboxUserID)
 	if err != nil {
 		return false, fmt.Errorf("delete market address label: %w", err)

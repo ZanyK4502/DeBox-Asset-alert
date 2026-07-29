@@ -319,6 +319,7 @@ func pauseExpiredUserResources(
 		UPDATE market_projects
 		SET status = 'paused',
 		    pause_reason = 'subscription_expired',
+		    frozen_at = COALESCE(frozen_at, NOW()),
 		    updated_at = NOW()
 		WHERE debox_user_id = $1 AND status = 'active'
 	`, deboxUserID); err != nil {

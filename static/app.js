@@ -2811,6 +2811,18 @@ function marketChainName(chainKey) {
   return state.chains.find((chain) => chain.key === chainKey)?.name || chainKey;
 }
 
+function marketProjectIsExpiredFrozen(project = state.marketDetail?.project) {
+  return project?.status === "paused"
+    && project?.pause_reason === "subscription_expired"
+    && Boolean(project?.frozen_at);
+}
+
+function marketProjectStatusLabel(project) {
+  return t(marketProjectIsExpiredFrozen(project)
+    ? "marketProjectStatusExpiredFrozen"
+    : `marketProjectStatus${marketStatusSuffix(project?.status)}`);
+}
+
 function renderMarketProjects() {
   const list = $("marketProjectsList");
   if (!state.deboxUserId) {
@@ -2823,13 +2835,13 @@ function renderMarketProjects() {
     return;
   }
   list.innerHTML = projects.map((project) => `
-    <button class="market-project-card${project.status === "archived" ? " archived" : ""}" type="button" data-market-project="${project.id}">
+    <button class="market-project-card${project.status === "archived" ? " archived" : ""}${marketProjectIsExpiredFrozen(project) ? " expired-frozen" : ""}" type="button" data-market-project="${project.id}">
       <div>
         <strong>${escapeHtml(project.token_name || project.token_symbol || "-")} (${escapeHtml(project.token_symbol || "-")})</strong>
         <span>${escapeHtml(shortAddress(project.token_address))}</span>
       </div>
       <div>
-        <span class="badge">${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(project.status)}`))}</span>
+        <span class="badge">${escapeHtml(marketProjectStatusLabel(project))}</span>
         <small>${escapeHtml(t("marketOpenProject"))} →</small>
       </div>
     </button>
@@ -2848,6 +2860,8 @@ function renderMarketDetail() {
   }
   wrap.hidden = false;
   const project = detail.project;
+  const frozen = marketProjectIsExpiredFrozen(project);
+  wrap.classList.toggle("expired-frozen", frozen);
   const asset = detail.asset || {};
   const deployments = marketDetailDeployments();
   const chainNames = deployments.map((deployment) => marketChainName(deployment.chain_key));
@@ -2864,13 +2878,14 @@ function renderMarketDetail() {
         }))}</span>
       </div>
     </div>
-    <span class="badge">${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(project.status)}`))}</span>
+    <span class="badge">${escapeHtml(marketProjectStatusLabel(project))}</span>
   `;
+  $("archiveMarketProjectBtn").hidden = frozen;
   $("archiveMarketProjectBtn").textContent = t(
     project.status === "archived" ? "restoreMarketProject" : "archiveMarketProject",
   );
   $("archiveMarketProjectBtn").classList.toggle("danger", project.status !== "archived");
-  $("deleteMarketProjectBtn").hidden = project.status !== "archived";
+  $("deleteMarketProjectBtn").hidden = project.status !== "archived" && !frozen;
   const snapshots = detail.snapshots?.length
     ? detail.snapshots
     : (detail.latest_snapshot ? [detail.latest_snapshot] : []);
@@ -2895,7 +2910,9 @@ function renderMarketDetail() {
     (item) => !chainKeys.size || !item.chain_key || chainKeys.has(item.chain_key),
   );
   const degraded = providerHealth.some((item) => item.status !== "healthy");
-  const providerStatusKey = providerHealth.length
+  const providerStatusKey = frozen
+    ? "marketProviderExpiredFrozen"
+    : providerHealth.length
     ? (degraded ? "marketProviderDegraded" : "marketProviderHealthy")
     : "marketProviderPending";
   $("marketProviderStatus").textContent = t(providerStatusKey);
@@ -2966,6 +2983,7 @@ function chainExplorerAddress(chainKey, address) {
 function renderMarketOverview() {
   const detail = state.marketDetail;
   if (!detail) return;
+  const frozen = marketProjectIsExpiredFrozen(detail.project);
   const deployments = marketDetailDeployments();
   $("marketOverviewContracts").innerHTML = deployments.map((deployment) => `
     <div class="market-contract-row">
@@ -2974,7 +2992,7 @@ function renderMarketOverview() {
         <span><strong>${escapeHtml(marketChainName(deployment.chain_key))}</strong><small>${escapeHtml(t(`marketProjectStatus${marketStatusSuffix(deployment.status || "active")}`))}</small></span>
       </span>
       <code title="${escapeHtml(deployment.token_address)}">${escapeHtml(deployment.token_address)}</code>
-      <span class="market-inline-actions">
+      <span class="market-inline-actions"${frozen ? " hidden" : ""}>
         <button class="secondary compact" type="button" data-copy-market-address="${escapeHtml(deployment.token_address)}">${escapeHtml(t("copy"))}</button>
         <a class="secondary compact button-link" href="${escapeHtml(chainExplorerAddress(deployment.chain_key, deployment.token_address))}" target="_blank" rel="noopener">${escapeHtml(t("viewOnExplorer"))}</a>
       </span>
@@ -2986,6 +3004,7 @@ function renderMarketOverview() {
       toast(t("copied"));
     }));
   });
+  $("openMarketRulesTabBtn").hidden = frozen;
 
   const snapshots = new Map((detail.snapshots || []).map((snapshot) => [snapshot.chain_key, snapshot]));
   $("marketOverviewChains").innerHTML = deployments.map((deployment) => {
@@ -3131,6 +3150,16 @@ function renderMarketRuleEditor() {
     ${pools.map((pool) => `<option value="${pool.id}">${escapeHtml(marketChainName(pool.chain_key))} · ${escapeHtml(pool.protocol)} ${escapeHtml(pool.protocol_version)} · ${escapeHtml(pool.token0_symbol)}/${escapeHtml(pool.token1_symbol)}</option>`).join("")}
   `;
   const editable = state.marketDetail?.project?.status === "active";
+  const frozen = marketProjectIsExpiredFrozen();
+  document.querySelector(".market-detail-goals").hidden = frozen;
+  $("marketDetailGoalHint").hidden = frozen;
+  document.querySelector(".market-rule-section-head").hidden = frozen;
+  $("marketRuleForm").hidden = frozen;
+  document.querySelector("#marketCombinationRulePanel > .panel-intro").hidden = frozen;
+  $("marketCombinationEntitlementNotice").hidden = frozen
+    ? true
+    : currentPlan()?.code === "professional";
+  $("marketCombinationForm").hidden = frozen;
   $("marketRuleForm").querySelectorAll("input, select, button").forEach((control) => {
     control.disabled = !editable || !definition?.allowed;
   });
@@ -3166,7 +3195,7 @@ function renderMarketRuleMode() {
 function renderMarketCombinationEditor() {
   const rules = (state.marketDetail?.rules || []).filter((rule) => Number(rule.enabled) === 1);
   const professional = currentPlan()?.code === "professional";
-  $("marketCombinationEntitlementNotice").hidden = professional;
+  $("marketCombinationEntitlementNotice").hidden = professional || marketProjectIsExpiredFrozen();
   $("marketCombinationMemberOptions").innerHTML = rules.length ? rules.map((rule) => `
     <label class="market-combination-member-option">
       <input type="checkbox" value="${rule.id}" data-market-combination-member />
@@ -3451,6 +3480,7 @@ function updateMarketDeliveryFields() {
 function renderMarketRules() {
   const rules = state.marketDetail?.rules || [];
   const projectActive = state.marketDetail?.project?.status === "active";
+  const frozen = marketProjectIsExpiredFrozen();
   $("marketRulesList").innerHTML = rules.length ? rules.map((rule) => {
     const definition = marketRuleDefinition(rule.rule_type);
     const active = Number(rule.enabled) === 1 && rule.run_status === "active";
@@ -3462,7 +3492,7 @@ function renderMarketRules() {
           <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${rule.pause_reason ? ` · ${escapeHtml(rule.pause_reason)}` : ""}</small>
           <small>${escapeHtml(rule.last_triggered_at ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) }) : t("marketNotTriggeredYet"))}</small>
         </div>
-        <div class="list-item-actions">
+        <div class="list-item-actions"${frozen ? " hidden" : ""}>
           ${active || !projectActive ? "" : `<button type="button" class="secondary compact" data-restore-market-rule="${rule.id}">${escapeHtml(t("restoreMonitor"))}</button>`}
           <button type="button" class="secondary compact danger" data-delete-market-rule="${rule.id}">${escapeHtml(t("delete"))}</button>
         </div>
@@ -3480,6 +3510,7 @@ function renderMarketRules() {
 function renderMarketCombinations() {
   const combinations = state.marketDetail?.combinations || [];
   const projectActive = state.marketDetail?.project?.status === "active";
+  const frozen = marketProjectIsExpiredFrozen();
   $("marketCombinationsList").innerHTML = combinations.length
     ? combinations.map((combination) => {
       const active = marketCombinationIsActive(combination);
@@ -3497,7 +3528,7 @@ function renderMarketCombinations() {
             <small>${escapeHtml(t("marketCombinationCycle", { minutes: combination.cycle_minutes }))}</small>
             <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${combination.pause_reason ? ` · ${escapeHtml(combination.pause_reason)}` : ""}</small>
           </div>
-          <div class="list-item-actions">
+          <div class="list-item-actions"${frozen ? " hidden" : ""}>
             ${!active && projectActive ? `<button type="button" class="secondary compact" data-restore-market-combination="${combination.id}">${escapeHtml(t("restoreMonitor"))}</button>` : ""}
             ${active ? `<button type="button" class="secondary compact danger" data-delete-market-combination="${combination.id}">${escapeHtml(t("pause"))}</button>` : ""}
             ${!active ? `<button type="button" class="secondary compact danger" data-permanently-delete-market-combination="${combination.id}">${escapeHtml(t("delete"))}</button>` : ""}
@@ -3523,6 +3554,7 @@ function renderMarketCombinations() {
 function renderMarketHolders() {
   const detail = state.marketDetail;
   if (!detail) return;
+  const frozen = marketProjectIsExpiredFrozen(detail.project);
   const deployments = marketDetailDeployments();
   const availableChains = new Set(deployments.map((deployment) => deployment.chain_key));
   if (!availableChains.has(state.marketLabelChain)) {
@@ -3544,6 +3576,8 @@ function renderMarketHolders() {
   $("marketLabelForm").querySelectorAll("input, select, button").forEach((control) => {
     control.disabled = detail.project?.status !== "active";
   });
+  document.querySelector("#marketDetailHoldersPanel .market-advanced-card").hidden = frozen;
+  $("marketLabelsList").hidden = frozen;
   $("marketLabelsList").innerHTML = (detail.labels || []).map((label) => `
     <div class="market-label-chip">
       <span>
@@ -3602,6 +3636,7 @@ function renderMarketHolders() {
 
 function renderMarketEventFilters() {
   const filters = state.marketEventFilters;
+  const frozen = marketProjectIsExpiredFrozen();
   const deployments = marketDetailDeployments();
   const pools = state.marketDetail?.pools || [];
   $("marketEventChainFilter").innerHTML = `
@@ -3629,6 +3664,9 @@ function renderMarketEventFilters() {
   $("marketEventFilterStatus").textContent = activeCount
     ? t("marketFiltersApplied", { count: activeCount })
     : t("marketNoFilters");
+  $("marketEventFiltersForm").hidden = frozen;
+  $("marketEventFilterStatus").hidden = frozen;
+  $("refreshMarketEventsBtn").hidden = frozen;
 }
 
 function marketRuleEventValue(value, unit) {
@@ -3691,7 +3729,8 @@ function renderMarketEvents() {
       </div>
     </div>
   `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;
-  $("loadMoreMarketEventsBtn").hidden = !state.marketEventsNextBeforeId;
+  $("loadMoreMarketEventsBtn").hidden = marketProjectIsExpiredFrozen()
+    || !state.marketEventsNextBeforeId;
 }
 
 async function loadMarketContext() {
@@ -4113,6 +4152,14 @@ async function openMarketProject(projectId) {
 }
 
 async function loadMarketProjectExtras(projectId) {
+  if (marketProjectIsExpiredFrozen()) {
+    await loadMarketEvents(projectId);
+    state.marketRecommendations = [];
+    state.marketRecommendationUpdatedAt = "";
+    state.marketRecommendationError = "";
+    renderMarketDetail();
+    return;
+  }
   const [recommendations] = await Promise.all([
     api(`/api/market/projects/${projectId}/recommendations`),
     loadMarketEvents(projectId),
@@ -4169,7 +4216,7 @@ async function archiveMarketProject() {
 
 async function deleteMarketProject() {
   const project = state.marketDetail?.project;
-  if (!project?.id || project.status !== "archived") return;
+  if (!project?.id || (project.status !== "archived" && !marketProjectIsExpiredFrozen(project))) return;
   if (!confirm(t("deleteMarketProjectConfirm"))) return;
   await api(`/api/market/projects/${project.id}/permanent`, { method: "DELETE" });
   state.marketDetail = null;

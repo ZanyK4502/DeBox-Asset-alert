@@ -161,7 +161,7 @@ func (s *Store) CreateMarketRuleWithinQuota(
 			}
 			return MarketRule{}, fmt.Errorf("lock market project: %w", err)
 		}
-		if projectStatus == "archived" {
+		if projectStatus != "active" {
 			return MarketRule{}, ErrInvalidMarketStatus
 		}
 		if err := validateMarketRuleScopes(ctx, tx, params, policy); err != nil {
@@ -456,8 +456,13 @@ func (s *Store) DeleteMarketRule(
 	deboxUserID string,
 ) (bool, error) {
 	tag, err := s.db.Exec(ctx, `
-		DELETE FROM market_rules
-		WHERE id = $1 AND debox_user_id = $2 AND rule_scope = 'standalone'
+		DELETE FROM market_rules mr
+		USING market_projects mp
+		WHERE mr.id = $1 AND mr.debox_user_id = $2
+		  AND mr.rule_scope = 'standalone'
+		  AND mp.id = mr.market_project_id
+		  AND mp.status <> 'paused'
+		  AND mp.pause_reason <> 'subscription_expired'
 	`, ruleID, deboxUserID)
 	if err != nil {
 		return false, fmt.Errorf("delete market rule: %w", err)
@@ -492,6 +497,20 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		}
 		if rule.Enabled != 1 || rule.RuleScope != "standalone" {
 			return MarketRule{}, ErrNotFound
+		}
+		var projectFrozen bool
+		if err := tx.QueryRow(ctx, `
+			SELECT status = 'paused' AND pause_reason = 'subscription_expired'
+			FROM market_projects
+			WHERE id = $1 AND debox_user_id = $2
+		`, rule.MarketProjectID, deboxUserID).Scan(&projectFrozen); err != nil {
+			if isNoRows(err) {
+				return MarketRule{}, ErrNotFound
+			}
+			return MarketRule{}, fmt.Errorf("check frozen market project: %w", err)
+		}
+		if projectFrozen {
+			return MarketRule{}, ErrInvalidMarketStatus
 		}
 		if !policy.allowsMarketRuleType(rule.RuleType) {
 			return MarketRule{}, ErrMarketRuleTypeDenied
@@ -882,9 +901,11 @@ func (s *Store) ListMarketRuleEventHistory(
 		FROM market_rule_events mre
 		JOIN market_rules mr ON mr.id = mre.market_rule_id
 		JOIN market_events me ON me.id = mre.market_event_id
+		JOIN market_projects mp ON mp.id = mr.market_project_id
 		WHERE mr.market_project_id = $1
 		  AND mr.debox_user_id = $2
-		  AND mre.created_at >= NOW() - INTERVAL '30 days'
+		  AND mre.created_at >= COALESCE(mp.frozen_at, NOW()) - INTERVAL '30 days'
+		  AND (mp.frozen_at IS NULL OR mre.created_at <= mp.frozen_at)
 		  AND ($3::bigint = 0 OR mre.id < $3)
 		  AND ($4::text = '' OR me.chain_key = $4)
 		  AND ($5::text = '' OR mr.rule_type = $5)

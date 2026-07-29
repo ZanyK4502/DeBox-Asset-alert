@@ -135,6 +135,7 @@ type MarketProject struct {
 	MainPoolID                *int64          `db:"main_pool_id" json:"main_pool_id"`
 	Metadata                  json.RawMessage `db:"metadata" json:"metadata"`
 	LastDiscoveredAt          *time.Time      `db:"last_discovered_at" json:"last_discovered_at"`
+	FrozenAt                  *time.Time      `db:"frozen_at" json:"frozen_at,omitempty"`
 	CreatedAt                 time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt                 time.Time       `db:"updated_at" json:"updated_at"`
 }
