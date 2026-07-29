@@ -3073,13 +3073,7 @@ function renderMarketProjectPools() {
         ${supported && editable ? `
           <div class="market-pool-actions">
             ${!primary ? `<button type="button" class="secondary compact" data-market-toggle-pool="${pool.id}" data-selected="${selected}">${escapeHtml(t(selected ? "marketStopMonitoringPool" : "marketAddMonitoringPool"))}</button>` : ""}
-            ${!primary ? `
-              <details class="market-pool-advanced">
-                <summary>${escapeHtml(t("advancedManagement"))}</summary>
-                <p>${escapeHtml(t("marketDefaultQuotePoolHint"))}</p>
-                <button type="button" class="secondary compact" data-market-primary="${pool.id}">${escapeHtml(t("marketSetDefaultQuotePool"))}</button>
-              </details>
-            ` : ""}
+            ${!primary ? `<button type="button" class="secondary compact" data-market-primary="${pool.id}">${escapeHtml(t("marketSetDefaultQuotePool"))}</button>` : ""}
           </div>
         ` : ""}
         ${!supported ? `<p class="market-pool-explanation">${escapeHtml(t("marketPoolQuotesExplanation"))}</p>` : ""}
