@@ -1708,6 +1708,10 @@ select:focus {
   max-width: 760px;
 }
 
+#marketAssetSearchStatus {
+  margin-top: 12px;
+}
+
 .market-search-input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
