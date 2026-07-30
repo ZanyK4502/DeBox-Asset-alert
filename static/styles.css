@@ -1041,6 +1041,13 @@ select:focus {
     row-gap: 18px;
   }
 
+  #ruleForm > label,
+  #ruleForm > .form-grid-subset > label,
+  .combination-member-grid > label {
+    align-self: start;
+    align-content: start;
+  }
+
   #ruleForm > .form-grid-subset,
   #ruleForm > .notice,
   #ruleForm > .form-actions {
