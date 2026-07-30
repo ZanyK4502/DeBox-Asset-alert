@@ -339,6 +339,23 @@ button:disabled {
   opacity: 0.55;
 }
 
+button.is-refreshing {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+button.is-refreshing::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: market-button-spin 700ms linear infinite;
+}
+
 #marketVerifyAndDiscoverBtn.is-loading,
 #createMarketProjectBtn.is-loading {
   display: inline-flex;

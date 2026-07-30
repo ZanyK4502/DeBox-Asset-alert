@@ -509,6 +509,38 @@ function guardAsync(handler) {
   };
 }
 
+async function runManualRefresh(buttonId, handler) {
+  const button = $(buttonId);
+  if (!button || button.dataset.refreshLoading === "true") return;
+  const originalI18n = button.dataset.i18n || "";
+  const originalText = button.textContent;
+  const originallyDisabled = button.disabled;
+  button.dataset.refreshLoading = "true";
+  button.classList.add("is-refreshing");
+  button.setAttribute("aria-busy", "true");
+  button.disabled = true;
+  button.dataset.i18n = "refreshing";
+  button.textContent = t("refreshing");
+  try {
+    const refreshed = await handler();
+    if (refreshed !== false) toast(t("refreshSuccess"));
+  } catch (error) {
+    toast(localizedApiError(error?.message));
+  } finally {
+    delete button.dataset.refreshLoading;
+    button.classList.remove("is-refreshing");
+    button.setAttribute("aria-busy", "false");
+    button.disabled = originallyDisabled;
+    if (originalI18n) {
+      button.dataset.i18n = originalI18n;
+      button.textContent = t(originalI18n);
+    } else {
+      delete button.dataset.i18n;
+      button.textContent = originalText;
+    }
+  }
+}
+
 function walletProvider() {
   return window.deboxWallet || window.ethereum || null;
 }
@@ -1431,8 +1463,9 @@ function renderAggregateEvents({ resetScroll = false } = {}) {
 }
 
 async function loadAggregateEvents({ append = false } = {}) {
-  if (!state.deboxUserId || state.aggregateLoading || state.aggregateLoadingMore) return;
-  if (append && (!state.aggregateHasMore || !state.aggregateNextBeforeId)) return;
+  if (!state.deboxUserId || state.aggregateLoading || state.aggregateLoadingMore) return false;
+  if (append && (!state.aggregateHasMore || !state.aggregateNextBeforeId)) return false;
+  let loaded = false;
   if (append) {
     state.aggregateLoadingMore = true;
   } else {
@@ -1460,6 +1493,7 @@ async function loadAggregateEvents({ append = false } = {}) {
     state.aggregateHasMore = Boolean(page.has_more);
     state.aggregateNextBeforeId = page.next_before_id || null;
     state.aggregateLoadError = "";
+    loaded = true;
   } catch (error) {
     state.aggregateLoadError = localizedApiError(error.message);
     if (!append) {
@@ -1473,6 +1507,7 @@ async function loadAggregateEvents({ append = false } = {}) {
     state.aggregateLoadingMore = false;
     renderAggregateEvents({ resetScroll: !append });
   }
+  return loaded;
 }
 
 function fillSummaryForm() {
@@ -2019,7 +2054,7 @@ async function toggleWalletConnection() {
 }
 
 async function refreshAccount() {
-  if (!state.deboxUserId) return;
+  if (!state.deboxUserId) return false;
   const [current, combinations] = await Promise.all([
     api("/api/subscription/current"),
     api("/api/combination-rules"),
@@ -2040,6 +2075,7 @@ async function refreshAccount() {
     loadAggregateEvents(),
     loadMarketContext(),
   ]);
+  return true;
 }
 
 async function loadPaymentConfig() {
@@ -3720,7 +3756,7 @@ async function refreshMarketRecommendations(mode) {
     : marketDetailRecommendationInput();
   if (!deployments.length) {
     toast(t("marketNotLoaded"));
-    return;
+    return false;
   }
   if (wizard) {
     state.marketWizard.recommendationLoading = true;
@@ -3748,6 +3784,7 @@ async function refreshMarketRecommendations(mode) {
       state.marketRecommendationUpdatedAt = result.generated_at || new Date().toISOString();
       state.marketRecommendationError = "";
     }
+    return true;
   } catch (_) {
     if (wizard) {
       state.marketWizard.recommendationError = "refresh_failed";
@@ -3761,6 +3798,7 @@ async function refreshMarketRecommendations(mode) {
       }
     }
     toast(t("recommendationRefreshFailed"));
+    return false;
   } finally {
     if (wizard) {
       state.marketWizard.recommendationLoading = false;
@@ -4045,7 +4083,7 @@ function renderMarketEvents() {
 async function loadMarketContext() {
   if (!state.deboxUserId) {
     renderMarket();
-    return;
+    return false;
   }
   const [catalog, projects] = await Promise.all([
     api("/api/market/catalog"),
@@ -4054,6 +4092,7 @@ async function loadMarketContext() {
   state.marketCatalog = catalog;
   state.marketProjects = projects.projects || [];
   renderMarket();
+  return true;
 }
 
 function setMarketWizardMode(mode) {
@@ -4480,7 +4519,7 @@ async function loadMarketProjectExtras(projectId) {
 }
 
 async function loadMarketEvents(projectId = state.marketDetail?.project?.id, append = false) {
-  if (!projectId) return;
+  if (!projectId) return false;
   const query = new URLSearchParams({ limit: "50" });
   if (append && state.marketEventsNextBeforeId) {
     query.set("before_id", state.marketEventsNextBeforeId);
@@ -4496,6 +4535,7 @@ async function loadMarketEvents(projectId = state.marketDetail?.project?.id, app
     : (result.events || []);
   state.marketEventsNextBeforeId = result.next_before_id || null;
   renderMarketEvents();
+  return true;
 }
 
 async function refreshMarketProject() {
@@ -4818,8 +4858,18 @@ function bindEvents() {
     });
   });
   $("deletePausedRulesBtn").addEventListener("click", guardAsync(deletePausedRules));
-  $("refreshRulesBtn").addEventListener("click", guardAsync(refreshAccount));
-  $("refreshAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents()));
+  $("refreshRulesBtn").addEventListener(
+    "click",
+    () => runManualRefresh("refreshRulesBtn", refreshAccount),
+  );
+  $("refreshAggregateEventsBtn").addEventListener(
+    "click",
+    () => runManualRefresh("refreshAggregateEventsBtn", async () => {
+      const loaded = await loadAggregateEvents();
+      if (!loaded) throw new Error(state.aggregateLoadError || t("refreshFailed"));
+      return true;
+    }),
+  );
   $("loadMoreAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents({ append: true })));
   $("aggregateScrollToggleBtn").addEventListener("click", () => {
     setAggregateScrollPaused(!state.aggregateScrollPaused);
@@ -4886,7 +4936,10 @@ function bindEvents() {
   $("marketWizardSensitivitySelect").addEventListener("change", renderMarketWizardRuleEditor);
   $("marketWizardRecommendationRefreshBtn").addEventListener(
     "click",
-    guardAsync(() => refreshMarketRecommendations("wizard")),
+    () => runManualRefresh(
+      "marketWizardRecommendationRefreshBtn",
+      () => refreshMarketRecommendations("wizard"),
+    ),
   );
   $("marketWizardThresholdInput").addEventListener("input", () => {
     $("marketWizardSensitivitySelect").value = "custom";
@@ -4900,7 +4953,10 @@ function bindEvents() {
     renderMarketWizardSummary();
   });
   $("marketWizardPoolScopeSelect").addEventListener("change", renderMarketWizardSummary);
-  $("refreshMarketProjectsBtn").addEventListener("click", guardAsync(loadMarketContext));
+  $("refreshMarketProjectsBtn").addEventListener(
+    "click",
+    () => runManualRefresh("refreshMarketProjectsBtn", loadMarketContext),
+  );
   $("closeMarketDetailBtn").addEventListener("click", () => {
     state.marketDetail = null;
     state.marketRecommendations = [];
@@ -4956,13 +5012,19 @@ function bindEvents() {
       $("marketEventPoolFilter").value = "";
     }
   });
-  $("refreshMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents()));
+  $("refreshMarketEventsBtn").addEventListener(
+    "click",
+    () => runManualRefresh("refreshMarketEventsBtn", () => loadMarketEvents()),
+  );
   $("loadMoreMarketEventsBtn").addEventListener("click", guardAsync(() => loadMarketEvents(undefined, true)));
   $("marketRuleTypeSelect").addEventListener("change", renderMarketRuleEditor);
   $("marketSensitivitySelect").addEventListener("change", renderMarketRuleEditor);
   $("marketRecommendationRefreshBtn").addEventListener(
     "click",
-    guardAsync(() => refreshMarketRecommendations("detail")),
+    () => runManualRefresh(
+      "marketRecommendationRefreshBtn",
+      () => refreshMarketRecommendations("detail"),
+    ),
   );
   $("marketDeliveryModeSelect").addEventListener("change", updateMarketDeliveryFields);
   $("marketTargetTypeSelect").addEventListener("change", renderMarketGroupOptions);
