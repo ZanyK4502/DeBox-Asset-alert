@@ -552,10 +552,10 @@ func (s *Service) backMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 func (s *Service) groupEntryMarkup(_ string) boxbotapi.InlineKeyboardMarkup {
 	buttons := make([]boxbotapi.InlineKeyboardButton, 0, 2)
 	if privateURL := s.botPrivateChatURL(); privateURL != "" {
-		buttons = append(buttons, buttonURL("私聊 Bot / Message Bot", privateURL))
+		buttons = append(buttons, buttonURL("私聊 Chat", privateURL))
 	}
 	if s.publicAppURL != "" {
-		buttons = append(buttons, buttonURL("监控面板 / Dashboard", s.publicAppURL))
+		buttons = append(buttons, buttonURL("面板 Board", s.publicAppURL))
 	}
 	if len(buttons) == 0 {
 		return boxbotapi.NewInlineKeyboardMarkup()
