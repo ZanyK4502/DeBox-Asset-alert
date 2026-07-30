@@ -102,12 +102,7 @@ let mobileActionFrame = 0;
 let mobileMarketStep = "";
 
 function storedMobileView() {
-  try {
-    const value = sessionStorage.getItem(MOBILE_VIEW_STORAGE_KEY);
-    return MOBILE_VIEWS.has(value) ? value : "overview";
-  } catch (_) {
-    return "overview";
-  }
+  return "account";
 }
 
 function isMobileShell() {
@@ -142,7 +137,7 @@ function updateMobileNavigation(view) {
 }
 
 function setMobileView(view, options = {}) {
-  const nextView = MOBILE_VIEWS.has(view) ? view : "overview";
+  const nextView = MOBILE_VIEWS.has(view) ? view : "account";
   const { restoreScroll = true, target = null } = options;
   const previousView = document.body.dataset.mobileView;
   if (isMobileShell() && previousView && previousView !== nextView) {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260730-usage-help" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260730-account-overview" />
   </head>
   <body>
     <header class="app-header">
@@ -23,13 +23,15 @@
     </header>
 
     <main class="layout">
-      <section class="overview" data-mobile-screen="overview" aria-label="账户概览" data-i18n-aria-label="accountOverview">
-        <div class="intro">
-          <p class="eyebrow">Asset Monitor</p>
-          <h1 data-i18n="heroTitle">随时掌控地址与行情的变化</h1>
+      <section class="overview" data-mobile-screen="account" aria-label="账户概览" data-i18n-aria-label="accountOverview">
+        <div class="overview-panel">
+          <h2 data-i18n="deboxProfileTitle">DeBox 个人资料</h2>
+          <div id="profileBox" class="status-box muted" data-i18n="noWallet">尚未连接钱包</div>
         </div>
-        <div id="profileBox" class="status-box muted" data-i18n="noWallet">尚未连接钱包</div>
-        <div id="subscriptionBox" class="status-box muted" data-i18n="connectToView">连接钱包后查看订阅状态</div>
+        <div class="overview-panel">
+          <h2 data-i18n="subscriptionStatusTitle">订阅状态</h2>
+          <div id="subscriptionBox" class="status-box muted" data-i18n="connectToView">连接钱包后查看订阅状态</div>
+        </div>
       </section>
 
       <section id="renew" class="section" data-mobile-screen="account" data-mobile-action-scope>
@@ -875,7 +877,7 @@
         </div>
       </section>
 
-      <section id="summary" class="section" data-mobile-screen="account" data-mobile-action-scope>
+      <section id="summary" class="section" data-mobile-screen="overview" data-mobile-action-scope>
         <div class="section-head">
           <div>
             <p class="eyebrow">Digest</p>
@@ -904,7 +906,7 @@
         </form>
       </section>
 
-      <section id="groups" class="section" data-mobile-screen="account" data-mobile-action-scope>
+      <section id="groups" class="section" data-mobile-screen="overview" data-mobile-action-scope>
         <div class="section-head">
           <div>
             <p class="eyebrow">Groups</p>
@@ -932,11 +934,11 @@
     <a class="usage-help-fab" href="https://m.debox.pro/card?id=trxuvgm9&invite_code=trxuvgm9" data-i18n="usageQuestions">使用疑问</a>
 
     <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="移动端导航" data-i18n-aria-label="mobileNavigation">
-      <button class="mobile-nav-item active" type="button" data-mobile-tab="overview" aria-current="page">
+      <button class="mobile-nav-item active" type="button" data-mobile-tab="account" aria-current="page">
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" />
+          <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7 8a7 7 0 0 0-14 0" />
         </svg>
-        <span data-i18n="mobileNavOverview">概览</span>
+        <span data-i18n="mobileNavAccount">我的</span>
       </button>
       <button class="mobile-nav-item" type="button" data-mobile-tab="market">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -950,11 +952,11 @@
         </svg>
         <span data-i18n="mobileNavAddress">地址</span>
       </button>
-      <button class="mobile-nav-item" type="button" data-mobile-tab="account">
+      <button class="mobile-nav-item" type="button" data-mobile-tab="overview">
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7 8a7 7 0 0 0-14 0" />
+          <path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" />
         </svg>
-        <span data-i18n="mobileNavAccount">我的</span>
+        <span data-i18n="mobileNavOverview">概览</span>
       </button>
     </nav>
 
@@ -967,7 +969,7 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260730-usage-help"></script>
+    <script src="/static/i18n.js?v=20260730-account-overview"></script>
     <script src="/static/time.js"></script>
     <script src="/static/app.js?v=20260730-primary-pool"></script>
   </body>

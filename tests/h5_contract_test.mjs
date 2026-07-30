@@ -60,6 +60,34 @@ for (const step of [1, 2, 3, 4]) {
     `four-step market wizard is missing step ${step}`,
   );
 }
+assert.match(
+  html,
+  /<section class="overview" data-mobile-screen="account"[\s\S]*?id="profileBox"[\s\S]*?id="subscriptionBox"[\s\S]*?<\/section>/,
+  "profile and subscription status must appear in the mobile Account view",
+);
+assert.match(
+  html,
+  /<section id="summary"[^>]*data-mobile-screen="overview"/,
+  "daily summary must appear in the mobile Overview view",
+);
+assert.match(
+  html,
+  /<section id="groups"[^>]*data-mobile-screen="overview"/,
+  "group notifications must appear in the mobile Overview view",
+);
+assert.ok(
+  !html.includes('data-i18n="heroTitle"'),
+  "the removed mobile hero message must not remain visible",
+);
+assert.deepEqual(
+  [...html.matchAll(/\bdata-mobile-tab="([^"]+)"/g)].map((match) => match[1]),
+  ["account", "market", "address", "overview"],
+  "mobile navigation must be ordered Account, Market, Address, Overview",
+);
+assert.ok(
+  app.includes('function storedMobileView() {\n  return "account";\n}'),
+  "fresh mobile sessions must open the Account view",
+);
 assert.ok(
   app.includes('deployment_scope: "all"') &&
     app.includes('cooldown_scope: "chain"'),
