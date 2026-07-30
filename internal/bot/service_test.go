@@ -174,7 +174,7 @@ func testMessage(text, chatType, userID string) *boxbotapi.Message {
 
 func TestBotPrivateChatURLUsesCurrentRoute(t *testing.T) {
 	service, _, _, _ := newTestService(t)
-	if got, want := service.botPrivateChatURL(), "https://m.debox.pro/chat?id=bot-id&start="; got != want {
+	if got, want := service.botPrivateChatURL(), "box://user?id=bot-id"; got != want {
 		t.Fatalf("botPrivateChatURL() = %q, want %q", got, want)
 	}
 }
