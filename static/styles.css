@@ -2348,8 +2348,27 @@ select:focus {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 2px 0 8px;
   scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 65%, var(--line)) var(--surface-2);
+}
+
+.market-goals::-webkit-scrollbar,
+.market-detail-tabs::-webkit-scrollbar {
+  height: 5px;
+}
+
+.market-goals::-webkit-scrollbar-track,
+.market-detail-tabs::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.market-goals::-webkit-scrollbar-thumb,
+.market-detail-tabs::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 65%, var(--line));
 }
 
 .market-goal {
@@ -2616,6 +2635,21 @@ label.market-pool-card {
   background: var(--surface);
 }
 
+.market-project-chain-logos {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0 0 5px;
+}
+
+.market-project-chain-logos img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: contain;
+}
+
 .market-token-fallback {
   display: grid;
   place-items: center;
@@ -2633,6 +2667,7 @@ label.market-pool-card {
   border: 1px solid var(--line);
   border-radius: 15px;
   background: var(--surface);
+  scrollbar-color: color-mix(in srgb, var(--accent) 65%, var(--line)) var(--surface-2);
 }
 
 .market-detail-tab {
@@ -3015,6 +3050,18 @@ label.market-pool-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(110px, 0.45fr);
   gap: 7px;
+  align-items: start;
+}
+
+.market-threshold-field > label {
+  align-content: start;
+  align-self: start;
+}
+
+.market-threshold-field > label > input,
+.market-threshold-field > label > select {
+  height: 44px;
+  min-height: 44px;
 }
 
 .market-threshold-field > .field-note {
@@ -3045,6 +3092,7 @@ label.market-pool-card {
 }
 
 .market-repeat-control {
+  position: relative;
   display: flex;
   grid-column: 1 / -1;
   align-items: center;
@@ -3066,11 +3114,51 @@ label.market-pool-card {
   font-weight: 700;
 }
 
+.market-repeat-heading > label {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.market-repeat-heading .help-control {
+  position: static;
+  width: auto;
+}
+
 .market-repeat-help {
-  width: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  font-size: 13px;
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.market-repeat-help:active {
+  box-shadow: none;
+}
+
+.market-repeat-control .help-popover {
+  right: 10px;
+  left: 10px;
+  width: auto;
+  max-width: none;
+}
+
+#marketWizardCreateStatus {
+  margin-top: 14px;
+}
+
+#marketProviderStatus {
+  margin-bottom: 14px;
+}
+
+#marketRulesList {
+  margin-top: 14px;
 }
 
 .market-toggle {
@@ -3386,6 +3474,8 @@ label.market-pool-card {
   .market-detail-tabs {
     display: flex;
     overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 8px;
     scrollbar-width: thin;
   }
 
@@ -3415,6 +3505,23 @@ label.market-pool-card {
 
   .market-project-identity {
     align-items: flex-start;
+  }
+
+  .market-detail-head {
+    gap: 7px;
+  }
+
+  .market-detail-head button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 7px;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .market-project-chain-logos {
+    flex-direction: row;
   }
 
   .market-holder-change {

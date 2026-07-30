@@ -3216,12 +3216,21 @@ function renderMarketDetail() {
   const asset = detail.asset || {};
   const deployments = marketDetailDeployments();
   const chainNames = deployments.map((deployment) => marketChainName(deployment.chain_key));
+  const chainLogos = deployments.map((deployment) => {
+    const chainName = marketChainName(deployment.chain_key);
+    const chainLogo = chainLogoSrc(deployment.chain_key);
+    return chainLogo
+      ? `<img src="${escapeHtml(chainLogo)}" alt="${escapeHtml(chainName)}" title="${escapeHtml(chainName)}" />`
+      : "";
+  }).filter(Boolean).join("");
   const logo = asset.logo_url || "";
   $("marketProjectHeader").innerHTML = `
     <div class="market-project-identity">
       ${logo ? `<img src="${escapeHtml(logo)}" alt="" />` : `<span class="market-token-fallback">${escapeHtml((asset.symbol || project.token_symbol || "?").slice(0, 1))}</span>`}
       <div>
-        <p class="eyebrow">${escapeHtml(chainNames.join(" · ") || marketChainName(project.chain_key))}</p>
+        <p class="market-project-chain-logos" aria-label="${escapeHtml(chainNames.join(", ") || marketChainName(project.chain_key))}">
+          ${chainLogos}
+        </p>
         <h3>${escapeHtml(asset.canonical_name || project.token_name || project.token_symbol)} (${escapeHtml(asset.symbol || project.token_symbol)})</h3>
         <span>${escapeHtml(t("marketProjectChainsAndPools", {
           chains: deployments.length || 1,
