@@ -904,6 +904,21 @@ select:focus {
   font-size: 15px;
 }
 
+#balanceHelpBtn,
+#combinationBalanceHelpBtn {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+#balanceHelpBtn:active,
+#combinationBalanceHelpBtn:active {
+  box-shadow: none;
+}
+
 .help-popover {
   position: absolute;
   left: 0;
@@ -3266,13 +3281,28 @@ label.market-pool-card {
   }
 
   [data-mobile-action-bar].mobile-action-active > button,
-  [data-mobile-action-bar].mobile-action-active > .help-control,
-  [data-mobile-action-bar].mobile-action-active > .help-control > button {
+  [data-mobile-action-bar].mobile-action-active > .help-control {
     width: 100%;
   }
 
+  [data-mobile-action-bar].mobile-action-active > .help-control > button:not(.icon-help) {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  [data-mobile-action-bar].mobile-action-active > .help-control > .icon-help {
+    width: 44px;
+    min-width: 44px;
+    flex: 0 0 44px;
+  }
+
   [data-mobile-action-bar].mobile-action-active .help-popover {
+    right: auto;
     bottom: calc(100% + 12px);
+    left: 0;
+    width: min(300px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
   }
 
   .mobile-bottom-nav {
