@@ -548,6 +548,15 @@ func TestWatchRuleValidationRejectsInvalidInputs(t *testing.T) {
 		}, match: "必须大于 0"},
 		{name: "approval fields", edit: func(v *WatchRuleInput) { v.RuleType = plans.ApprovalChange }, match: "代币合约"},
 		{name: "interaction target", edit: func(v *WatchRuleInput) { v.RuleType = plans.AddressInteraction }, match: "目标地址"},
+		{name: "approval target note", edit: func(v *WatchRuleInput) {
+			v.RuleType = plans.ApprovalChange
+			v.TokenAddress = "0x2222222222222222222222222222222222222222"
+			v.TargetAddress = "0x3333333333333333333333333333333333333333"
+		}, match: "目标备注"},
+		{name: "interaction target note", edit: func(v *WatchRuleInput) {
+			v.RuleType = plans.AddressInteraction
+			v.TargetAddress = "0x3333333333333333333333333333333333333333"
+		}, match: "目标备注"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -598,6 +607,9 @@ func TestWatchRuleValidationThresholdSemantics(t *testing.T) {
 			input.Threshold = test.threshold
 			input.TokenAddress = test.token
 			input.TargetAddress = test.target
+			if test.target != "" {
+				input.TargetLabel = "目标合约"
+			}
 
 			got, err := validateWatchRuleInput(input)
 			if err != nil {

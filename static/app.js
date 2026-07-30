@@ -1376,6 +1376,7 @@ function updateRuleFields() {
   const thresholdless = isThresholdlessRule(type);
   $("targetAddressWrap").hidden = !needsTarget;
   $("targetLabelWrap").hidden = !needsTarget;
+  $("targetLabelInput").required = needsTarget;
   $("thresholdWrap").hidden = thresholdless;
   $("tokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
   $("ruleDescription").textContent = localizedRuleDescription(type);
@@ -1391,7 +1392,8 @@ function updateRuleFields() {
 function updateDeliveryModeFields() {
   const stage = $("deliveryModeSelect").value === "stage";
   $("stageSettingsWrap").hidden = !stage;
-  $("deliveryModeHint").textContent = t(stage ? "stageModeHint" : "realtimeModeHint");
+  $("deliveryModeHint").hidden = !stage;
+  $("deliveryModeHint").textContent = stage ? t("stageModeHint") : "";
 }
 
 function resetSingleRuleDraft() {
@@ -1413,6 +1415,7 @@ function updateCombinationMemberFields() {
   const thresholdless = isThresholdlessRule(type);
   $("combinationTargetAddressWrap").hidden = !needsTarget;
   $("combinationTargetLabelWrap").hidden = !needsTarget;
+  $("combinationTargetLabelInput").required = needsTarget;
   $("combinationThresholdWrap").hidden = thresholdless;
   $("combinationTokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
   $("combinationRuleDescription").textContent = localizedRuleDescription(type);
@@ -1449,6 +1452,12 @@ function validateRuleDraft(rule, requiredCount = null) {
   }
   if (rule.rule_type === "address_interaction" && !rule.target_address) {
     throw new Error(t("interactionTargetRequired"));
+  }
+  if (
+    (rule.rule_type === "approval_change" || rule.rule_type === "address_interaction") &&
+    !rule.target_label
+  ) {
+    throw new Error(t("targetNoteRequired"));
   }
   if (requiredCount !== null && (!Number.isInteger(requiredCount) || requiredCount <= 0)) {
     throw new Error(t("enterPositiveCount"));

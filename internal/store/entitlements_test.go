@@ -40,6 +40,9 @@ func TestCreateWatchRuleWithinQuotaCommitsCheckAndInsertTogether(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectUserPlan(mock, "user-1", "standard")
+	mock.ExpectQuery("FROM watch_rules").
+		WithArgs("user-1").
+		WillReturnRows(watchRuleRows())
 	mock.ExpectQuery("SELECT COUNT").
 		WithArgs("user-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(0)))
@@ -124,6 +127,9 @@ func TestCreateWatchRuleWithinQuotaRollsBackAtRuleLimit(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectUserPlan(mock, "user-1", "free")
+	mock.ExpectQuery("FROM watch_rules").
+		WithArgs("user-1").
+		WillReturnRows(watchRuleRows())
 	mock.ExpectQuery("SELECT COUNT").
 		WithArgs("user-1").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(1)))

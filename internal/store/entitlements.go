@@ -349,6 +349,13 @@ func (s *Store) CreateWatchRuleWithinQuota(
 		if params.NotificationChatType == "group" && !policy.GroupNotification {
 			return WatchRule{}, ErrGroupNotificationDenied
 		}
+		duplicate, err := hasDuplicateWatchRule(ctx, tx, params)
+		if err != nil {
+			return WatchRule{}, err
+		}
+		if duplicate {
+			return WatchRule{}, ErrWatchRuleExists
+		}
 
 		ruleCount, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {

@@ -587,6 +587,10 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 		return errors.New("该监控规则已创建，请恢复或删除原规则。")
 	case errors.Is(err, store.ErrMarketCombinationExists):
 		return errors.New("该组合监控已创建，请恢复或删除原组合。")
+	case errors.Is(err, store.ErrWatchRuleExists):
+		return errors.New("该地址监控已创建，请恢复或删除原监控。")
+	case errors.Is(err, store.ErrCombinationRuleExists):
+		return errors.New("该组合监控已创建，请恢复或删除原组合。")
 	case errors.Is(err, store.ErrMarketPoolMismatch):
 		return errors.New("当前套餐只能监控项目主池；多池监控需要专业版。")
 	case errors.Is(err, store.ErrCombinationRulesDenied):

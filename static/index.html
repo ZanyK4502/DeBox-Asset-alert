@@ -656,7 +656,7 @@
               <option value="realtime" data-i18n="realtimeMode">实时提醒</option>
               <option value="stage" data-i18n="stageMode">阶段提醒</option>
             </select>
-            <small id="deliveryModeHint" class="field-note" data-i18n="realtimeModeHint">后端约每 60 秒检查一次，触发后立即发送。</small>
+            <small id="deliveryModeHint" class="field-note" hidden></small>
           </label>
           <div id="stageSettingsWrap" class="form-grid-subset" hidden>
             <label data-i18n-label="cycleType">
@@ -668,11 +668,11 @@
             </label>
             <label data-i18n-label="cycleMinutes">
               统计时长（分钟）
-              <input id="cycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" />
+              <input id="cycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" required />
             </label>
             <label data-i18n-label="triggerCount">
               累计触发次数
-              <input id="triggerCountInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+              <input id="triggerCountInput" type="number" min="1" step="1" value="1" inputmode="numeric" required />
             </label>
             <p class="inline-explanation" data-i18n="stageModeExplanation">每个周期重新计数，达到次数后立即汇总发送一次，本周期不再重复发送。</p>
           </div>
@@ -724,7 +724,7 @@
               </label>
               <label data-i18n-label="cycleMinutes">
                 统计时长（分钟）
-                <input id="combinationCycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" />
+                <input id="combinationCycleMinutesInput" type="number" min="1" step="1" value="60" inputmode="numeric" required />
               </label>
               <label data-i18n-label="notificationMethod">
                 通知方式
@@ -792,7 +792,7 @@
                 </label>
                 <label data-i18n-label="memberTriggerCount">
                   该成员触发次数
-                  <input id="combinationMemberTriggerInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+                  <input id="combinationMemberTriggerInput" type="number" min="1" step="1" value="1" inputmode="numeric" required />
                 </label>
               </div>
               <div id="combinationBalanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
@@ -997,8 +997,8 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260730-combination-delete"></script>
+    <script src="/static/i18n.js?v=20260730-address-rule-dedupe"></script>
     <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260730-combination-delete"></script>
+    <script src="/static/app.js?v=20260730-address-rule-dedupe"></script>
   </body>
 </html>

@@ -444,11 +444,68 @@ func TestApprovalAndInteractionRulesAlertOnNewValues(t *testing.T) {
 			notifier := &fakeNotifier{}
 			executor := newTestExecutor(t, repository, chainService, notifier)
 			rule := testRule(test.ruleType, &test.last, plans.Professional)
+			rule.TargetLabel = "项目金库"
 
 			result := executor.checkRule(context.Background(), rule, plans.Professional)
 
 			if result.Status != "alerted" {
 				t.Fatalf("result = %#v", result)
+			}
+			if !strings.Contains(notifier.message, "目标备注：项目金库") {
+				t.Fatalf("notification missing target label: %q", notifier.message)
+			}
+		})
+	}
+}
+
+func TestTargetLabelFlowsIntoStageAndCombinationEventNotes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		ruleScope string
+	}{
+		{name: "stage", ruleScope: "standalone"},
+		{name: "combination", ruleScope: "combination"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			last := "0xold"
+			repository := &fakeRepository{}
+			if test.ruleScope == "standalone" {
+				repository.stageResult = store.StageTriggerResult{
+					TotalTriggerCount:     1,
+					TriggerCountThreshold: 2,
+				}
+			}
+			executor := newTestExecutor(
+				t,
+				repository,
+				&fakeChain{interaction: chain.InteractionResult{
+					Cursor:  "0xnew",
+					Matched: true,
+				}},
+				&fakeNotifier{},
+			)
+			rule := testRule(plans.AddressInteraction, &last, plans.Professional)
+			rule.TargetLabel = "风险合约"
+			rule.RuleScope = test.ruleScope
+			if test.ruleScope == "standalone" {
+				rule.DeliveryMode = "stage"
+				rule.CycleMinutes = 15
+				rule.TriggerCountThreshold = 2
+			}
+
+			result := executor.checkRule(context.Background(), rule, plans.Professional)
+			if result.Status != "counted" {
+				t.Fatalf("result = %#v", result)
+			}
+			note := repository.combinationParams.Note
+			if test.ruleScope == "standalone" {
+				note = repository.stageParams.Note
+			}
+			if !strings.Contains(note, "目标备注：风险合约") {
+				t.Fatalf("event note missing target label: %q", note)
 			}
 		})
 	}

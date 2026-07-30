@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrActiveSubscriptionConflict = errors.New("an active subscription prevents this plan change")
+	ErrCombinationRuleExists      = errors.New("combination rule already exists")
 	ErrCombinationMemberManaged   = errors.New("combination members are managed by their combination rule")
 	ErrCombinationRulesDenied     = errors.New("combination rules are not allowed")
 	ErrGroupLimitReached          = errors.New("notification group limit reached")
@@ -53,6 +54,7 @@ var (
 	ErrStageNotificationsDenied   = errors.New("stage notifications are not allowed")
 	ErrSubscriptionChanged        = errors.New("subscription changed during the operation")
 	ErrWalletLimitReached         = errors.New("monitored wallet limit reached")
+	ErrWatchRuleExists            = errors.New("watch rule already exists")
 )
 
 type DBTX interface {

@@ -96,6 +96,9 @@ func TestCreateCombinationRuleRejectsWhenParentExceedsQuota(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectUserPlan(mock, userID, "professional")
+	mock.ExpectQuery("FROM combination_rules").
+		WithArgs(userID).
+		WillReturnRows(combinationRuleRows())
 	mock.ExpectQuery("SELECT COUNT").
 		WithArgs(userID).
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(int64(7)))
@@ -112,6 +115,25 @@ func TestCreateCombinationRuleRejectsWhenParentExceedsQuota(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+func combinationRuleRows() *pgxmock.Rows {
+	return pgxmock.NewRows([]string{
+		"id",
+		"debox_user_id",
+		"note",
+		"cycle_type",
+		"cycle_minutes",
+		"notification_chat_id",
+		"notification_chat_type",
+		"notification_label",
+		"notification_language",
+		"enabled",
+		"run_status",
+		"pause_reason",
+		"aggregation_anchor_at",
+		"created_at",
+	})
 }
 
 func TestAttachRecentCombinationEventsGroupsAndLimitsEachMember(t *testing.T) {

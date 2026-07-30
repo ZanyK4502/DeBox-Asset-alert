@@ -79,6 +79,13 @@ func (s *Store) CreateCombinationRuleWithinQuota(
 				return CombinationRule{}, ErrRuleTypeDenied
 			}
 		}
+		duplicate, err := hasDuplicateCombinationRule(ctx, tx, params)
+		if err != nil {
+			return CombinationRule{}, err
+		}
+		if duplicate {
+			return CombinationRule{}, ErrCombinationRuleExists
+		}
 
 		activeRuleCount, err := countActiveRuleSlots(ctx, tx, params.DeBoxUserID)
 		if err != nil {

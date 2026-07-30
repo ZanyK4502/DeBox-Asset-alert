@@ -676,6 +676,7 @@ func normalizeWatchRuleInput(input WatchRuleInput, fallbackChain string) WatchRu
 	input.WalletAddress = strings.TrimSpace(input.WalletAddress)
 	input.TokenAddress = strings.TrimSpace(input.TokenAddress)
 	input.TargetAddress = strings.TrimSpace(input.TargetAddress)
+	input.TargetLabel = strings.TrimSpace(input.TargetLabel)
 	input.RuleType = strings.ToLower(strings.TrimSpace(input.RuleType))
 	if input.RuleType == "" {
 		input.RuleType = plans.BalanceChange
@@ -739,6 +740,11 @@ func validateWatchRuleInput(input WatchRuleInput) (string, error) {
 	}
 	if input.RuleType == plans.AddressInteraction && input.TargetAddress == "" {
 		return "", errors.New("指定地址交互提醒需要填写目标地址或合约。")
+	}
+	if (input.RuleType == plans.ApprovalChange ||
+		input.RuleType == plans.AddressInteraction) &&
+		input.TargetLabel == "" {
+		return "", errors.New("授权监控和指定地址交互提醒必须填写目标备注。")
 	}
 	if input.RuleType == plans.ApprovalChange || input.RuleType == plans.AddressInteraction {
 		return "0", nil

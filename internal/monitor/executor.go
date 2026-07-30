@@ -323,9 +323,11 @@ func (e *Executor) checkApprovalRule(
 		return RuleResult{RuleID: rule.ID, Status: "no_change", Value: currentValue}, nil
 	}
 
-	note := fmt.Sprintf("授权对象：%s。", shortAddress(rule.TargetAddress))
+	note := targetLabelPrefix(rule, "zh") +
+		fmt.Sprintf("授权对象：%s。", shortAddress(rule.TargetAddress))
 	if normalizeLanguage(rule.NotificationLanguage) == "en" {
-		note = fmt.Sprintf("Approved spender: %s.", shortAddress(rule.TargetAddress))
+		note = targetLabelPrefix(rule, "en") +
+			fmt.Sprintf("Approved spender: %s.", shortAddress(rule.TargetAddress))
 	}
 	if limited, err := e.freeDailyLimit(ctx, rule, plan); err != nil {
 		return RuleResult{}, err
@@ -370,9 +372,11 @@ func (e *Executor) checkInteractionRule(
 		return RuleResult{RuleID: rule.ID, Status: "no_change", Value: cursor}, nil
 	}
 
-	note := fmt.Sprintf("目标地址：%s。", shortAddress(rule.TargetAddress))
+	note := targetLabelPrefix(rule, "zh") +
+		fmt.Sprintf("目标地址：%s。", shortAddress(rule.TargetAddress))
 	if normalizeLanguage(rule.NotificationLanguage) == "en" {
-		note = fmt.Sprintf("Target address: %s.", shortAddress(rule.TargetAddress))
+		note = targetLabelPrefix(rule, "en") +
+			fmt.Sprintf("Target address: %s.", shortAddress(rule.TargetAddress))
 	}
 	if limited, err := e.freeDailyLimit(ctx, rule, plan); err != nil {
 		return RuleResult{}, err
@@ -835,6 +839,17 @@ func normalizeLanguage(language string) string {
 		return "en"
 	}
 	return "zh"
+}
+
+func targetLabelPrefix(rule store.WatchRule, language string) string {
+	label := strings.TrimSpace(rule.TargetLabel)
+	if label == "" {
+		return ""
+	}
+	if normalizeLanguage(language) == "en" {
+		return "Target note: " + label + ". "
+	}
+	return "目标备注：" + label + "。"
 }
 
 func shortAddress(address *string) string {
