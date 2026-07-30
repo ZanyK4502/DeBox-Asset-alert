@@ -3009,16 +3009,22 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
   const selected = selection.selected.has(address);
   const primary = selection.primary === address;
   return `
-    <div class="market-pool-card${quoteOnly ? " unsupported" : ""}">
+    <div class="market-pool-card market-wizard-pool-card${quoteOnly ? " unsupported" : ""}">
       <input type="checkbox" data-market-wizard-pool="${escapeHtml(address)}" data-chain="${escapeHtml(group.chain_key)}" ${selected ? "checked" : ""} ${quoteOnly ? "disabled" : ""} />
-      <div>
+      <div class="market-wizard-pool-info">
         <strong>${escapeHtml(preview.protocol || pair.dexId || "-")} ${escapeHtml(preview.protocol_version || "")}</strong>
         <span>${escapeHtml(pair.baseToken?.symbol || "-")} / ${escapeHtml(pair.quoteToken?.symbol || "-")}</span>
         <small>${escapeHtml(shortAddress(address))}</small>
       </div>
       <div class="market-pool-values">
-        <strong>${marketMoney(pair.liquidity?.usd)}</strong>
-        <span>${quoteOnly ? escapeHtml(t("marketQuotesOnly")) : marketMoney(pair.priceUsd)}</span>
+        <span class="market-pool-value-row">
+          <small>${escapeHtml(t("marketMetricLiquidity"))}</small>
+          <strong>${marketMoney(pair.liquidity?.usd)}</strong>
+        </span>
+        <span class="market-pool-value-row">
+          <small>${escapeHtml(t("marketTokenPrice"))}</small>
+          <strong>${marketMoney(pair.priceUsd)}</strong>
+        </span>
       </div>
       ${quoteOnly ? "" : `
         <label class="market-primary-choice${primary ? " selected" : ""}">

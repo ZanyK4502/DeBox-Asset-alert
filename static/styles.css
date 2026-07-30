@@ -2452,6 +2452,73 @@ label.market-pool-card {
   text-align: right;
 }
 
+.market-wizard-pool-card {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: 12px;
+}
+
+.market-wizard-pool-card > input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  margin: 0;
+  padding: 0;
+}
+
+.market-wizard-pool-info {
+  min-width: 0;
+}
+
+.market-wizard-pool-info strong {
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.market-wizard-pool-info span {
+  font-size: 0.77rem;
+  line-height: 1.2;
+}
+
+.market-wizard-pool-info small {
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.market-wizard-pool-card .market-pool-values {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
+}
+
+.market-pool-value-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.market-wizard-pool-card .market-pool-value-row small {
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.market-wizard-pool-card .market-pool-value-row strong {
+  color: var(--text);
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.market-wizard-pool-card .market-primary-choice {
+  grid-column: auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 0.74rem;
+}
+
 .market-pool-actions {
   display: flex;
   grid-column: 1 / -1;
@@ -3287,6 +3354,33 @@ label.market-pool-card {
   .market-pool-values {
     grid-column: 2;
     text-align: left;
+  }
+
+  .market-wizard-pool-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 7px 9px;
+    padding: 9px 10px;
+  }
+
+  .market-wizard-pool-card > input[type="checkbox"] {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+
+  .market-wizard-pool-info {
+    grid-column: 2 / -1;
+  }
+
+  .market-wizard-pool-card .market-pool-values {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .market-wizard-pool-card .market-primary-choice {
+    grid-column: 3;
+    grid-row: 2;
+    align-self: center;
   }
 
   .market-detail-tabs {
