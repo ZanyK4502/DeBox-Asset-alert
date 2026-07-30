@@ -45,12 +45,16 @@ func NewOpenAPIClient(apiKey, baseURL string, httpClient HTTPDoer) (*OpenAPIClie
 	}, nil
 }
 
-func (c *OpenAPIClient) get(ctx context.Context, path string, params url.Values) (any, error) {
+func (c *OpenAPIClient) request(
+	ctx context.Context,
+	method, path string,
+	params url.Values,
+) (any, error) {
 	endpoint := c.baseURL + "/" + strings.TrimLeft(path, "/")
 	if len(params) > 0 {
 		endpoint += "?" + params.Encode()
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create DeBox OpenAPI request: %w", err)
 	}
@@ -86,6 +90,25 @@ func (c *OpenAPIClient) get(ctx context.Context, path string, params url.Values)
 		return data, nil
 	}
 	return payload, nil
+}
+
+func (c *OpenAPIClient) get(ctx context.Context, path string, params url.Values) (any, error) {
+	return c.request(ctx, http.MethodGet, path, params)
+}
+
+func (c *OpenAPIClient) BotInfo(ctx context.Context) (map[string]any, error) {
+	value, err := c.request(ctx, http.MethodPost, "/openapi/bot/getMe", nil)
+	if err != nil {
+		return nil, err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("unexpected DeBox OpenAPI response")
+	}
+	if result, ok := object["result"].(map[string]any); ok {
+		return result, nil
+	}
+	return object, nil
 }
 
 func (c *OpenAPIClient) UserInfo(

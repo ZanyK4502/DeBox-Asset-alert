@@ -82,6 +82,7 @@ func TestAcceptanceGroupUnbindRemovesOnlyThatSummaryTarget(t *testing.T) {
 		Entitlements: entitlements,
 		Groups: &fakeGroupService{
 			info:   map[string]any{"name": "Acceptance Group"},
+			bot:    map[string]any{"address": "0x2222222222222222222222222222222222222222"},
 			joined: true,
 		},
 		Notifications: notifier,

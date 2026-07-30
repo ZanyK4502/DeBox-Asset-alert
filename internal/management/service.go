@@ -69,6 +69,7 @@ type ChainService interface {
 }
 
 type GroupService interface {
+	BotInfo(context.Context) (map[string]any, error)
 	GroupInfo(context.Context, string) (map[string]any, error)
 	IsGroupJoined(context.Context, string, string) (any, error)
 }
@@ -549,7 +550,7 @@ type NotificationGroupCreation struct {
 func (s *Service) CreateNotificationGroup(
 	ctx context.Context,
 	deboxUserID string,
-	walletAddress string,
+	_ string,
 	input NotificationGroupInput,
 ) (NotificationGroupCreation, error) {
 	gid := parseDeBoxGroupLink(input.Link)
@@ -582,12 +583,20 @@ func (s *Service) CreateNotificationGroup(
 	if err != nil {
 		return NotificationGroupCreation{}, err
 	}
-	joined, err := s.deps.Groups.IsGroupJoined(ctx, gid, walletAddress)
+	bot, err := s.deps.Groups.BotInfo(ctx)
+	if err != nil {
+		return NotificationGroupCreation{}, err
+	}
+	botAddress := groupBotAddress(bot)
+	if botAddress == "" {
+		return NotificationGroupCreation{}, errors.New("暂时无法获取通知 Bot 地址，请稍后重试。")
+	}
+	joined, err := s.deps.Groups.IsGroupJoined(ctx, gid, botAddress)
 	if err != nil {
 		return NotificationGroupCreation{}, err
 	}
 	if !groupJoined(joined) {
-		return NotificationGroupCreation{}, errors.New("当前钱包似乎不是该群成员，请确认后再绑定。")
+		return NotificationGroupCreation{}, errors.New("通知 Bot 尚未加入该群，请先将 Bot 邀请入群后再绑定。")
 	}
 	name := strings.TrimSpace(input.Label)
 	if name == "" {
@@ -833,6 +842,22 @@ func groupName(group map[string]any, fallback string) string {
 		return groupName(nested, fallback)
 	}
 	return fallback
+}
+
+func groupBotAddress(bot map[string]any) string {
+	for _, key := range []string{"address", "wallet_address", "walletAddress"} {
+		if value := strings.TrimSpace(fmt.Sprint(bot[key])); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	for _, key := range []string{"result", "data", "user", "bot"} {
+		if nested, ok := bot[key].(map[string]any); ok {
+			if value := groupBotAddress(nested); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func groupJoined(payload any) bool {

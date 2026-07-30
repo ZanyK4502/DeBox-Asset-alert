@@ -381,9 +381,14 @@ func (f *fakeChainService) LatestInteraction(
 
 type fakeGroupService struct {
 	info       map[string]any
+	bot        map[string]any
 	joined     any
 	groupID    string
 	joinWallet string
+}
+
+func (f *fakeGroupService) BotInfo(context.Context) (map[string]any, error) {
+	return f.bot, nil
 }
 
 func (f *fakeGroupService) GroupInfo(
@@ -901,6 +906,7 @@ func TestCreateNotificationGroupParsesLinkAndChecksMembership(t *testing.T) {
 	entitlements := &fakeEntitlements{plan: planForTest(t, plans.Professional)}
 	groups := &fakeGroupService{
 		info:   map[string]any{"data": map[string]any{"group_name": "Builders"}},
+		bot:    map[string]any{"address": "0x2222222222222222222222222222222222222222"},
 		joined: map[string]any{"data": true},
 	}
 	service := New(Dependencies{
@@ -920,7 +926,7 @@ func TestCreateNotificationGroupParsesLinkAndChecksMembership(t *testing.T) {
 		t.Fatalf("CreateNotificationGroup() error = %v", err)
 	}
 	if entitlements.createdGroup != [3]string{"user-1", "group-1", "Builders"} ||
-		groups.joinWallet != "0x1111111111111111111111111111111111111111" ||
+		groups.joinWallet != "0x2222222222222222222222222222222222222222" ||
 		result.Group.GID != "group-1" {
 		t.Fatalf("group creation = %#v / %#v / %#v", entitlements.createdGroup, groups, result)
 	}

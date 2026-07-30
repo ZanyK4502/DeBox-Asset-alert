@@ -15,6 +15,11 @@ func TestOpenAPIQueriesAndUnwrapsData(t *testing.T) {
 			t.Errorf("X-API-KEY = %q", request.Header.Get("X-API-KEY"))
 		}
 		switch request.URL.Path {
+		case "/openapi/bot/getMe":
+			if request.Method != http.MethodPost {
+				t.Errorf("getMe method = %s", request.Method)
+			}
+			_, _ = io.WriteString(writer, `{"ok":true,"success":true,"result":{"name":"Monitor","address":"0xbot"}}`)
 		case "/openapi/user/info":
 			if request.URL.Query().Get("user_id") != "user-1" || request.URL.Query().Has("address") {
 				t.Errorf("unexpected user query: %s", request.URL.RawQuery)
@@ -42,6 +47,10 @@ func TestOpenAPIQueriesAndUnwrapsData(t *testing.T) {
 	client, err := NewOpenAPIClient("debox-key", server.URL, server.Client())
 	if err != nil {
 		t.Fatalf("NewOpenAPIClient() error = %v", err)
+	}
+	bot, err := client.BotInfo(context.Background())
+	if err != nil || bot["address"] != "0xbot" {
+		t.Fatalf("BotInfo() = %#v, %v", bot, err)
 	}
 	user, err := client.UserInfo(context.Background(), "user-1", "")
 	if err != nil || user["name"] != "Alice" {
