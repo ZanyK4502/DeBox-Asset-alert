@@ -46,6 +46,9 @@ const state = {
   marketRuleMode: "single",
   marketHolderChain: "",
   marketLabelChain: "",
+  marketExpandedPoolChains: new Set(),
+  marketHoldersExpanded: false,
+  marketEventsExpanded: false,
   marketRecommendations: [],
   marketRecommendationUpdatedAt: "",
   marketRecommendationLoading: false,
@@ -796,6 +799,9 @@ function resetConnectionState() {
   state.marketRuleMode = "single";
   state.marketHolderChain = "";
   state.marketLabelChain = "";
+  state.marketExpandedPoolChains = new Set();
+  state.marketHoldersExpanded = false;
+  state.marketEventsExpanded = false;
   state.marketRecommendations = [];
   state.marketRecommendationUpdatedAt = "";
   state.marketRecommendationLoading = false;
@@ -3422,7 +3428,10 @@ function renderMarketProjectPools() {
     if (!groups.has(pool.chain_key)) groups.set(pool.chain_key, []);
     groups.get(pool.chain_key).push(pool);
   });
-  $("marketProjectPools").innerHTML = [...groups.entries()].map(([chainKey, pools]) => `
+  $("marketProjectPools").innerHTML = [...groups.entries()].map(([chainKey, pools]) => {
+    const expanded = state.marketExpandedPoolChains.has(chainKey);
+    const visiblePools = expanded ? pools : pools.slice(0, 1);
+    return `
     <section class="market-managed-chain">
       <div class="market-chain-pool-head">
         <span>
@@ -3432,7 +3441,7 @@ function renderMarketProjectPools() {
         <small>${escapeHtml(t("marketManagedPoolCount", { count: pools.length }))}</small>
       </div>
       <div class="market-pool-list">
-        ${pools.map((pool) => {
+        ${visiblePools.map((pool) => {
     const selected = Number(pool.selected) === 1;
     const primary = Number(pool.is_primary) === 1;
     const supported = Number(pool.supports_event_parsing) === 1;
@@ -3463,9 +3472,16 @@ function renderMarketProjectPools() {
       </div>
     `;
         }).join("")}
+        ${pools.length > 1 ? `
+          <button type="button" class="market-list-toggle" data-market-pool-list-toggle="${escapeHtml(chainKey)}" aria-expanded="${expanded}">
+            <span>${escapeHtml(expanded ? t("collapseList") : t("expandRemainingItems", { count: pools.length - 1 }))}</span>
+            <span class="market-list-toggle-chevron" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
+          </button>
+        ` : ""}
       </div>
     </section>
-  `).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`;
+  `;
+  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`;
   $("marketProjectPools").querySelectorAll("[data-market-primary]").forEach((button) => {
     button.addEventListener("click", guardAsync(() => updateMarketPool(Number(button.dataset.marketPrimary), true, true)));
   });
@@ -3475,6 +3491,17 @@ function renderMarketProjectPools() {
       button.dataset.selected !== "true",
       false,
     )));
+  });
+  $("marketProjectPools").querySelectorAll("[data-market-pool-list-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const chainKey = button.dataset.marketPoolListToggle;
+      if (state.marketExpandedPoolChains.has(chainKey)) {
+        state.marketExpandedPoolChains.delete(chainKey);
+      } else {
+        state.marketExpandedPoolChains.add(chainKey);
+      }
+      renderMarketProjectPools();
+    });
   });
 }
 
@@ -3976,7 +4003,8 @@ function renderMarketHolders() {
       return !Number(holder.excluded) && !Number(label?.excluded);
     },
   );
-  $("marketHoldersList").innerHTML = holders.map((holder) => {
+  const visibleHolders = state.marketHoldersExpanded ? holders : holders.slice(0, 1);
+  $("marketHoldersList").innerHTML = visibleHolders.map((holder) => {
     const label = labels.get(marketAddressLabelKey(holder.chain_key, holder.holder_address));
     const changeKey = {
       increased: "marketHolderIncreased",
@@ -3996,6 +4024,18 @@ function renderMarketHolders() {
       </div>
     `;
   }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoHolders"))}</div>`;
+  if (holders.length > 1) {
+    $("marketHoldersList").insertAdjacentHTML("beforeend", `
+      <button type="button" class="market-list-toggle" data-market-holders-toggle aria-expanded="${state.marketHoldersExpanded}">
+        <span>${escapeHtml(state.marketHoldersExpanded ? t("collapseList") : t("expandRemainingItems", { count: holders.length - 1 }))}</span>
+        <span class="market-list-toggle-chevron" aria-hidden="true">${state.marketHoldersExpanded ? "⌃" : "⌄"}</span>
+      </button>
+    `);
+    $("marketHoldersList").querySelector("[data-market-holders-toggle]").addEventListener("click", () => {
+      state.marketHoldersExpanded = !state.marketHoldersExpanded;
+      renderMarketHolders();
+    });
+  }
 }
 
 function renderMarketEventFilters() {
@@ -4059,7 +4099,10 @@ function marketRuleEventReason(event) {
 function renderMarketEvents() {
   const list = $("marketEventsList");
   const pools = new Map((state.marketDetail?.pools || []).map((pool) => [pool.id, pool]));
-  list.innerHTML = state.marketEvents.length ? state.marketEvents.map((event) => `
+  const visibleEvents = state.marketEventsExpanded
+    ? state.marketEvents
+    : state.marketEvents.slice(0, 1);
+  list.innerHTML = visibleEvents.length ? visibleEvents.map((event) => `
     <div class="market-event-row">
       <div>
         <span class="market-event-title">
@@ -4093,6 +4136,18 @@ function renderMarketEvents() {
       </div>
     </div>
   `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;
+  if (state.marketEvents.length > 1) {
+    list.insertAdjacentHTML("beforeend", `
+      <button type="button" class="market-list-toggle" data-market-events-toggle aria-expanded="${state.marketEventsExpanded}">
+        <span>${escapeHtml(state.marketEventsExpanded ? t("collapseList") : t("expandRemainingItems", { count: state.marketEvents.length - 1 }))}</span>
+        <span class="market-list-toggle-chevron" aria-hidden="true">${state.marketEventsExpanded ? "⌃" : "⌄"}</span>
+      </button>
+    `);
+    list.querySelector("[data-market-events-toggle]").addEventListener("click", () => {
+      state.marketEventsExpanded = !state.marketEventsExpanded;
+      renderMarketEvents();
+    });
+  }
   $("loadMoreMarketEventsBtn").hidden = marketProjectIsExpiredFrozen()
     || !state.marketEventsNextBeforeId;
 }
@@ -4485,6 +4540,9 @@ async function createMarketProject() {
     state.marketRuleMode = "single";
     state.marketHolderChain = "";
     state.marketLabelChain = "";
+    state.marketExpandedPoolChains = new Set();
+    state.marketHoldersExpanded = false;
+    state.marketEventsExpanded = false;
     state.marketEventFilters = freshMarketEventFilters();
     state.marketEvents = [];
     state.marketEventsNextBeforeId = null;
@@ -4509,6 +4567,9 @@ async function openMarketProject(projectId) {
   state.marketRuleMode = "single";
   state.marketHolderChain = "";
   state.marketLabelChain = "";
+  state.marketExpandedPoolChains = new Set();
+  state.marketHoldersExpanded = false;
+  state.marketEventsExpanded = false;
   state.marketEventFilters = freshMarketEventFilters();
   state.marketEvents = [];
   state.marketEventsNextBeforeId = null;
@@ -4729,6 +4790,7 @@ async function applyMarketEventFilters(event) {
     address: $("marketEventAddressFilter").value.trim(),
   };
   state.marketEvents = [];
+  state.marketEventsExpanded = false;
   state.marketEventsNextBeforeId = null;
   await loadMarketEvents();
   renderMarketEventFilters();
@@ -4737,6 +4799,7 @@ async function applyMarketEventFilters(event) {
 async function clearMarketEventFilters() {
   state.marketEventFilters = freshMarketEventFilters();
   state.marketEvents = [];
+  state.marketEventsExpanded = false;
   state.marketEventsNextBeforeId = null;
   renderMarketEventFilters();
   await loadMarketEvents();
@@ -4986,6 +5049,9 @@ function bindEvents() {
     state.marketRuleMode = "single";
     state.marketHolderChain = "";
     state.marketLabelChain = "";
+    state.marketExpandedPoolChains = new Set();
+    state.marketHoldersExpanded = false;
+    state.marketEventsExpanded = false;
     state.marketEventFilters = freshMarketEventFilters();
     renderMarketDetail();
     $("marketProjectsList").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -5010,6 +5076,7 @@ function bindEvents() {
   });
   $("marketHolderChainFilter").addEventListener("change", () => {
     state.marketHolderChain = $("marketHolderChainFilter").value;
+    state.marketHoldersExpanded = false;
     renderMarketHolders();
   });
   $("marketEventFiltersForm").addEventListener("submit", guardAsync(applyMarketEventFilters));
