@@ -60,7 +60,6 @@ type Repository interface {
 	ListDueScheduledSubscriptions(context.Context, int64, int) ([]store.Subscription, error)
 	GetScheduledSubscription(context.Context, int64) (*store.Subscription, error)
 	ListDailySummaryTargets(context.Context, int64) ([]store.DailySummaryTarget, error)
-	ListPendingDailySummaryTargets(context.Context, int64, time.Time) ([]store.DailySummaryTarget, error)
 	MarkDailySummaryTargetSent(context.Context, int64, time.Time, store.DailySummaryTarget) error
 	DailySummaryStatistics(context.Context, string, time.Time, time.Time) (store.SummaryStatistics, error)
 	ListSummaryRecentEvents(context.Context, string, time.Time, time.Time, int) ([]store.SummaryEvent, error)
@@ -183,15 +182,6 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		return "skipped", nil
 	}
 
-	due, localDate, periodEnd := summaryDue(*subscription, e.deps.Now())
-	if !due {
-		return "skipped", nil
-	}
-	periodStart, periodEnd := summaryPeriod(*subscription, periodEnd)
-	text, err := e.summaryText(ctx, *subscription, periodStart, periodEnd)
-	if err != nil {
-		return "error", err
-	}
 	targets, err := e.deps.Repository.ListDailySummaryTargets(ctx, subscription.ID)
 	if err != nil {
 		return "error", err
@@ -199,15 +189,29 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 	if len(targets) == 0 {
 		return "error", errors.New("每日摘要没有可用的推送对象。")
 	}
-	pendingTargets, err := e.deps.Repository.ListPendingDailySummaryTargets(
-		ctx,
-		subscription.ID,
-		periodEnd,
-	)
-	if err != nil {
-		return "error", err
-	}
-	for _, target := range pendingTargets {
+	sentCount := 0
+	lastSentDate := ""
+	var lastPeriodEnd time.Time
+	for _, rawTarget := range targets {
+		target := effectiveSummaryTarget(*subscription, rawTarget)
+		if target.Enabled != 1 {
+			continue
+		}
+		due, localDate, periodEnd := summaryTargetDue(target, e.deps.Now())
+		if !due {
+			continue
+		}
+		periodStart, periodEnd := summaryTargetPeriod(target, periodEnd)
+		summarySubscription := summarySubscriptionForTarget(*subscription, target)
+		text, err := e.summaryText(
+			ctx,
+			summarySubscription,
+			periodStart,
+			periodEnd,
+		)
+		if err != nil {
+			return "error", err
+		}
 		if _, err := e.deps.Notifications.SendNotification(
 			target.ChatID,
 			target.ChatType,
@@ -215,6 +219,7 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		); err != nil {
 			return "error", err
 		}
+		target.LastSentDate = localDate
 		if err := e.deps.Repository.MarkDailySummaryTargetSent(
 			ctx,
 			subscription.ID,
@@ -223,23 +228,77 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		); err != nil {
 			return "error", err
 		}
+		sentCount++
+		lastSentDate = localDate
+		lastPeriodEnd = periodEnd
+	}
+	if sentCount == 0 {
+		return "skipped", nil
 	}
 	if err := e.deps.Repository.MarkScheduledPushSent(
 		ctx,
 		subscription.ID,
-		localDate,
-		periodEnd,
+		lastSentDate,
+		lastPeriodEnd,
 	); err != nil {
 		return "error", err
 	}
 	return "sent", nil
 }
 
-func summaryDue(subscription store.Subscription, now time.Time) (bool, string, time.Time) {
-	location, _ := loadLocation(subscription.DailySummaryTimezone)
+func effectiveSummaryTarget(
+	subscription store.Subscription,
+	target store.DailySummaryTarget,
+) store.DailySummaryTarget {
+	legacyTarget := strings.TrimSpace(target.PushTime) == "" &&
+		strings.TrimSpace(target.Timezone) == "" &&
+		strings.TrimSpace(target.Language) == "" &&
+		strings.TrimSpace(target.Label) == ""
+	if legacyTarget {
+		target.Enabled = subscription.DailySummaryEnabled
+	}
+	if strings.TrimSpace(target.PushTime) == "" {
+		target.PushTime = subscription.DailySummaryTime
+	}
+	if strings.TrimSpace(target.Timezone) == "" {
+		target.Timezone = subscription.DailySummaryTimezone
+	}
+	if strings.TrimSpace(target.Label) == "" {
+		target.Label = subscription.DailySummaryLabel
+	}
+	if strings.TrimSpace(target.Language) == "" {
+		target.Language = subscription.DailySummaryLanguage
+	}
+	if target.ChatType == "private" {
+		target.ChatID = subscription.DeBoxUserID
+	}
+	return target
+}
+
+func summarySubscriptionForTarget(
+	subscription store.Subscription,
+	target store.DailySummaryTarget,
+) store.Subscription {
+	subscription.DailySummaryEnabled = target.Enabled
+	subscription.DailySummaryTime = target.PushTime
+	subscription.DailySummaryTimezone = target.Timezone
+	subscription.DailySummaryChatType = target.ChatType
+	subscription.DailySummaryChatID = target.ChatID
+	subscription.DailySummaryLabel = target.Label
+	subscription.DailySummaryLanguage = target.Language
+	subscription.DailySummaryLastSentDate = target.LastSentDate
+	subscription.DailySummaryLastPeriodEndAt = target.LastPeriodEndAt
+	return subscription
+}
+
+func summaryTargetDue(
+	target store.DailySummaryTarget,
+	now time.Time,
+) (bool, string, time.Time) {
+	location, _ := loadLocation(target.Timezone)
 	localNow := now.In(location)
 	localDate := localNow.Format("2006-01-02")
-	hour, minute := parsePushTime(subscription.DailySummaryTime)
+	hour, minute := parsePushTime(target.PushTime)
 	periodEnd := time.Date(
 		localNow.Year(),
 		localNow.Month(),
@@ -250,18 +309,36 @@ func summaryDue(subscription store.Subscription, now time.Time) (bool, string, t
 		0,
 		location,
 	)
-	if subscription.DailySummaryLastSentDate == localDate {
+	if target.LastSentDate == localDate {
 		return false, localDate, periodEnd.UTC()
 	}
 	return !localNow.Before(periodEnd), localDate, periodEnd.UTC()
 }
 
-func summaryPeriod(subscription store.Subscription, periodEnd time.Time) (time.Time, time.Time) {
-	periodStart := subscription.DailySummaryLastPeriodEndAt
+func summaryTargetPeriod(
+	target store.DailySummaryTarget,
+	periodEnd time.Time,
+) (time.Time, time.Time) {
+	periodStart := target.LastPeriodEndAt
 	if periodStart == nil || !periodStart.Before(periodEnd) {
 		return periodEnd.Add(-24 * time.Hour), periodEnd
 	}
 	return periodStart.UTC(), periodEnd
+}
+
+func summaryDue(subscription store.Subscription, now time.Time) (bool, string, time.Time) {
+	return summaryTargetDue(store.DailySummaryTarget{
+		Enabled:      subscription.DailySummaryEnabled,
+		PushTime:     subscription.DailySummaryTime,
+		Timezone:     subscription.DailySummaryTimezone,
+		LastSentDate: subscription.DailySummaryLastSentDate,
+	}, now)
+}
+
+func summaryPeriod(subscription store.Subscription, periodEnd time.Time) (time.Time, time.Time) {
+	return summaryTargetPeriod(store.DailySummaryTarget{
+		LastPeriodEndAt: subscription.DailySummaryLastPeriodEndAt,
+	}, periodEnd)
 }
 
 func (e *Executor) summaryText(

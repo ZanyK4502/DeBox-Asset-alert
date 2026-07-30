@@ -26,11 +26,19 @@ type Subscription struct {
 }
 
 type DailySummaryTarget struct {
-	ID             int64     `db:"id" json:"id"`
-	SubscriptionID int64     `db:"subscription_id" json:"subscription_id"`
-	ChatType       string    `db:"chat_type" json:"chat_type"`
-	ChatID         string    `db:"chat_id" json:"chat_id"`
-	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+	ID              int64      `db:"id" json:"id"`
+	SubscriptionID  int64      `db:"subscription_id" json:"subscription_id"`
+	ChatType        string     `db:"chat_type" json:"chat_type"`
+	ChatID          string     `db:"chat_id" json:"chat_id"`
+	Enabled         int32      `db:"enabled" json:"enabled"`
+	PushTime        string     `db:"push_time" json:"push_time"`
+	Timezone        string     `db:"timezone" json:"timezone"`
+	Label           string     `db:"label" json:"label"`
+	Language        string     `db:"language" json:"language"`
+	LastSentDate    string     `db:"last_sent_date" json:"last_sent_date"`
+	LastPeriodEndAt *time.Time `db:"last_period_end_at" json:"last_period_end_at,omitempty"`
+	LastSentAt      *time.Time `db:"last_sent_at" json:"last_sent_at,omitempty"`
+	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 }
 
 type WatchRule struct {

@@ -764,6 +764,98 @@ func TestSummarySendsToAllSelectedTargets(t *testing.T) {
 	}
 }
 
+func TestSummaryTargetsUseIndependentSchedulesAndLanguages(t *testing.T) {
+	subscription := testSubscription(1)
+	repository := &fakeRepository{
+		subscriptions: []store.Subscription{subscription},
+		targets: map[int64][]store.DailySummaryTarget{
+			1: {
+				{
+					SubscriptionID: 1,
+					ChatType:       "private",
+					ChatID:         "user-1",
+					Enabled:        1,
+					PushTime:       "20:00",
+					Timezone:       "Asia/Shanghai",
+					Label:          "早间摘要",
+					Language:       "zh",
+				},
+				{
+					SubscriptionID: 1,
+					ChatType:       "group",
+					ChatID:         "group-1",
+					Enabled:        1,
+					PushTime:       "08:00",
+					Timezone:       "America/New_York",
+					Label:          "New York close",
+					Language:       "en",
+				},
+			},
+		},
+	}
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(repository, notifier, acquiredLock(nil))
+
+	result, err := executor.SendDue(context.Background(), 100)
+
+	if err != nil || len(result.Errors) != 0 || result.Sent != 1 {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	if len(notifier.messages) != 2 {
+		t.Fatalf("messages = %#v", notifier.messages)
+	}
+	if !strings.Contains(notifier.messages[0].text, "每日摘要 · 早间摘要") ||
+		!strings.Contains(notifier.messages[0].text, "Asia/Shanghai") {
+		t.Fatalf("private summary = %s", notifier.messages[0].text)
+	}
+	if !strings.Contains(notifier.messages[1].text, "Daily Summary · New York close") ||
+		!strings.Contains(notifier.messages[1].text, "America/New_York") {
+		t.Fatalf("group summary = %s", notifier.messages[1].text)
+	}
+}
+
+func TestSummaryTargetsAreEvaluatedAtTheirOwnLocalCutoff(t *testing.T) {
+	subscription := testSubscription(1)
+	repository := &fakeRepository{
+		subscriptions: []store.Subscription{subscription},
+		targets: map[int64][]store.DailySummaryTarget{
+			1: {
+				{
+					SubscriptionID: 1,
+					ChatType:       "private",
+					ChatID:         "user-1",
+					Enabled:        1,
+					PushTime:       "20:00",
+					Timezone:       "Asia/Shanghai",
+					Language:       "zh",
+				},
+				{
+					SubscriptionID: 1,
+					ChatType:       "group",
+					ChatID:         "group-1",
+					Enabled:        1,
+					PushTime:       "09:00",
+					Timezone:       "America/New_York",
+					Language:       "en",
+				},
+			},
+		},
+	}
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(repository, notifier, acquiredLock(nil))
+
+	result, err := executor.SendDue(context.Background(), 100)
+
+	if err != nil || len(result.Errors) != 0 || result.Sent != 1 {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	if len(notifier.messages) != 1 ||
+		notifier.messages[0].chatType != "private" ||
+		notifier.messages[0].chatID != "user-1" {
+		t.Fatalf("messages = %#v", notifier.messages)
+	}
+}
+
 func TestLockedSubscriptionIsSkippedWithoutReadingIt(t *testing.T) {
 	subscription := testSubscription(1)
 	repository := &fakeRepository{subscriptions: []store.Subscription{subscription}}

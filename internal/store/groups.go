@@ -238,6 +238,7 @@ func (s *Store) DeleteNotificationGroup(
 					  SELECT 1
 					  FROM daily_summary_targets t
 					  WHERE t.subscription_id = s.id
+					    AND t.enabled = 1
 				  )
 			`, subscriptionIDs)
 			if err != nil {

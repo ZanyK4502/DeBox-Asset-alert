@@ -404,6 +404,11 @@ type SummarySettingsInput struct {
 type SummaryTargetInput struct {
 	ChatType string `json:"chat_type"`
 	ChatID   string `json:"chat_id"`
+	Enabled  *bool  `json:"enabled,omitempty"`
+	PushTime string `json:"push_time,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+	Label    string `json:"label,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 func DefaultSummarySettingsInput() SummarySettingsInput {
@@ -455,6 +460,7 @@ func (s *Service) SaveSummarySettings(
 	normalizedTargets := make([]store.DailySummaryTarget, 0, len(targets))
 	seenTargets := make(map[string]struct{}, len(targets))
 	groupCount := 0
+	anyEnabled := false
 	for _, target := range targets {
 		chatType := strings.ToLower(strings.TrimSpace(target.ChatType))
 		chatID := strings.TrimSpace(target.ChatID)
@@ -479,42 +485,71 @@ func (s *Service) SaveSummarySettings(
 		if chatType == "group" {
 			groupCount++
 		}
+		enabled := input.Enabled
+		if target.Enabled != nil {
+			enabled = *target.Enabled
+		}
+		pushTime := strings.TrimSpace(target.PushTime)
+		if pushTime == "" {
+			pushTime = input.PushTime
+		}
+		pushTime, err = validatePushTime(pushTime)
+		if err != nil {
+			return SummarySettingsResult{}, err
+		}
+		timezoneName := strings.TrimSpace(target.Timezone)
+		if timezoneName == "" {
+			timezoneName = input.Timezone
+		}
+		timezoneName, err = validateSummaryTimezone(timezoneName)
+		if err != nil {
+			return SummarySettingsResult{}, err
+		}
+		language := strings.TrimSpace(target.Language)
+		if language == "" {
+			language = input.Language
+		}
+		language, err = requireLanguage(language)
+		if err != nil {
+			return SummarySettingsResult{}, err
+		}
+		label := strings.TrimSpace(target.Label)
+		if label == "" {
+			label = strings.TrimSpace(input.Label)
+		}
+		if label == "" {
+			label = "每日摘要"
+		}
+		enabledValue := int32(0)
+		if enabled {
+			enabledValue = 1
+			anyEnabled = true
+		}
 		normalizedTargets = append(normalizedTargets, store.DailySummaryTarget{
 			ChatType: chatType,
 			ChatID:   chatID,
+			Enabled:  enabledValue,
+			PushTime: pushTime,
+			Timezone: timezoneName,
+			Label:    label,
+			Language: language,
 		})
 	}
 	if groupCount > plan.GroupLimit {
 		return SummarySettingsResult{}, fmt.Errorf("当前套餐最多选择 %d 个群作为摘要推送对象。", plan.GroupLimit)
-	}
-	language, err := requireLanguage(input.Language)
-	if err != nil {
-		return SummarySettingsResult{}, err
-	}
-	pushTime, err := validatePushTime(input.PushTime)
-	if err != nil {
-		return SummarySettingsResult{}, err
-	}
-	timezoneName, err := validateSummaryTimezone(input.Timezone)
-	if err != nil {
-		return SummarySettingsResult{}, err
-	}
-	label := strings.TrimSpace(input.Label)
-	if label == "" {
-		label = "每日摘要"
 	}
 	legacyTarget := normalizedTargets[0]
 	updated, err := s.deps.Repository.UpdateDailySummarySettings(
 		ctx,
 		deboxUserID,
 		store.DailySummarySettings{
-			Enabled:      input.Enabled,
-			PushTime:     pushTime,
-			TimezoneName: timezoneName,
+			Enabled:      anyEnabled,
+			PushTime:     legacyTarget.PushTime,
+			TimezoneName: legacyTarget.Timezone,
 			ChatType:     legacyTarget.ChatType,
 			ChatID:       legacyTarget.ChatID,
-			Label:        label,
-			Language:     language,
+			Label:        legacyTarget.Label,
+			Language:     legacyTarget.Language,
 			Targets:      normalizedTargets,
 		},
 	)

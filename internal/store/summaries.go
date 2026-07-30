@@ -20,6 +20,11 @@ type DailySummarySettings struct {
 	Targets      []DailySummaryTarget
 }
 
+const dailySummaryTargetColumns = `
+	id, subscription_id, chat_type, chat_id, enabled, push_time, timezone,
+	label, language, last_sent_date, last_period_end_at, last_sent_at, created_at
+`
+
 func (s *Store) UpdateDailySummarySettings(
 	ctx context.Context,
 	deboxUserID string,
@@ -66,13 +71,6 @@ func (s *Store) UpdateDailySummarySettings(
 		if err != nil {
 			return Subscription{}, fmt.Errorf("update daily summary settings: %w", err)
 		}
-		if _, err := tx.Exec(
-			ctx,
-			"DELETE FROM daily_summary_targets WHERE subscription_id = $1",
-			subscription.ID,
-		); err != nil {
-			return Subscription{}, fmt.Errorf("replace daily summary targets: %w", err)
-		}
 		targets := settings.Targets
 		if settings.Enabled && len(targets) == 0 {
 			chatType := settings.ChatType
@@ -85,16 +83,62 @@ func (s *Store) UpdateDailySummarySettings(
 					SubscriptionID: subscription.ID,
 					ChatType:       chatType,
 					ChatID:         chatID,
+					Enabled:        1,
+					PushTime:       settings.PushTime,
+					Timezone:       settings.TimezoneName,
+					Label:          settings.Label,
+					Language:       normalizeLanguage(settings.Language),
 				}}
 			}
 		}
+		targetKeys := make([]string, 0, len(targets))
 		for _, target := range targets {
+			targetKeys = append(targetKeys, target.ChatType+":"+target.ChatID)
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO daily_summary_targets (subscription_id, chat_type, chat_id)
-				VALUES ($1, $2, $3)
-			`, subscription.ID, target.ChatType, target.ChatID); err != nil {
-				return Subscription{}, fmt.Errorf("insert daily summary target: %w", err)
+				INSERT INTO daily_summary_targets (
+					subscription_id, chat_type, chat_id, enabled, push_time,
+					timezone, label, language
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				ON CONFLICT (subscription_id, chat_type, chat_id)
+				DO UPDATE SET
+					enabled = EXCLUDED.enabled,
+					push_time = EXCLUDED.push_time,
+					timezone = EXCLUDED.timezone,
+					label = EXCLUDED.label,
+					language = EXCLUDED.language,
+					last_sent_date = CASE
+						WHEN daily_summary_targets.push_time IS DISTINCT FROM EXCLUDED.push_time
+						  OR daily_summary_targets.timezone IS DISTINCT FROM EXCLUDED.timezone
+						THEN ''
+						ELSE daily_summary_targets.last_sent_date
+					END,
+					last_period_end_at = CASE
+						WHEN daily_summary_targets.push_time IS DISTINCT FROM EXCLUDED.push_time
+						  OR daily_summary_targets.timezone IS DISTINCT FROM EXCLUDED.timezone
+						THEN NULL
+						ELSE daily_summary_targets.last_period_end_at
+					END
+			`, subscription.ID, target.ChatType, target.ChatID, target.Enabled,
+				target.PushTime, target.Timezone, target.Label,
+				normalizeLanguage(target.Language)); err != nil {
+				return Subscription{}, fmt.Errorf("upsert daily summary target: %w", err)
 			}
+		}
+		if len(targetKeys) == 0 {
+			if _, err := tx.Exec(
+				ctx,
+				"DELETE FROM daily_summary_targets WHERE subscription_id = $1",
+				subscription.ID,
+			); err != nil {
+				return Subscription{}, fmt.Errorf("remove daily summary targets: %w", err)
+			}
+		} else if _, err := tx.Exec(ctx, `
+			DELETE FROM daily_summary_targets
+			WHERE subscription_id = $1
+			  AND NOT ((chat_type || ':' || chat_id) = ANY($2::text[]))
+		`, subscription.ID, targetKeys); err != nil {
+			return Subscription{}, fmt.Errorf("remove stale daily summary targets: %w", err)
 		}
 		return subscription, nil
 	})
@@ -105,7 +149,7 @@ func (s *Store) ListDailySummaryTargets(
 	subscriptionID int64,
 ) ([]DailySummaryTarget, error) {
 	targets, err := collectMany[DailySummaryTarget](ctx, s.db, `
-		SELECT id, subscription_id, chat_type, chat_id, created_at
+		SELECT `+dailySummaryTargetColumns+`
 		FROM daily_summary_targets
 		WHERE subscription_id = $1
 		ORDER BY CASE WHEN chat_type = 'private' THEN 0 ELSE 1 END, id ASC
@@ -122,7 +166,10 @@ func (s *Store) ListPendingDailySummaryTargets(
 	periodEnd time.Time,
 ) ([]DailySummaryTarget, error) {
 	targets, err := collectMany[DailySummaryTarget](ctx, s.db, `
-		SELECT t.id, t.subscription_id, t.chat_type, t.chat_id, t.created_at
+		SELECT
+			t.id, t.subscription_id, t.chat_type, t.chat_id, t.enabled,
+			t.push_time, t.timezone, t.label, t.language, t.last_sent_date,
+			t.last_period_end_at, t.last_sent_at, t.created_at
 		FROM daily_summary_targets t
 		LEFT JOIN daily_summary_deliveries d
 		  ON d.subscription_id = t.subscription_id
@@ -130,6 +177,7 @@ func (s *Store) ListPendingDailySummaryTargets(
 		 AND d.chat_type = t.chat_type
 		 AND d.chat_id = t.chat_id
 		WHERE t.subscription_id = $1
+		  AND t.enabled = 1
 		  AND d.id IS NULL
 		ORDER BY CASE WHEN t.chat_type = 'private' THEN 0 ELSE 1 END, t.id ASC
 	`, subscriptionID, periodEnd.UTC())
@@ -145,18 +193,32 @@ func (s *Store) MarkDailySummaryTargetSent(
 	periodEnd time.Time,
 	target DailySummaryTarget,
 ) error {
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO daily_summary_deliveries (
-			subscription_id, period_end_at, chat_type, chat_id
-		)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (subscription_id, period_end_at, chat_type, chat_id)
-		DO NOTHING
-	`, subscriptionID, periodEnd.UTC(), target.ChatType, target.ChatID)
-	if err != nil {
-		return fmt.Errorf("mark daily summary target sent: %w", err)
-	}
-	return nil
+	_, err := withTxValue(ctx, s.db, func(tx DBTX) (struct{}, error) {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO daily_summary_deliveries (
+				subscription_id, period_end_at, chat_type, chat_id
+			)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (subscription_id, period_end_at, chat_type, chat_id)
+			DO NOTHING
+		`, subscriptionID, periodEnd.UTC(), target.ChatType, target.ChatID); err != nil {
+			return struct{}{}, fmt.Errorf("record daily summary delivery: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE daily_summary_targets
+			SET last_sent_date = $1,
+			    last_period_end_at = $2,
+			    last_sent_at = NOW()
+			WHERE subscription_id = $3
+			  AND chat_type = $4
+			  AND chat_id = $5
+		`, target.LastSentDate, periodEnd.UTC(), subscriptionID,
+			target.ChatType, target.ChatID); err != nil {
+			return struct{}{}, fmt.Errorf("advance daily summary target: %w", err)
+		}
+		return struct{}{}, nil
+	})
+	return err
 }
 
 func (s *Store) ListDueScheduledSubscriptions(
@@ -170,6 +232,12 @@ func (s *Store) ListDueScheduledSubscriptions(
 		WHERE status = 'active'
 		  AND (is_permanent = 1 OR expires_at > NOW())
 		  AND daily_summary_enabled = 1
+		  AND EXISTS (
+			  SELECT 1
+			  FROM daily_summary_targets target
+			  WHERE target.subscription_id = subscriptions.id
+			    AND target.enabled = 1
+		  )
 		  AND id > $1
 		ORDER BY id ASC
 		LIMIT $2
@@ -191,6 +259,12 @@ func (s *Store) GetScheduledSubscription(
 		  AND status = 'active'
 		  AND (is_permanent = 1 OR expires_at > NOW())
 		  AND daily_summary_enabled = 1
+		  AND EXISTS (
+			  SELECT 1
+			  FROM daily_summary_targets target
+			  WHERE target.subscription_id = subscriptions.id
+			    AND target.enabled = 1
+		  )
 		LIMIT 1
 	`, subscriptionID)
 	if err != nil {

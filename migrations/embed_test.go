@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0017_market_project_expiry_freeze.sql" {
-		t.Fatalf("latest migration = %q, want market project expiry freeze migration", got)
+	if got := names[len(names)-1]; got != "0018_independent_daily_summary_targets.sql" {
+		t.Fatalf("latest migration = %q, want independent daily summary targets migration", got)
 	}
 
 	requiredTables := []string{
@@ -99,7 +99,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 			name != "0011_multichain_market_domain.sql" &&
 			name != "0012_multichain_market_collection.sql" &&
 			name != "0014_repair_multichain_collection_links.sql" &&
-			name != "0017_market_project_expiry_freeze.sql" {
+			name != "0017_market_project_expiry_freeze.sql" &&
+			name != "0018_independent_daily_summary_targets.sql" {
 			t.Fatalf("migration %q contains an unreviewed data update", name)
 		}
 		for _, statement := range alterStatement.FindAllString(sql, -1) {

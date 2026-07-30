@@ -891,72 +891,13 @@
             </div>
             <div class="summary-status-actions">
               <button id="summaryEditBtn" class="secondary compact" type="button" data-i18n="editSummary">编辑</button>
-              <button id="summaryDisableBtn" class="secondary compact danger" type="button" data-i18n="disableSummary">关闭</button>
             </div>
           </div>
-          <div class="summary-status-grid">
-            <div>
-              <span data-i18n="pushTime">推送时间</span>
-              <strong id="summaryStatusTime">--</strong>
-            </div>
-            <div>
-              <span data-i18n="timezone">时区</span>
-              <strong id="summaryStatusTimezone">--</strong>
-            </div>
-            <div>
-              <span data-i18n="summaryLanguage">摘要语言</span>
-              <strong id="summaryStatusLanguage">--</strong>
-            </div>
-            <div>
-              <span data-i18n="note">备注</span>
-              <strong id="summaryStatusLabel">--</strong>
-            </div>
-            <div class="summary-status-targets">
-              <span data-i18n="summaryTarget">推送对象</span>
-              <strong id="summaryStatusTargets">--</strong>
-            </div>
-          </div>
+          <div id="summaryStatusList" class="summary-schedule-list"></div>
         </div>
         <form id="summaryForm" class="form-grid summary-grid">
-          <div class="notice muted" data-i18n="summaryNotice">每期统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。</div>
-          <label class="switch-line" data-i18n-label="enableSummary">
-            <input id="summaryEnabledInput" type="checkbox" />
-            开启每日摘要
-          </label>
-          <label data-i18n-label="pushTime">
-            推送时间
-            <input id="summaryTimeInput" type="time" value="20:00" />
-          </label>
-          <label data-i18n-label="timezone">
-            时区
-            <select id="summaryTimezoneInput">
-              <option value="Asia/Shanghai" data-i18n="timezoneShanghai">中国 / 新加坡 / 马来西亚 / 菲律宾 UTC+8</option>
-              <option value="Asia/Tokyo" data-i18n="timezoneTokyo">日本 / 韩国 UTC+9</option>
-              <option value="Asia/Bangkok" data-i18n="timezoneBangkok">越南 / 泰国 / 印尼西部 UTC+7</option>
-              <option value="Asia/Kolkata" data-i18n="timezoneKolkata">印度 UTC+5:30</option>
-              <option value="Europe/Berlin" data-i18n="timezoneBerlin">欧洲中部 UTC+1/UTC+2</option>
-              <option value="Europe/London" data-i18n="timezoneLondon">英国 UTC+0/UTC+1</option>
-              <option value="America/New_York" data-i18n="timezoneNewYork">美国东部 UTC-5/UTC-4</option>
-              <option value="America/Los_Angeles" data-i18n="timezoneLosAngeles">美国西部 UTC-8/UTC-7</option>
-              <option value="UTC" data-i18n="timezoneUtc">UTC 时间</option>
-            </select>
-          </label>
-          <label data-i18n-label="summaryLanguage">
-            摘要语言
-            <select id="summaryLanguageInput">
-              <option value="zh" data-i18n="chinese">中文</option>
-              <option value="en">English</option>
-            </select>
-          </label>
-          <label data-i18n-label="note">
-            备注
-            <input id="summaryLabelInput" placeholder="例如晚间摘要" data-i18n-placeholder="summaryNotePlaceholder" autocomplete="off" />
-          </label>
-          <fieldset class="summary-target-fieldset">
-            <legend data-i18n="summaryTarget">推送对象</legend>
-            <p class="field-note" data-i18n="summaryTargetHint">至少选择一个推送对象。</p>
-            <div id="summaryTargetOptions" class="summary-target-options"></div>
-          </fieldset>
+          <div class="notice muted" data-i18n="summaryNotice">每个推送对象可独立设置时间、时区、语言和备注；首次摘要统计此前 24 小时。</div>
+          <div id="summaryTargetOptions" class="summary-target-options"></div>
           <div class="form-actions">
             <button class="primary" type="submit" data-i18n="saveSummary">保存摘要设置</button>
           </div>

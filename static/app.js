@@ -131,17 +131,18 @@ const CHAIN_LOGOS = {
   optimism: "/static/chains/optimism.png",
 };
 
-const SUMMARY_TIMEZONES = new Set([
-  "Asia/Shanghai",
-  "Asia/Tokyo",
-  "Asia/Bangkok",
-  "Asia/Kolkata",
-  "Europe/Berlin",
-  "Europe/London",
-  "America/New_York",
-  "America/Los_Angeles",
-  "UTC",
-]);
+const SUMMARY_TIMEZONE_OPTIONS = [
+  ["Asia/Shanghai", "timezoneShanghai"],
+  ["Asia/Tokyo", "timezoneTokyo"],
+  ["Asia/Bangkok", "timezoneBangkok"],
+  ["Asia/Kolkata", "timezoneKolkata"],
+  ["Europe/Berlin", "timezoneBerlin"],
+  ["Europe/London", "timezoneLondon"],
+  ["America/New_York", "timezoneNewYork"],
+  ["America/Los_Angeles", "timezoneLosAngeles"],
+  ["UTC", "timezoneUtc"],
+];
+const SUMMARY_TIMEZONES = new Set(SUMMARY_TIMEZONE_OPTIONS.map(([timezone]) => timezone));
 
 function chainLogoSrc(chainKey) {
   return CHAIN_LOGOS[String(chainKey || "").toLowerCase()] || "";
@@ -226,6 +227,7 @@ function renderLocalizedState() {
   renderCombinationDraft();
   renderProfile();
   renderSubscription(false);
+  renderSummaryTargetOptions(selectedSummaryTargets());
   renderSummaryCapability();
   renderGroups();
   renderRules();
@@ -569,7 +571,7 @@ function resetConnectionState() {
   renderMarket();
   $("summaryCapability").textContent = t("notConnected");
   $("summaryCapability").classList.add("muted");
-  renderSummaryTargetOptions(new Set());
+  renderSummaryTargetOptions([]);
   renderSummaryStatus();
   renderPlans();
   updateConnectionButton();
@@ -738,12 +740,12 @@ function renderSubscription(syncSummary = true) {
 }
 
 function renderGroups() {
-  const selectedSummaryTargets = selectedSummaryTargetKeys();
+  const draftSummaryTargets = selectedSummaryTargets();
   if (!state.deboxUserId) {
     $("groupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("combinationGroupTargetSelect").innerHTML = `<option value="">${escapeHtml(t("noBoundGroups"))}</option>`;
     $("groupsList").innerHTML = "";
-    renderSummaryTargetOptions(new Set());
+    renderSummaryTargetOptions([]);
     renderSummaryStatus();
     return;
   }
@@ -783,7 +785,7 @@ function renderGroups() {
   });
   updateTargetVisibility();
   updateCombinationTargetVisibility();
-  renderSummaryTargetOptions(selectedSummaryTargets);
+  renderSummaryTargetOptions(draftSummaryTargets);
   updateSummaryTargetVisibility();
   renderSummaryStatus();
 }
@@ -1243,17 +1245,7 @@ async function loadAggregateEvents({ append = false } = {}) {
 
 function fillSummaryForm() {
   const settings = state.entitlement?.summary_settings || {};
-  $("summaryEnabledInput").checked = Boolean(settings.enabled);
-  $("summaryTimeInput").value = settings.time || "20:00";
-  $("summaryTimezoneInput").value = normalizeSummaryTimezone(settings.timezone);
-  $("summaryLanguageInput").value = settings.language === "en" ? "en" : "zh";
-  $("summaryLabelInput").value = settings.label || "";
-  const selectedTargets = new Set(
-    summaryTargetsFromSettings(settings).map((target) =>
-      target.chat_type === "private" ? "private" : `group:${target.chat_id}`
-    )
-  );
-  renderSummaryTargetOptions(selectedTargets);
+  renderSummaryTargetOptions(summaryTargetsFromSettings(settings));
   renderSummaryCapability();
   updateSummaryTargetVisibility();
 }
@@ -1269,95 +1261,157 @@ function summaryTargetsFromSettings(settings = {}) {
   return [];
 }
 
-function selectedSummaryTargetKeys() {
-  return new Set(
-    [...document.querySelectorAll("#summaryTargetOptions input:checked")].map((input) =>
-      input.dataset.chatType === "private" ? "private" : `group:${input.dataset.chatId}`
-    )
-  );
+function summaryTargetKey(target) {
+  return target?.chat_type === "private" ? "private" : `group:${target?.chat_id || ""}`;
 }
 
 function selectedSummaryTargets() {
-  return [...document.querySelectorAll("#summaryTargetOptions input:checked")].map((input) => ({
-    chat_type: input.dataset.chatType,
-    chat_id: input.dataset.chatType === "private" ? state.deboxUserId : input.dataset.chatId,
+  return [...document.querySelectorAll("[data-summary-target-card]")].map((card) => ({
+    chat_type: card.dataset.chatType,
+    chat_id: card.dataset.chatType === "private" ? state.deboxUserId : card.dataset.chatId,
+    enabled: card.querySelector(".summary-target-enabled").checked,
+    push_time: card.querySelector(".summary-target-time").value || "20:00",
+    timezone: normalizeSummaryTimezone(card.querySelector(".summary-target-timezone").value),
+    language: card.querySelector(".summary-target-language").value === "en" ? "en" : "zh",
+    label: card.querySelector(".summary-target-label").value.trim(),
   }));
 }
 
-function renderSummaryTargetOptions(selectedKeys = selectedSummaryTargetKeys()) {
+function summaryTargetSchedule(target = {}, settings = {}, configured = false) {
+  const hasTargetEnabled = target.enabled !== undefined && target.enabled !== null;
+  return {
+    enabled: configured
+      ? (hasTargetEnabled ? target.enabled === true || Number(target.enabled) === 1 : Boolean(settings.enabled))
+      : false,
+    push_time: target.push_time || settings.time || "20:00",
+    timezone: normalizeSummaryTimezone(target.timezone || settings.timezone),
+    language: (target.language || settings.language) === "en" ? "en" : "zh",
+    label: target.label || (configured ? settings.label || "" : ""),
+  };
+}
+
+function summaryTimezoneOptions(selectedTimezone) {
+  const selected = normalizeSummaryTimezone(selectedTimezone);
+  return SUMMARY_TIMEZONE_OPTIONS.map(
+    ([timezone, label]) =>
+      `<option value="${escapeHtml(timezone)}" ${timezone === selected ? "selected" : ""}>${escapeHtml(t(label))}</option>`
+  ).join("");
+}
+
+function renderSummaryTargetOptions(draftTargets = null) {
   const plan = currentPlan();
   const available = Boolean(state.deboxUserId && plan?.daily_summary);
   const professional = plan?.code === "professional";
-  const selected = new Set(selectedKeys);
-  if (available && selected.size === 0) selected.add("private");
-
-  const options = [
-    `<label class="summary-target-option">
-      <input
-        type="checkbox"
-        data-chat-type="private"
-        data-chat-id="${escapeHtml(state.deboxUserId)}"
-        ${selected.has("private") ? "checked" : ""}
-        ${!available || !professional ? "disabled" : ""}
-      />
-      <span>${escapeHtml(t("privateSelf"))}</span>
-    </label>`,
+  const settings = state.entitlement?.summary_settings || {};
+  const savedTargets = Array.isArray(draftTargets)
+    ? draftTargets
+    : summaryTargetsFromSettings(settings);
+  const savedByKey = new Map(savedTargets.map((target) => [summaryTargetKey(target), target]));
+  const candidates = [
+    { chat_type: "private", chat_id: state.deboxUserId, name: t("privateSelf") },
   ];
-
   if (professional) {
-    if (state.groups.length) {
-      options.push(
-        ...state.groups.map((group) => {
-          const key = `group:${group.gid}`;
-          return `<label class="summary-target-option">
-            <input
-              type="checkbox"
-              data-chat-type="group"
-              data-chat-id="${escapeHtml(group.gid)}"
-              ${selected.has(key) ? "checked" : ""}
-              ${available ? "" : "disabled"}
-            />
-            <span>${escapeHtml(group.name || group.gid)}</span>
-          </label>`;
-        })
-      );
-    } else {
-      options.push(`<div class="notice muted">${escapeHtml(t("noBoundGroups"))}</div>`);
-    }
+    candidates.push(
+      ...state.groups.map((group) => ({
+        chat_type: "group",
+        chat_id: group.gid,
+        name: group.name || group.gid,
+      }))
+    );
   }
 
-  $("summaryTargetOptions").innerHTML = options.join("");
+  const cards = candidates.map((candidate) => {
+    const key = summaryTargetKey(candidate);
+    const saved = savedByKey.get(key);
+    const schedule = summaryTargetSchedule(saved, settings, Boolean(saved));
+    return `
+      <section
+        class="summary-target-card"
+        data-summary-target-card
+        data-chat-type="${escapeHtml(candidate.chat_type)}"
+        data-chat-id="${escapeHtml(candidate.chat_id)}"
+      >
+        <div class="summary-target-card-head">
+          <div>
+            <span class="summary-target-kind">${escapeHtml(candidate.chat_type === "private" ? t("privateTarget") : t("groupTarget"))}</span>
+            <strong>${escapeHtml(candidate.name)}</strong>
+          </div>
+          <label class="switch-line summary-target-switch">
+            <input class="summary-target-enabled" type="checkbox" ${schedule.enabled ? "checked" : ""} />
+            ${escapeHtml(t("enableSummary"))}
+          </label>
+        </div>
+        <div class="summary-target-fields">
+          <label>
+            ${escapeHtml(t("pushTime"))}
+            <input class="summary-target-time" type="time" value="${escapeHtml(schedule.push_time)}" />
+          </label>
+          <label>
+            ${escapeHtml(t("timezone"))}
+            <select class="summary-target-timezone">${summaryTimezoneOptions(schedule.timezone)}</select>
+          </label>
+          <label>
+            ${escapeHtml(t("summaryLanguage"))}
+            <select class="summary-target-language">
+              <option value="zh" ${schedule.language === "zh" ? "selected" : ""}>${escapeHtml(t("chinese"))}</option>
+              <option value="en" ${schedule.language === "en" ? "selected" : ""}>English</option>
+            </select>
+          </label>
+          <label>
+            ${escapeHtml(t("note"))}
+            <input
+              class="summary-target-label"
+              value="${escapeHtml(schedule.label)}"
+              placeholder="${escapeHtml(t("summaryNotePlaceholder"))}"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+      </section>
+    `;
+  });
+  if (professional && !state.groups.length) {
+    cards.push(`<div class="notice muted">${escapeHtml(t("noBoundGroups"))}</div>`);
+  }
+  $("summaryTargetOptions").innerHTML = cards.join("");
+  document.querySelectorAll(".summary-target-enabled").forEach((input) => {
+    input.addEventListener("change", updateSummaryTargetCards);
+  });
+  updateSummaryTargetCards();
 }
 
 function renderSummaryStatus(settings = state.entitlement?.summary_settings || {}) {
   const plan = currentPlan();
   const available = Boolean(state.deboxUserId && plan?.daily_summary);
   const targets = summaryTargetsFromSettings(settings);
-  const configured = targets.length > 0;
-  const enabled = available && Boolean(settings.enabled);
   const groupNames = new Map(state.groups.map((group) => [group.gid, group.name || group.gid]));
-  const targetLabels = targets.map((target) =>
-    target.chat_type === "private"
+  const schedules = targets.map((target) => ({
+    ...target,
+    ...summaryTargetSchedule(target, settings, true),
+    name: target.chat_type === "private"
       ? t("privateSelf")
-      : groupNames.get(target.chat_id) || target.chat_id
-  );
-
+      : groupNames.get(target.chat_id) || target.chat_id,
+  }));
+  const enabledCount = schedules.filter((target) => target.enabled).length;
   $("summaryStatusState").textContent = available
-    ? (enabled ? t("summaryEnabledStatus") : t("summaryDisabledStatus"))
+    ? t("summaryEnabledCount", { enabled: enabledCount, total: schedules.length })
     : "--";
-  $("summaryStatusTime").textContent = available && configured ? settings.time || "20:00" : "--";
-  $("summaryStatusTimezone").textContent = available && configured
-    ? normalizeSummaryTimezone(settings.timezone)
-    : "--";
-  $("summaryStatusLanguage").textContent = available && configured
-    ? (settings.language === "en" ? "English" : t("chinese"))
-    : "--";
-  $("summaryStatusLabel").textContent = available && configured && settings.label ? settings.label : "--";
-  $("summaryStatusTargets").textContent = available && targetLabels.length
-    ? targetLabels.join(state.uiLanguage === "en" ? ", " : "、")
-    : "--";
+  $("summaryStatusList").innerHTML = schedules.length
+    ? schedules.map((target) => `
+        <div class="summary-schedule-status-card ${target.enabled ? "" : "muted"}">
+          <div>
+            <strong>${escapeHtml(target.name)}</strong>
+            <span>${escapeHtml(target.chat_type === "private" ? t("privateTarget") : t("groupTarget"))}</span>
+          </div>
+          <div>
+            <strong>${escapeHtml(target.push_time)} · ${escapeHtml(target.timezone)}</strong>
+            <span>${escapeHtml(target.language === "en" ? "English" : t("chinese"))}${target.label ? ` · ${escapeHtml(target.label)}` : ""}</span>
+          </div>
+          <span class="badge ${target.enabled ? "" : "muted"}">${escapeHtml(target.enabled ? t("summaryEnabledStatus") : t("summaryDisabledStatus"))}</span>
+        </div>
+      `).join("")
+    : `<div class="notice muted">${escapeHtml(t("summaryNoTargets"))}</div>`;
   $("summaryEditBtn").disabled = !available;
-  $("summaryDisableBtn").disabled = !enabled;
 }
 
 function renderSummaryCapability() {
@@ -1615,9 +1669,22 @@ function updateTargetVisibility() {
 function updateSummaryTargetVisibility() {
   const plan = currentPlan();
   const available = Boolean(state.deboxUserId && plan?.daily_summary);
-  $("summaryForm").querySelectorAll("input, select, button").forEach((control) => {
-    if (control.closest("#summaryTargetOptions")) return;
+  $("summaryForm").querySelectorAll('button[type="submit"]').forEach((control) => {
     control.disabled = !available;
+  });
+  updateSummaryTargetCards();
+}
+
+function updateSummaryTargetCards() {
+  const plan = currentPlan();
+  const available = Boolean(state.deboxUserId && plan?.daily_summary);
+  document.querySelectorAll("[data-summary-target-card]").forEach((card) => {
+    const enabledInput = card.querySelector(".summary-target-enabled");
+    enabledInput.disabled = !available;
+    card.querySelectorAll(".summary-target-fields input, .summary-target-fields select").forEach((control) => {
+      control.disabled = !available || !enabledInput.checked;
+    });
+    card.classList.toggle("disabled", !enabledInput.checked);
   });
 }
 
@@ -2102,24 +2169,25 @@ async function saveSummary(event) {
     toast(t("connectFirst"));
     return;
   }
-  await persistSummarySettings($("summaryEnabledInput").checked);
+  await persistSummarySettings();
 }
 
-async function persistSummarySettings(enabled) {
+async function persistSummarySettings() {
   const targets = selectedSummaryTargets();
   if (!targets.length) {
     toast(t("summaryTargetRequired"));
     return false;
   }
+  const legacyTarget = targets.find((target) => target.enabled) || targets[0];
   await api("/api/subscription/summary-settings", {
     method: "POST",
     body: JSON.stringify({
-      enabled,
-      push_time: $("summaryTimeInput").value || "20:00",
-      timezone: normalizeSummaryTimezone($("summaryTimezoneInput").value),
+      enabled: targets.some((target) => target.enabled),
+      push_time: legacyTarget.push_time,
+      timezone: legacyTarget.timezone,
       targets,
-      label: $("summaryLabelInput").value.trim(),
-      language: $("summaryLanguageInput").value,
+      label: legacyTarget.label,
+      language: legacyTarget.language,
     }),
   });
   await refreshAccount();
@@ -2129,11 +2197,7 @@ async function persistSummarySettings(enabled) {
 
 function editSummary() {
   $("summaryForm").scrollIntoView({ behavior: "smooth", block: "center" });
-  $("summaryEnabledInput").focus({ preventScroll: true });
-}
-
-async function disableSummary() {
-  await persistSummarySettings(false);
+  document.querySelector(".summary-target-enabled")?.focus({ preventScroll: true });
 }
 
 async function addGroup(event) {
@@ -4553,7 +4617,6 @@ function bindEvents() {
   $("groupForm").addEventListener("submit", guardAsync(addGroup));
   $("summaryForm").addEventListener("submit", guardAsync(saveSummary));
   $("summaryEditBtn").addEventListener("click", editSummary);
-  $("summaryDisableBtn").addEventListener("click", guardAsync(disableSummary));
   $("marketAssetSearchForm").addEventListener("submit", guardAsync(searchMarketAssets));
   bindMarketSymbolTooltips();
   $("marketAssetSearchInput").addEventListener("input", () => {

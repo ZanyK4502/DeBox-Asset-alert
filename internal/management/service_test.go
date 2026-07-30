@@ -901,6 +901,61 @@ func TestSaveSummarySettingsEnforcesPlanTargets(t *testing.T) {
 	}
 }
 
+func TestSaveSummarySettingsKeepsTargetSchedulesIndependent(t *testing.T) {
+	repository := &fakeRepository{groups: map[string]store.NotificationGroup{
+		"user-1/group-1": {
+			ID: 3, DeBoxUserID: "user-1", GID: "group-1", Name: "Builders",
+		},
+	}}
+	service := New(Dependencies{
+		Repository:   repository,
+		Entitlements: &fakeEntitlements{plan: planForTest(t, plans.Professional)},
+	})
+	enabled := true
+	input := DefaultSummarySettingsInput()
+	input.Targets = []SummaryTargetInput{
+		{
+			ChatType: "private",
+			Enabled:  &enabled,
+			PushTime: "08:00",
+			Timezone: "Asia/Shanghai",
+			Label:    "早间摘要",
+			Language: "zh",
+		},
+		{
+			ChatType: "group",
+			ChatID:   "group-1",
+			Enabled:  &enabled,
+			PushTime: "18:30",
+			Timezone: "America/New_York",
+			Label:    "New York close",
+			Language: "en",
+		},
+	}
+
+	if _, err := service.SaveSummarySettings(
+		context.Background(),
+		"user-1",
+		input,
+	); err != nil {
+		t.Fatalf("SaveSummarySettings() error = %v", err)
+	}
+	targets := repository.summarySettings.Targets
+	if len(targets) != 2 ||
+		targets[0].ChatID != "user-1" ||
+		targets[0].PushTime != "08:00" ||
+		targets[0].Timezone != "Asia/Shanghai" ||
+		targets[0].Label != "早间摘要" ||
+		targets[0].Language != "zh" ||
+		targets[1].ChatID != "group-1" ||
+		targets[1].PushTime != "18:30" ||
+		targets[1].Timezone != "America/New_York" ||
+		targets[1].Label != "New York close" ||
+		targets[1].Language != "en" {
+		t.Fatalf("independent summary targets = %#v", targets)
+	}
+}
+
 func TestCreateNotificationGroupParsesLinkAndChecksMembership(t *testing.T) {
 	repository := &fakeRepository{groups: map[string]store.NotificationGroup{}}
 	entitlements := &fakeEntitlements{plan: planForTest(t, plans.Professional)}
