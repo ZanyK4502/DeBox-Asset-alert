@@ -1033,6 +1033,63 @@ select:focus {
   gap: 7px;
 }
 
+@media (min-width: 961px) {
+  #ruleForm,
+  .combination-member-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 20px;
+    row-gap: 18px;
+  }
+
+  #ruleForm > .form-grid-subset,
+  #ruleForm > .notice,
+  #ruleForm > .form-actions {
+    grid-column: 1 / -1;
+  }
+
+  #ruleForm > .form-actions {
+    justify-content: space-between;
+    padding-top: 4px;
+    border-top: 1px solid var(--line);
+  }
+
+  .member-builder {
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+  }
+
+  .combination-member-grid {
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--surface-2);
+  }
+
+  .member-builder > .form-actions {
+    justify-content: space-between;
+    padding-top: 4px;
+  }
+
+  .member-draft-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .member-draft-list > .notice {
+    grid-column: 1 / -1;
+  }
+
+  .member-draft-item,
+  .member-draft-item:last-child {
+    padding: 13px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-2);
+  }
+}
+
 .icon-help {
   display: grid;
   place-items: center;
