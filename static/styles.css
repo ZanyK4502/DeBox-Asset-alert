@@ -3172,6 +3172,36 @@ label.market-pool-card {
   display: none;
 }
 
+.usage-help-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 23;
+  display: inline-flex;
+  min-height: 42px;
+  padding: 0 16px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 64%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 82%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color: #06130e;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  opacity: 0.84;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.usage-help-fab:hover,
+.usage-help-fab:focus-visible {
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
 @media (max-width: 768px) {
   body {
     overscroll-behavior-y: contain;
@@ -3193,6 +3223,18 @@ label.market-pool-card {
 
   body.has-mobile-action-bar .layout {
     padding-bottom: calc(164px + env(safe-area-inset-bottom));
+  }
+
+  .usage-help-fab {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+
+  body.has-mobile-action-bar .usage-help-fab {
+    bottom: calc(158px + env(safe-area-inset-bottom));
   }
 
   .intro,
@@ -3436,6 +3478,7 @@ label.market-pool-card {
 
 @media (prefers-reduced-motion: reduce) {
   .mobile-bottom-nav,
+  .usage-help-fab,
   .mobile-nav-item svg,
   .market-guide {
     scroll-behavior: auto;
