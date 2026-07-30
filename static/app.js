@@ -1919,9 +1919,11 @@ function renderBalanceInfo(mode = "single") {
   const box = $(combination ? "combinationBalanceBox" : "balanceBox");
   const balanceInfo = combination ? state.combinationBalanceInfo : state.balanceInfo;
   if (!balanceInfo) {
-    box.textContent = t("noBalance");
+    box.hidden = true;
+    box.textContent = "";
     return;
   }
+  box.hidden = false;
   box.innerHTML = t("currentBalance", {
     value: escapeHtml(balanceInfo.value),
     symbol: escapeHtml(balanceInfo.symbol),

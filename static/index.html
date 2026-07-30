@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260731-market-mobile-polish" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260731-overview-balance-polish" />
   </head>
   <body>
     <header class="app-header">
@@ -707,7 +707,7 @@
             <select id="groupTargetSelect"></select>
           </label>
           <div id="tokenInfoBox" class="notice muted" data-i18n="tokenHint">填写代币合约后可识别 Token 信息。</div>
-          <div id="balanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
+          <div id="balanceBox" class="notice muted balance-result" hidden></div>
           <div class="form-actions" data-mobile-action-bar>
             <div class="help-control">
               <button id="queryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
@@ -807,7 +807,7 @@
                   <input id="combinationMemberTriggerInput" type="number" min="1" step="1" value="1" inputmode="numeric" required />
                 </label>
               </div>
-              <div id="combinationBalanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
+              <div id="combinationBalanceBox" class="notice muted balance-result" hidden></div>
               <div class="form-actions">
                 <div class="help-control">
                   <button id="combinationQueryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
@@ -981,6 +981,6 @@
     <div id="toast" class="toast" hidden></div>
     <script src="/static/i18n.js?v=20260731-compact-pool-cards"></script>
     <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260731-market-mobile-polish"></script>
+    <script src="/static/app.js?v=20260731-overview-balance-polish"></script>
   </body>
 </html>
