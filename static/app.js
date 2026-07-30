@@ -988,13 +988,13 @@ function aggregatePlaceholderRows() {
   return Array.from({ length: 7 }, () => `
     <div class="aggregate-event placeholder" aria-hidden="true">
       <div class="aggregate-event-main">
-        <strong>-----</strong>
-        <span>-----</span>
-        <small>-----</small>
+        <strong></strong>
+        <span></span>
+        <small></small>
       </div>
       <div class="aggregate-event-side">
-        <strong>-----</strong>
-        <span>-----</span>
+        <strong></strong>
+        <span></span>
       </div>
     </div>
   `).join("");
@@ -1015,7 +1015,7 @@ function aggregateEventStatus(event) {
 
 function formatAggregateEventTime(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "-----";
+  if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat(state.uiLanguage === "en" ? "en" : "zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -1032,11 +1032,11 @@ function aggregateEventValue(event) {
     return t("aggregateValueChange", { previous, current });
   }
   if (current !== null && current !== undefined && String(current) !== "") return String(current);
-  return event.note || event.target_label || "-----";
+  return event.note || event.target_label || "";
 }
 
 function aggregateChainName(chainKey) {
-  return state.chains.find((chain) => chain.key === chainKey)?.name || chainKey || "-----";
+  return state.chains.find((chain) => chain.key === chainKey)?.name || chainKey || "";
 }
 
 function aggregateEventHtml(event) {
@@ -1134,7 +1134,7 @@ function renderAggregateEvents({ resetScroll = false } = {}) {
     [t("aggregateSentNotifications"), stats.sent_notification_count],
   ];
   $("aggregateEventStats").innerHTML = metrics
-    .map(([label, value]) => aggregateMetricHtml(label, showValues ? String(value ?? 0) : "-----", !showValues))
+    .map(([label, value]) => aggregateMetricHtml(label, showValues ? String(value ?? 0) : "", !showValues))
     .join("");
 
   const range = $("aggregateEventsRange");
