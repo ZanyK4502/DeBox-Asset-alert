@@ -3017,7 +3017,7 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
   const selected = selection.selected.has(address);
   const primary = selection.primary === address;
   return `
-    <div class="market-pool-card market-wizard-pool-card${quoteOnly ? " unsupported" : ""}">
+    <div class="market-pool-card market-wizard-pool-card${quoteOnly ? " unsupported" : " has-primary-choice"}">
       <input type="checkbox" data-market-wizard-pool="${escapeHtml(address)}" data-chain="${escapeHtml(group.chain_key)}" ${selected ? "checked" : ""} ${quoteOnly ? "disabled" : ""} />
       <div class="market-wizard-pool-info">
         <strong>${escapeHtml(preview.protocol || pair.dexId || "-")} ${escapeHtml(preview.protocol_version || "")}</strong>
@@ -3042,6 +3042,38 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
       `}
     </div>
   `;
+}
+
+function initPersistentHorizontalScrollbars() {
+  document.querySelectorAll("[data-persistent-horizontal-scroll]").forEach((scroller) => {
+    const scrollbar = scroller.parentElement?.querySelector(".persistent-horizontal-scrollbar");
+    const thumb = scrollbar?.querySelector("span");
+    if (!scrollbar || !thumb) {
+      return;
+    }
+
+    const update = () => {
+      const viewportWidth = scroller.clientWidth;
+      const contentWidth = scroller.scrollWidth;
+      const trackWidth = scrollbar.clientWidth;
+      if (!viewportWidth || !contentWidth || !trackWidth) {
+        return;
+      }
+      const thumbWidth = Math.max(28, trackWidth * Math.min(1, viewportWidth / contentWidth));
+      const maxScroll = Math.max(1, contentWidth - viewportWidth);
+      const maxOffset = Math.max(0, trackWidth - thumbWidth);
+      thumb.style.width = `${thumbWidth}px`;
+      thumb.style.transform = `translateX(${maxOffset * (scroller.scrollLeft / maxScroll)}px)`;
+    };
+
+    scroller.addEventListener("scroll", update, { passive: true });
+    if (typeof ResizeObserver === "function") {
+      const observer = new ResizeObserver(update);
+      observer.observe(scroller);
+      Array.from(scroller.children).forEach((child) => observer.observe(child));
+    }
+    requestAnimationFrame(update);
+  });
 }
 
 function marketPoolSelection(chainKey) {
@@ -5232,6 +5264,7 @@ function bindEvents() {
 async function boot() {
   applyStaticTranslations();
   initMobileShell();
+  initPersistentHorizontalScrollbars();
   bindEvents();
   updateTargetVisibility();
   updateCombinationTargetVisibility();

@@ -2368,6 +2368,14 @@ select:focus {
   scrollbar-color: color-mix(in srgb, var(--accent) 65%, var(--line)) var(--surface-2);
 }
 
+.persistent-horizontal-scroll {
+  min-width: 0;
+}
+
+.persistent-horizontal-scrollbar {
+  display: none;
+}
+
 .market-goals::-webkit-scrollbar,
 .market-detail-tabs::-webkit-scrollbar {
   height: 5px;
@@ -3563,9 +3571,11 @@ label.market-pool-card {
   }
 
   .market-wizard-pool-card {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 7px 9px;
-    padding: 9px 10px;
+    position: relative;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    gap: 5px 8px;
+    padding: 8px 9px;
   }
 
   .market-wizard-pool-card > input[type="checkbox"] {
@@ -3575,18 +3585,38 @@ label.market-pool-card {
   }
 
   .market-wizard-pool-info {
-    grid-column: 2 / -1;
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .market-wizard-pool-card.has-primary-choice .market-wizard-pool-info {
+    padding-right: 88px;
   }
 
   .market-wizard-pool-card .market-pool-values {
     grid-column: 2;
     grid-row: 2;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 10px;
+  }
+
+  .market-wizard-pool-card .market-pool-value-row {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .market-wizard-pool-card .market-pool-value-row strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .market-wizard-pool-card .market-primary-choice {
-    grid-column: 3;
-    grid-row: 2;
-    align-self: center;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    min-height: 28px;
+    padding: 4px 8px;
   }
 
   .market-detail-tabs {
@@ -3595,6 +3625,33 @@ label.market-pool-card {
     overflow-y: hidden;
     padding-bottom: 8px;
     scrollbar-width: thin;
+  }
+
+  [data-persistent-horizontal-scroll] {
+    scrollbar-width: none;
+  }
+
+  [data-persistent-horizontal-scroll]::-webkit-scrollbar {
+    display: none;
+  }
+
+  .persistent-horizontal-scrollbar {
+    display: block;
+    height: 4px;
+    margin: 1px 0 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .persistent-horizontal-scrollbar > span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    background: rgba(255, 255, 255, 0.92);
+    transform: translateX(0);
+    transition: width 140ms ease, transform 80ms linear;
   }
 
   .market-detail-tab {

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260731-overview-balance-polish" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260731-persistent-scrollbars" />
   </head>
   <body>
     <header class="app-header">
@@ -172,13 +172,16 @@
                 <p data-i18n="marketConfigureFirstRuleIntro">创建一条最重要的规则；项目创建后还可以继续添加其他规则。</p>
               </div>
             </div>
-            <div class="market-goals" role="group" aria-label="监控目标" data-i18n-aria-label="marketGoals">
-              <button type="button" class="market-goal active" data-market-goal="price" data-i18n="marketGoalPrice">价格</button>
-              <button type="button" class="market-goal" data-market-goal="liquidity" data-i18n="marketGoalLiquidity">流动性</button>
-              <button type="button" class="market-goal" data-market-goal="volume" data-i18n="marketGoalVolume">成交量</button>
-              <button type="button" class="market-goal" data-market-goal="large_trade" data-i18n="marketGoalLargeTrade">大额买卖</button>
-              <button type="button" class="market-goal" data-market-goal="holder" data-i18n="marketGoalHolder">大户变化</button>
-              <button type="button" class="market-goal" data-market-goal="four_meme" data-i18n="marketGoalFourMeme">Four.meme</button>
+            <div class="persistent-horizontal-scroll">
+              <div class="market-goals" role="group" aria-label="监控目标" data-i18n-aria-label="marketGoals" data-persistent-horizontal-scroll>
+                <button type="button" class="market-goal active" data-market-goal="price" data-i18n="marketGoalPrice">价格</button>
+                <button type="button" class="market-goal" data-market-goal="liquidity" data-i18n="marketGoalLiquidity">流动性</button>
+                <button type="button" class="market-goal" data-market-goal="volume" data-i18n="marketGoalVolume">成交量</button>
+                <button type="button" class="market-goal" data-market-goal="large_trade" data-i18n="marketGoalLargeTrade">大额买卖</button>
+                <button type="button" class="market-goal" data-market-goal="holder" data-i18n="marketGoalHolder">大户变化</button>
+                <button type="button" class="market-goal" data-market-goal="four_meme" data-i18n="marketGoalFourMeme">Four.meme</button>
+              </div>
+              <div class="persistent-horizontal-scrollbar" aria-hidden="true"><span></span></div>
             </div>
             <p id="marketGoalHint" class="panel-intro"></p>
             <div class="market-confirm-grid">
@@ -293,13 +296,16 @@
             <button id="deleteMarketProjectBtn" class="secondary compact danger" type="button" data-i18n="deleteMarketProject" hidden>删除监控</button>
           </div>
           <div id="marketProjectHeader" class="market-project-header"></div>
-          <nav class="market-detail-tabs" role="tablist" aria-label="项目详情" data-i18n-aria-label="marketProjectDetails">
-            <button class="market-detail-tab active" type="button" role="tab" aria-selected="true" data-market-detail-tab="overview" data-i18n="marketOverviewTab">概览</button>
-            <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="rules" data-i18n="marketRulesTab">提醒规则</button>
-            <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="pools" data-i18n="marketPoolsTab">交易池</button>
-            <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="holders" data-i18n="marketHoldersTab">大户</button>
-            <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="events" data-i18n="marketEventsTab">事件历史</button>
-          </nav>
+          <div class="persistent-horizontal-scroll">
+            <nav class="market-detail-tabs" role="tablist" aria-label="项目详情" data-i18n-aria-label="marketProjectDetails" data-persistent-horizontal-scroll>
+              <button class="market-detail-tab active" type="button" role="tab" aria-selected="true" data-market-detail-tab="overview" data-i18n="marketOverviewTab">概览</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="rules" data-i18n="marketRulesTab">提醒规则</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="pools" data-i18n="marketPoolsTab">交易池</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="holders" data-i18n="marketHoldersTab">大户</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="events" data-i18n="marketEventsTab">事件历史</button>
+            </nav>
+            <div class="persistent-horizontal-scrollbar" aria-hidden="true"><span></span></div>
+          </div>
 
           <section id="marketDetailOverviewPanel" class="market-detail-panel" data-market-detail-panel="overview" role="tabpanel">
             <div id="marketMetricGrid" class="market-metric-grid"></div>
@@ -981,6 +987,6 @@
     <div id="toast" class="toast" hidden></div>
     <script src="/static/i18n.js?v=20260731-compact-pool-cards"></script>
     <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260731-overview-balance-polish"></script>
+    <script src="/static/app.js?v=20260731-persistent-scrollbars"></script>
   </body>
 </html>
