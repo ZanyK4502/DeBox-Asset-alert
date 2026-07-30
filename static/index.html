@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260730-renew-border" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260730-subscription-checkout" />
   </head>
   <body>
     <header class="app-header">
@@ -43,15 +43,24 @@
         </div>
         <div class="billing-cycle-picker">
           <div class="segmented-control billing-cycle-control" role="group" aria-label="付费周期" data-i18n-aria-label="billingCycle">
-            <button class="segment active" type="button" data-billing-cycle="monthly" data-i18n="monthly">月付</button>
-            <button class="segment" type="button" data-billing-cycle="quarterly" data-i18n="quarterly">季付</button>
-            <button class="segment" type="button" data-billing-cycle="annual" data-i18n="annual">年付</button>
+            <button class="segment billing-cycle-segment active" type="button" data-billing-cycle="monthly">
+              <span data-i18n="monthly">月付</span>
+            </button>
+            <button class="segment billing-cycle-segment" type="button" data-billing-cycle="quarterly">
+              <span data-i18n="quarterly">季付</span>
+              <small class="billing-cycle-badge" data-i18n="recommended">推荐</small>
+            </button>
+            <button class="segment billing-cycle-segment" type="button" data-billing-cycle="annual">
+              <span data-i18n="annual">年付</span>
+              <small class="billing-cycle-badge billing-cycle-badge-best" data-i18n="bestValue">最划算</small>
+            </button>
           </div>
         </div>
         <div id="plansGrid" class="plans"></div>
         <p class="refund-note" data-i18n="refundNotice">订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。</p>
         <p class="refund-note" data-i18n="planSwitchNotice">付费套餐未到期时仅支持续费同一套餐，到期后可选择其他套餐。</p>
         <p class="refund-note" data-i18n="paymentNotice">请使用 BNB Chain USDT 支付</p>
+        <div id="purchaseSummary" class="purchase-summary" aria-live="polite"></div>
         <div class="action-line" data-mobile-action-bar>
           <button id="payBtn" class="primary" type="button" data-i18n="payRenew">支付 / 续费</button>
           <span id="paymentStatus" class="muted"></span>
@@ -969,8 +978,8 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260730-account-overview"></script>
+    <script src="/static/i18n.js?v=20260730-subscription-checkout"></script>
     <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260730-account-default"></script>
+    <script src="/static/app.js?v=20260730-subscription-checkout"></script>
   </body>
 </html>

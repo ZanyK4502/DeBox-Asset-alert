@@ -871,10 +871,29 @@ function renderPlans() {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
+  renderPurchaseSummary(permanent);
   $("payBtn").textContent = permanent
     ? t("permanentPlanButton")
     : t("payRenew");
   $("payBtn").disabled = permanent;
+}
+
+function renderPurchaseSummary(permanent = Boolean(state.entitlement?.permanent)) {
+  const summary = $("purchaseSummary");
+  const plan = state.plans.find((item) => item.code === state.selectedPlan);
+  if (permanent || !plan || plan.price === "0") {
+    summary.hidden = true;
+    summary.textContent = "";
+    return;
+  }
+  const option = selectedBillingOption(plan);
+  summary.hidden = false;
+  summary.textContent = t("purchaseSummary", {
+    plan: localizedPlan(plan).name,
+    cycle: t(state.selectedBillingCycle),
+    price: option.price,
+    asset: plan.asset || "USDT",
+  });
 }
 
 function selectedBillingOption(plan) {

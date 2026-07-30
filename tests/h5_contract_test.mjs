@@ -108,6 +108,17 @@ assert.ok(
     app.includes("plan.market_project_limit"),
   "subscription status must display token usage and quota",
 );
+assert.deepEqual(
+  [...html.matchAll(/\bdata-billing-cycle="([^"]+)"/g)].map((match) => match[1]),
+  ["monthly", "quarterly", "annual"],
+  "subscription checkout must keep all three billing cycles",
+);
+assert.ok(
+  htmlIDs.has("purchaseSummary") &&
+    app.includes('t("purchaseSummary"') &&
+    app.includes("selectedBillingOption(plan)"),
+  "subscription checkout must summarize the selected plan and billing cycle",
+);
 assert.ok(
   app.includes('currentPlan()?.market_pool_mode === "multiple"') &&
     app.includes('t("marketMultiPoolProfessionalOnly")'),
