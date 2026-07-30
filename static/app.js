@@ -4868,7 +4868,6 @@ function bindEvents() {
   });
   $("marketNameModeBtn").addEventListener("click", () => setMarketWizardMode("name"));
   $("marketManualModeBtn").addEventListener("click", () => setMarketWizardMode("manual"));
-  $("marketWizardResetBtn").addEventListener("click", resetMarketWizard);
   $("addMarketManualRowBtn").addEventListener("click", addMarketManualRow);
   $("resolveMarketManualBtn").addEventListener("click", guardAsync(resolveMarketManualContracts));
   $("marketStep2BackBtn").addEventListener("click", () => setMarketWizardStep(1));

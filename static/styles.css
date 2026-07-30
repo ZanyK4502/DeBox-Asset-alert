@@ -3425,6 +3425,23 @@ label.market-pool-card {
     min-height: 44px;
   }
 
+  .market-asset-intro {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .market-source-tabs {
+    gap: 3px;
+    padding: 3px;
+  }
+
+  .market-source-tabs > button.segment {
+    min-height: 40px;
+    padding: 6px 8px;
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
   button,
   input,
   select,
