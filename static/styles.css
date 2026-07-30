@@ -3483,6 +3483,36 @@ label.market-pool-card {
     flex: 0 0 44px;
   }
 
+  #renew [data-mobile-action-bar].mobile-action-active {
+    right: auto;
+    left: 50%;
+    width: fit-content;
+    max-width: calc(100vw - 24px);
+    grid-template-columns: auto auto;
+    padding: 8px;
+    border-color: rgba(31, 199, 122, 0.32);
+    background: rgba(16, 22, 26, 0.76);
+    box-shadow:
+      0 -6px 24px rgba(0, 0, 0, 0.3),
+      0 0 18px rgba(31, 199, 122, 0.07);
+    transform: translateX(-50%);
+  }
+
+  #renew [data-mobile-action-bar].mobile-action-active > #payBtn {
+    width: auto;
+    min-width: 0;
+    padding-inline: 20px;
+    white-space: nowrap;
+  }
+
+  #renew [data-mobile-action-bar].mobile-action-active > #paymentStatus {
+    min-width: 0;
+  }
+
+  #renew [data-mobile-action-bar].mobile-action-active > #paymentStatus:empty {
+    display: none;
+  }
+
   [data-mobile-action-bar].mobile-action-active .help-popover {
     right: auto;
     bottom: calc(100% + 12px);
