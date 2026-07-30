@@ -174,7 +174,7 @@ func testMessage(text, chatType, userID string) *boxbotapi.Message {
 
 func TestBotPrivateChatURLUsesCurrentRoute(t *testing.T) {
 	service, _, _, _ := newTestService(t)
-	if got, want := service.botPrivateChatURL(), "box://user?id=bot-id"; got != want {
+	if got, want := service.botPrivateChatURL(), "https://m.debox.pro/card?id=bot-id"; got != want {
 		t.Fatalf("botPrivateChatURL() = %q, want %q", got, want)
 	}
 }
@@ -237,7 +237,7 @@ func TestGroupStartUsesBilingualSharedEntry(t *testing.T) {
 	}
 	message := client.sentConfigs()[0].(boxbotapi.MessageConfig)
 	if !strings.Contains(message.Text, "链上监控助理") ||
-		!strings.Contains(message.Text, "monitoring assistant") {
+		!strings.Contains(message.Text, "send /start to view usage details") {
 		t.Fatalf("group entry is not bilingual: %q", message.Text)
 	}
 	markup := message.ReplyMarkup.(boxbotapi.InlineKeyboardMarkup)

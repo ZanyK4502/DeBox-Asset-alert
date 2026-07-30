@@ -171,9 +171,9 @@ func groupEntryText(message *boxbotapi.Message) string {
 		prefix = "@" + escapeText(userName) + " "
 	}
 	return prefix +
-		"我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 或打开个人监控面板。<br/><br/>" +
-		"I'm the DeBox Asset Alert monitoring assistant. " +
-		"Message the Bot or open your monitoring dashboard."
+		"我是 DeBox Asset Alert 链上监控助理，请私聊 Bot 发送 /start 查看使用详情或打开个人监控面板。<br/><br/>" +
+		"I'm the DeBox Asset Alert on-chain monitoring assistant. " +
+		"Message the Bot and send /start to view usage details, or open your personal monitoring dashboard."
 }
 
 func (s *Service) subscriptionText(

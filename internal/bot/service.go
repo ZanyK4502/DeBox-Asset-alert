@@ -229,7 +229,7 @@ func (s *Service) botPrivateChatURL() string {
 	if botUserID == "" {
 		return ""
 	}
-	return "box://user?id=" + botUserID
+	return "https://m.debox.pro/card?id=" + botUserID
 }
 
 func ResolvePublicAppURL(configured string) string {
