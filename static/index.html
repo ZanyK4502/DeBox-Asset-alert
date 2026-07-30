@@ -2,10 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260730-mobile-shell" />
   </head>
   <body>
     <header class="app-header">
@@ -23,7 +23,7 @@
     </header>
 
     <main class="layout">
-      <section class="overview" aria-label="账户概览" data-i18n-aria-label="accountOverview">
+      <section class="overview" data-mobile-screen="overview" aria-label="账户概览" data-i18n-aria-label="accountOverview">
         <div class="intro">
           <p class="eyebrow">Asset Monitor</p>
           <h1 data-i18n="heroTitle">随时掌控地址与行情的变化</h1>
@@ -32,7 +32,7 @@
         <div id="subscriptionBox" class="status-box muted" data-i18n="connectToView">连接钱包后查看订阅状态</div>
       </section>
 
-      <section id="renew" class="section">
+      <section id="renew" class="section" data-mobile-screen="account" data-mobile-action-scope>
         <div class="section-head">
           <div>
             <p class="eyebrow">Plans</p>
@@ -50,13 +50,13 @@
         <p class="refund-note" data-i18n="refundNotice">订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。</p>
         <p class="refund-note" data-i18n="planSwitchNotice">付费套餐未到期时仅支持续费同一套餐，到期后可选择其他套餐。</p>
         <p class="refund-note" data-i18n="paymentNotice">请使用 BNB Chain USDT 支付</p>
-        <div class="action-line">
+        <div class="action-line" data-mobile-action-bar>
           <button id="payBtn" class="primary" type="button" data-i18n="payRenew">支付 / 续费</button>
           <span id="paymentStatus" class="muted"></span>
         </div>
       </section>
 
-      <section id="market" class="section market-section">
+      <section id="market" class="section market-section" data-mobile-screen="market">
         <div class="section-head">
           <div>
             <p class="eyebrow">Market Monitor</p>
@@ -122,7 +122,7 @@
             </div>
           </section>
 
-          <section id="marketWizardStep2" class="market-wizard-panel" hidden>
+          <section id="marketWizardStep2" class="market-wizard-panel" data-mobile-action-scope hidden>
             <div class="market-wizard-head">
               <div>
                 <p class="eyebrow">Step 2</p>
@@ -133,13 +133,13 @@
             <div id="marketSelectedAsset" class="market-selected-asset"></div>
             <div id="marketWizardDeployments" class="market-deployment-list"></div>
             <div id="marketIdentityStatus" class="notice muted"></div>
-            <div class="form-actions spread">
+            <div class="form-actions spread" data-mobile-action-bar>
               <button id="marketStep2BackBtn" class="secondary" type="button" data-i18n="previousStep">上一步</button>
               <button id="marketVerifyAndDiscoverBtn" class="primary" type="button" data-i18n="marketVerifyAndDiscover">验证同币并查询交易池</button>
             </div>
           </section>
 
-          <section id="marketWizardStep3" class="market-wizard-panel" hidden>
+          <section id="marketWizardStep3" class="market-wizard-panel" data-mobile-action-scope hidden>
             <div class="market-wizard-head">
               <div>
                 <p class="eyebrow">Step 3</p>
@@ -148,13 +148,13 @@
             </div>
             <div id="marketWizardPoolGroups" class="market-chain-pool-groups"></div>
             <div id="marketPoolSelectionStatus" class="notice muted"></div>
-            <div class="form-actions spread">
+            <div class="form-actions spread" data-mobile-action-bar>
               <button id="marketStep3BackBtn" class="secondary" type="button" data-i18n="previousStep">上一步</button>
               <button id="marketPoolsContinueBtn" class="primary" type="button" data-i18n="marketContinueRules">下一步：设置规则</button>
             </div>
           </section>
 
-          <section id="marketWizardStep4" class="market-wizard-panel" hidden>
+          <section id="marketWizardStep4" class="market-wizard-panel" data-mobile-action-scope hidden>
             <div class="market-wizard-head">
               <div>
                 <p class="eyebrow">Step 4</p>
@@ -258,7 +258,7 @@
               <aside id="marketWizardSummary" class="market-wizard-summary"></aside>
             </div>
             <div id="marketWizardCreateStatus" class="notice muted" data-i18n="marketReadyToCreate">确认无误后创建项目和第一条规则。</div>
-            <div class="form-actions spread">
+            <div class="form-actions spread" data-mobile-action-bar>
               <button id="marketStep4BackBtn" class="secondary" type="button" data-i18n="previousStep">上一步</button>
               <button id="createMarketProjectBtn" class="primary" type="button" data-i18n="marketCreateProjectAndRule">创建项目并开始监控</button>
             </div>
@@ -601,7 +601,7 @@
         </div>
       </section>
 
-      <section id="rules" class="section">
+      <section id="rules" class="section" data-mobile-screen="address">
         <div class="section-head">
           <div>
             <p class="eyebrow">Rules</p>
@@ -614,7 +614,7 @@
           <button id="combinationRuleModeBtn" class="segment" type="button" role="tab" aria-selected="false" aria-controls="combinationRulePanel" data-i18n="combinationRule">组合规则</button>
         </div>
 
-        <div id="singleRulePanel" role="tabpanel" aria-labelledby="singleRuleModeBtn">
+        <div id="singleRulePanel" role="tabpanel" aria-labelledby="singleRuleModeBtn" data-mobile-action-scope>
         <form id="ruleForm" class="form-grid rule-form">
           <select id="chainSelect" aria-hidden="true" tabindex="-1"></select>
           <label data-i18n-label="monitoredAddress">
@@ -696,7 +696,7 @@
           </label>
           <div id="tokenInfoBox" class="notice muted" data-i18n="tokenHint">填写代币合约后可识别 Token 信息。</div>
           <div id="balanceBox" class="notice muted" data-i18n="noBalance">还没有查询余额。</div>
-          <div class="form-actions">
+          <div class="form-actions" data-mobile-action-bar>
             <div class="help-control">
               <button id="queryBalanceBtn" class="secondary" type="button" data-i18n="queryBalance">查询余额</button>
               <button id="balanceHelpBtn" class="icon-help" type="button" aria-expanded="false" aria-describedby="balanceHelpText" data-i18n-aria-label="balanceHelpLabel">?</button>
@@ -707,7 +707,7 @@
         </form>
         </div>
 
-        <div id="combinationRulePanel" role="tabpanel" aria-labelledby="combinationRuleModeBtn" hidden>
+        <div id="combinationRulePanel" role="tabpanel" aria-labelledby="combinationRuleModeBtn" data-mobile-action-scope hidden>
           <p class="panel-intro" data-i18n="combinationIntro">专业版可创建组合规则。成员只负责计数，不单独发送通知；同一周期内全部成员达到各自次数后，立即发送一次汇总。</p>
           <form id="combinationRuleForm" class="combination-form">
             <div class="form-grid combination-parent-grid">
@@ -807,14 +807,14 @@
               <div id="combinationDraftList" class="member-draft-list"></div>
             </div>
 
-            <div class="form-actions">
+            <div class="form-actions" data-mobile-action-bar>
               <button class="primary" type="submit" data-i18n="createCombination">创建组合规则</button>
             </div>
           </form>
         </div>
       </section>
 
-      <section id="activeRulesSection" class="section">
+      <section id="activeRulesSection" class="section" data-mobile-screen="address">
         <div class="section-head">
           <div>
             <p class="eyebrow">Active</p>
@@ -825,7 +825,7 @@
         <div id="rulesList" class="list list-flush"></div>
       </section>
 
-      <section id="pausedRulesWrap" class="section">
+      <section id="pausedRulesWrap" class="section" data-mobile-screen="address">
         <div class="section-head">
           <div>
             <p class="eyebrow">Paused</p>
@@ -836,7 +836,7 @@
         <div id="pausedRulesList" class="list list-flush"></div>
       </section>
 
-      <section id="aggregateEventsSection" class="section">
+      <section id="aggregateEventsSection" class="section" data-mobile-screen="address">
         <div class="section-head">
           <div>
             <p class="eyebrow">Activity</p>
@@ -875,7 +875,7 @@
         </div>
       </section>
 
-      <section id="summary" class="section">
+      <section id="summary" class="section" data-mobile-screen="account" data-mobile-action-scope>
         <div class="section-head">
           <div>
             <p class="eyebrow">Digest</p>
@@ -898,13 +898,13 @@
         <form id="summaryForm" class="form-grid summary-grid">
           <div class="notice muted" data-i18n="summaryNotice">每个推送对象可独立设置时间、时区、语言和备注；首次摘要统计此前 24 小时。</div>
           <div id="summaryTargetOptions" class="summary-target-options"></div>
-          <div class="form-actions">
+          <div class="form-actions" data-mobile-action-bar>
             <button class="primary" type="submit" data-i18n="saveSummary">保存摘要设置</button>
           </div>
         </form>
       </section>
 
-      <section id="groups" class="section">
+      <section id="groups" class="section" data-mobile-screen="account" data-mobile-action-scope>
         <div class="section-head">
           <div>
             <p class="eyebrow">Groups</p>
@@ -921,13 +921,40 @@
             群备注
             <input id="groupLabelInput" placeholder="例如 Alpha 群" data-i18n-placeholder="groupNotePlaceholder" autocomplete="off" />
           </label>
-          <div class="form-actions">
+          <div class="form-actions" data-mobile-action-bar>
             <button class="primary" type="submit" data-i18n="bindGroup">绑定群通知</button>
           </div>
         </form>
         <div id="groupsList" class="list"></div>
       </section>
     </main>
+
+    <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="移动端导航" data-i18n-aria-label="mobileNavigation">
+      <button class="mobile-nav-item active" type="button" data-mobile-tab="overview" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" />
+        </svg>
+        <span data-i18n="mobileNavOverview">概览</span>
+      </button>
+      <button class="mobile-nav-item" type="button" data-mobile-tab="market">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 18V9m5 9V5m5 13v-6m5 6V3M2 20h20" />
+        </svg>
+        <span data-i18n="mobileNavMarket">代币</span>
+      </button>
+      <button class="mobile-nav-item" type="button" data-mobile-tab="address">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 4h14M7 13h4m-4 3h7" />
+        </svg>
+        <span data-i18n="mobileNavAddress">地址</span>
+      </button>
+      <button class="mobile-nav-item" type="button" data-mobile-tab="account">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm7 8a7 7 0 0 0-14 0" />
+        </svg>
+        <span data-i18n="mobileNavAccount">我的</span>
+      </button>
+    </nav>
 
     <div id="tapShield" class="tap-shield" hidden></div>
     <div id="identityModal" class="modal-backdrop" hidden>
@@ -938,8 +965,8 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260730-address-rule-dedupe"></script>
+    <script src="/static/i18n.js?v=20260730-mobile-shell"></script>
     <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260730-address-rule-dedupe"></script>
+    <script src="/static/app.js?v=20260730-mobile-shell"></script>
   </body>
 </html>

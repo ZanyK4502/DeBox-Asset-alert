@@ -3121,3 +3121,264 @@ label.market-pool-card {
     animation: none;
   }
 }
+
+/* Mobile app shell. Desktop keeps the existing single-page layout unchanged. */
+.mobile-bottom-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  body {
+    overscroll-behavior-y: contain;
+  }
+
+  body.mobile-shell-ready .layout > [data-mobile-screen]:not(.mobile-screen-active) {
+    display: none !important;
+  }
+
+  .app-header {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+
+  .layout {
+    width: min(calc(100% - 16px), 680px);
+    padding-top: 10px;
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+
+  body.has-mobile-action-bar .layout {
+    padding-bottom: calc(164px + env(safe-area-inset-bottom));
+  }
+
+  .intro,
+  .section,
+  .status-box {
+    border-radius: 12px;
+  }
+
+  .intro,
+  .section,
+  .status-box {
+    padding: 15px;
+  }
+
+  .market-wizard {
+    padding: 9px;
+    border-radius: 16px;
+  }
+
+  .market-wizard-panel,
+  .market-panel,
+  .market-project-detail,
+  .market-query-result {
+    padding: 14px;
+    border-radius: 15px;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea,
+  button:not(.icon-help):not(.mobile-nav-item) {
+    min-height: 48px;
+  }
+
+  button.compact {
+    min-height: 44px;
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  label {
+    touch-action: manipulation;
+  }
+
+  .switch-line,
+  .market-deployment-card,
+  .market-pool-card,
+  .market-combination-member-option {
+    min-height: 48px;
+  }
+
+  .market-guide {
+    display: flex;
+    grid-template-columns: none;
+    gap: 8px;
+    overflow-x: auto;
+    margin-bottom: 14px;
+    padding: 2px 1px 8px;
+    scroll-behavior: smooth;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .market-guide::-webkit-scrollbar {
+    display: none;
+  }
+
+  .market-guide-step {
+    min-height: 58px;
+    flex: 0 0 min(44vw, 168px);
+    padding: 9px 10px;
+    border-radius: 13px;
+    scroll-snap-align: center;
+  }
+
+  .market-guide-step span small {
+    display: none;
+  }
+
+  .market-guide-step span b {
+    font-size: 0.82rem;
+  }
+
+  .market-guide-step strong {
+    width: 28px;
+    height: 28px;
+  }
+
+  [data-mobile-action-scope].mobile-action-scope-active {
+    padding-bottom: 94px !important;
+  }
+
+  [data-mobile-action-bar].mobile-action-active {
+    position: fixed;
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    bottom: calc(70px + env(safe-area-inset-bottom));
+    z-index: 24;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    align-items: center;
+    gap: 8px;
+    width: auto;
+    max-width: 664px;
+    margin: 0 auto;
+    padding: 9px;
+    border: 1px solid color-mix(in srgb, var(--line) 76%, var(--accent) 24%);
+    border-radius: 14px;
+    background: rgba(16, 22, 26, 0.92);
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(18px) saturate(1.3);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  }
+
+  [data-mobile-action-bar].mobile-action-active > button,
+  [data-mobile-action-bar].mobile-action-active > .help-control,
+  [data-mobile-action-bar].mobile-action-active > .help-control > button {
+    width: 100%;
+  }
+
+  [data-mobile-action-bar].mobile-action-active .help-popover {
+    bottom: calc(100% + 12px);
+  }
+
+  .mobile-bottom-nav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 25;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    min-height: calc(66px + env(safe-area-inset-bottom));
+    padding: 6px max(8px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(8px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: rgba(7, 10, 13, 0.88);
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(20px) saturate(1.45);
+    -webkit-backdrop-filter: blur(20px) saturate(1.45);
+    transition: transform 180ms ease, opacity 180ms ease;
+  }
+
+  .mobile-nav-item {
+    display: flex;
+    min-width: 0;
+    min-height: 54px;
+    padding: 5px 2px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .mobile-nav-item svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 160ms ease;
+  }
+
+  .mobile-nav-item.active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 11%, transparent);
+  }
+
+  .mobile-nav-item.active svg {
+    transform: translateY(-1px) scale(1.04);
+  }
+
+  .mobile-keyboard-open .mobile-bottom-nav {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(110%);
+  }
+
+  .toast {
+    bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+
+  body.has-mobile-action-bar .toast {
+    bottom: calc(152px + env(safe-area-inset-bottom));
+  }
+
+  .market-candidate-card,
+  .market-token-overview,
+  .market-project-header,
+  .market-project-card,
+  .market-holder-row,
+  .market-event-row,
+  .list-item {
+    min-width: 0;
+  }
+
+  .market-contract-address,
+  .market-candidate-contract,
+  .market-deployment-card small,
+  .market-project-card small,
+  .list-item small {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 380px) {
+  .mobile-nav-item {
+    font-size: 10px;
+  }
+
+  .market-guide-step {
+    flex-basis: min(48vw, 152px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-bottom-nav,
+  .mobile-nav-item svg,
+  .market-guide {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}

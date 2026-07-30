@@ -93,6 +93,224 @@ let aggregateScrollLastTime = 0;
 let aggregateScrollDirection = 1;
 let aggregateScrollHoverPaused = false;
 let marketSearchTimer = 0;
+const MOBILE_SHELL_QUERY = "(max-width: 768px)";
+const MOBILE_VIEW_STORAGE_KEY = "debox_asset_alert_mobile_view";
+const MOBILE_VIEWS = new Set(["overview", "market", "address", "account"]);
+const mobileScrollPositions = Object.create(null);
+let mobileShellMedia = null;
+let mobileActionFrame = 0;
+let mobileMarketStep = "";
+
+function storedMobileView() {
+  try {
+    const value = sessionStorage.getItem(MOBILE_VIEW_STORAGE_KEY);
+    return MOBILE_VIEWS.has(value) ? value : "overview";
+  } catch (_) {
+    return "overview";
+  }
+}
+
+function isMobileShell() {
+  return Boolean(mobileShellMedia?.matches);
+}
+
+function mobileScreenForElement(element) {
+  const screen = element?.closest?.("[data-mobile-screen]")?.dataset.mobileScreen;
+  return MOBILE_VIEWS.has(screen) ? screen : "";
+}
+
+function mobileHashTarget() {
+  const rawID = window.location.hash.replace(/^#/, "");
+  if (!rawID) return null;
+  try {
+    return document.getElementById(decodeURIComponent(rawID));
+  } catch (_) {
+    return document.getElementById(rawID);
+  }
+}
+
+function updateMobileNavigation(view) {
+  document.querySelectorAll("[data-mobile-tab]").forEach((button) => {
+    const active = button.dataset.mobileTab === view;
+    button.classList.toggle("active", active);
+    if (active) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  });
+}
+
+function setMobileView(view, options = {}) {
+  const nextView = MOBILE_VIEWS.has(view) ? view : "overview";
+  const { restoreScroll = true, target = null } = options;
+  const previousView = document.body.dataset.mobileView;
+  if (isMobileShell() && previousView && previousView !== nextView) {
+    mobileScrollPositions[previousView] = window.scrollY;
+    const focusedScreen = mobileScreenForElement(document.activeElement);
+    if (focusedScreen && focusedScreen !== nextView) document.activeElement.blur();
+  }
+
+  document.body.dataset.mobileView = nextView;
+  updateMobileNavigation(nextView);
+
+  document.querySelectorAll("[data-mobile-screen]").forEach((section) => {
+    const active = section.dataset.mobileScreen === nextView;
+    section.classList.toggle("mobile-screen-active", active);
+    if (isMobileShell()) {
+      section.inert = !active;
+      section.setAttribute("aria-hidden", String(!active));
+    } else {
+      section.inert = false;
+      section.removeAttribute("aria-hidden");
+    }
+  });
+
+  if (isMobileShell()) {
+    try {
+      sessionStorage.setItem(MOBILE_VIEW_STORAGE_KEY, nextView);
+    } catch (_) {
+      // Navigation still works when embedded browsers disable storage.
+    }
+    requestAnimationFrame(() => {
+      if (target?.isConnected) {
+        target.scrollIntoView({ block: "start" });
+      } else if (restoreScroll) {
+        window.scrollTo(0, mobileScrollPositions[nextView] || 0);
+      } else {
+        window.scrollTo(0, 0);
+      }
+      keepMobileMarketStepVisible();
+      scheduleMobileActionBarUpdate();
+    });
+  } else {
+    scheduleMobileActionBarUpdate();
+  }
+}
+
+function openMobileHashTarget() {
+  if (!isMobileShell()) return;
+  const target = mobileHashTarget();
+  const view = mobileScreenForElement(target);
+  if (view) setMobileView(view, { restoreScroll: false, target });
+}
+
+function keepMobileMarketStepVisible() {
+  if (!isMobileShell() || document.body.dataset.mobileView !== "market") return;
+  const guide = document.querySelector(".market-guide");
+  const active = guide?.querySelector(".market-guide-step.active");
+  if (!guide || !active) return;
+  const step = active.dataset.marketWizardStep || "";
+  if (step === mobileMarketStep && active.offsetLeft >= guide.scrollLeft &&
+      active.offsetLeft + active.offsetWidth <= guide.scrollLeft + guide.clientWidth) {
+    return;
+  }
+  mobileMarketStep = step;
+  const left = Math.max(0, active.offsetLeft - (guide.clientWidth - active.offsetWidth) / 2);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  guide.scrollTo({ left, behavior: reducedMotion ? "auto" : "smooth" });
+}
+
+function updateMobileKeyboardState() {
+  const viewport = window.visualViewport;
+  const keyboardOpen = Boolean(
+    isMobileShell() &&
+    viewport &&
+    window.innerHeight - viewport.height > 150,
+  );
+  document.body.classList.toggle("mobile-keyboard-open", keyboardOpen);
+  scheduleMobileActionBarUpdate();
+}
+
+function updateMobileActionBar() {
+  mobileActionFrame = 0;
+  const scopes = [...document.querySelectorAll("[data-mobile-action-scope]")];
+  scopes.forEach((scope) => scope.classList.remove("mobile-action-scope-active"));
+  document.querySelectorAll("[data-mobile-action-bar]").forEach((bar) => {
+    bar.classList.remove("mobile-action-active");
+  });
+  document.body.classList.remove("has-mobile-action-bar");
+
+  if (!isMobileShell() || document.body.classList.contains("mobile-keyboard-open")) return;
+
+  const viewportTop = Math.max(0, document.querySelector(".app-header")?.getBoundingClientRect().bottom || 0);
+  const viewportBottom = window.visualViewport?.height || window.innerHeight;
+  const viewportCenter = viewportTop + (viewportBottom - viewportTop) / 2;
+  let best = null;
+
+  scopes.forEach((scope) => {
+    if (scope.hidden || scope.offsetParent === null) return;
+    const screen = mobileScreenForElement(scope);
+    if (screen && screen !== document.body.dataset.mobileView) return;
+    const rect = scope.getBoundingClientRect();
+    const visibleTop = Math.max(viewportTop, rect.top);
+    const visibleBottom = Math.min(viewportBottom, rect.bottom);
+    if (visibleBottom - visibleTop < 72) return;
+    const nearestPoint = Math.max(rect.top, Math.min(viewportCenter, rect.bottom));
+    const score = Math.abs(nearestPoint - viewportCenter);
+    if (!best || score < best.score) best = { scope, score };
+  });
+
+  const bar = best?.scope.querySelector("[data-mobile-action-bar]");
+  if (!bar || bar.offsetParent === null) return;
+  best.scope.classList.add("mobile-action-scope-active");
+  bar.classList.add("mobile-action-active");
+  document.body.classList.add("has-mobile-action-bar");
+}
+
+function scheduleMobileActionBarUpdate() {
+  if (mobileActionFrame) return;
+  mobileActionFrame = requestAnimationFrame(updateMobileActionBar);
+}
+
+function syncMobileShellMode() {
+  const nav = $("mobileBottomNav");
+  document.body.classList.add("mobile-shell-ready");
+  nav.setAttribute("aria-hidden", String(!isMobileShell()));
+
+  if (!isMobileShell()) {
+    document.querySelectorAll("[data-mobile-screen]").forEach((section) => {
+      section.inert = false;
+      section.removeAttribute("aria-hidden");
+    });
+    document.body.classList.remove("mobile-keyboard-open");
+    scheduleMobileActionBarUpdate();
+    return;
+  }
+
+  const hashTarget = mobileHashTarget();
+  const hashView = mobileScreenForElement(hashTarget);
+  setMobileView(hashView || document.body.dataset.mobileView || storedMobileView(), {
+    restoreScroll: !hashView,
+    target: hashView ? hashTarget : null,
+  });
+  updateMobileKeyboardState();
+}
+
+function initMobileShell() {
+  mobileShellMedia = window.matchMedia(MOBILE_SHELL_QUERY);
+  document.querySelectorAll("[data-mobile-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!isMobileShell()) return;
+      setMobileView(button.dataset.mobileTab);
+    });
+  });
+  if (mobileShellMedia.addEventListener) {
+    mobileShellMedia.addEventListener("change", syncMobileShellMode);
+  } else {
+    mobileShellMedia.addListener(syncMobileShellMode);
+  }
+  window.addEventListener("hashchange", openMobileHashTarget);
+  window.addEventListener("scroll", scheduleMobileActionBarUpdate, { passive: true });
+  window.addEventListener("resize", scheduleMobileActionBarUpdate, { passive: true });
+  window.visualViewport?.addEventListener("resize", updateMobileKeyboardState);
+  window.visualViewport?.addEventListener("scroll", updateMobileKeyboardState);
+  const observer = new MutationObserver(scheduleMobileActionBarUpdate);
+  document.querySelectorAll("[data-mobile-action-scope]").forEach((scope) => {
+    observer.observe(scope, { attributes: true, attributeFilter: ["hidden"] });
+  });
+  syncMobileShellMode();
+}
 
 function t(key, values = {}) {
   const dictionary = I18N[state.uiLanguage] || I18N.zh;
@@ -2484,6 +2702,10 @@ function renderMarketWizard() {
   renderMarketWizardPools();
   renderMarketWizardRuleEditor();
   renderMarketWizardSummary();
+  requestAnimationFrame(() => {
+    keepMobileMarketStepVisible();
+    scheduleMobileActionBarUpdate();
+  });
 }
 
 function renderMarketAssetCandidates() {
@@ -4850,6 +5072,7 @@ function bindEvents() {
 
 async function boot() {
   applyStaticTranslations();
+  initMobileShell();
   bindEvents();
   updateTargetVisibility();
   updateCombinationTargetVisibility();

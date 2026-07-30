@@ -2,6 +2,11 @@ window.H5_I18N = Object.freeze({
   zh: {
     brandSubtitle: "链上资产监控",
     accountOverview: "账户概览",
+    mobileNavigation: "移动端导航",
+    mobileNavOverview: "概览",
+    mobileNavMarket: "代币",
+    mobileNavAddress: "地址",
+    mobileNavAccount: "我的",
     heroTitle: "随时掌控地址与行情的变化",
     connectWallet: "连接钱包",
     disconnectWallet: "断开连接",
@@ -576,6 +581,11 @@ window.H5_I18N = Object.freeze({
   en: {
     brandSubtitle: "On-chain Asset Monitoring",
     accountOverview: "Account overview",
+    mobileNavigation: "Mobile navigation",
+    mobileNavOverview: "Overview",
+    mobileNavMarket: "Token",
+    mobileNavAddress: "Address",
+    mobileNavAccount: "Account",
     heroTitle: "Stay on top of address and market changes.",
     connectWallet: "Connect",
     disconnectWallet: "Disconnect",
