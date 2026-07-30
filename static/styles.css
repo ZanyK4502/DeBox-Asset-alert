@@ -239,6 +239,16 @@ h2 {
   scroll-margin-top: 112px;
 }
 
+#renew {
+  border-color: transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(135deg, rgba(31, 199, 122, 0.32), rgba(106, 255, 185, 0.88), rgba(31, 199, 122, 0.24)) border-box;
+  box-shadow:
+    0 12px 32px var(--shadow),
+    0 0 28px rgba(31, 199, 122, 0.08);
+}
+
 .section-head {
   display: flex;
   align-items: center;
