@@ -2027,13 +2027,39 @@ select:focus {
 }
 
 .market-primary-choice {
-  display: flex;
+  display: inline-flex;
   grid-column: 2 / -1;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
+  justify-self: end;
   gap: 7px;
+  width: fit-content;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
   color: var(--muted);
   font-size: 0.82rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.market-primary-choice input {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.market-primary-choice.selected {
+  border-color: var(--accent);
+  background: rgba(31, 199, 122, 0.1);
+  color: var(--text);
 }
 
 .market-quotes-only {

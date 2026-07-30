@@ -2971,9 +2971,9 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
         <span>${quoteOnly ? escapeHtml(t("marketQuotesOnly")) : marketMoney(pair.priceUsd)}</span>
       </div>
       ${quoteOnly ? "" : `
-        <label class="market-primary-choice">
+        <label class="market-primary-choice${primary ? " selected" : ""}">
           <input type="radio" name="market-primary-${escapeHtml(group.chain_key)}" data-market-wizard-primary="${escapeHtml(group.chain_key)}" value="${escapeHtml(address)}" ${primary ? "checked" : ""} />
-          ${escapeHtml(t("marketUseAsPrimary"))}
+          ${escapeHtml(t(primary ? "marketPoolPrimary" : "marketSetPrimary"))}
         </label>
       `}
     </div>
