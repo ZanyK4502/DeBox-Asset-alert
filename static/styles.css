@@ -3884,6 +3884,23 @@ label.market-pool-card {
     border-radius: 15px;
   }
 
+  #market,
+  #marketProjectsSection {
+    width: calc(100% + 4px);
+    margin-inline: -2px;
+    padding-inline: 8px;
+  }
+
+  #market .market-wizard,
+  #marketProjectsSection .market-project-detail {
+    padding-inline: 6px;
+  }
+
+  #market .market-wizard-panel,
+  #marketProjectsSection .market-panel {
+    padding-inline: 10px;
+  }
+
   input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea,
