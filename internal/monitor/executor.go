@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
@@ -37,6 +39,7 @@ var ruleTypeLabels = map[string]map[string]string{
 }
 
 type Repository interface {
+	ApplyExpiredEntitlementFallbacks(context.Context) (int64, error)
 	ListEnabledWatchRules(context.Context, int) ([]store.WatchRule, error)
 	CleanupAggregationHistory(context.Context) (store.AggregationCleanupResult, error)
 	UpdateWatchRuleValue(context.Context, int64, string) error
@@ -58,6 +61,10 @@ type Repository interface {
 		*string,
 		string,
 	) (store.AggregateNotification, error)
+	CreateNotificationDetailSnapshot(
+		context.Context,
+		store.CreateNotificationDetailSnapshotParams,
+	) (store.NotificationDetailSnapshot, error)
 }
 
 type ChainService interface {
@@ -106,6 +113,10 @@ func (e *Executor) CleanupAggregationHistory(
 	ctx context.Context,
 ) (store.AggregationCleanupResult, error) {
 	return e.deps.Repository.CleanupAggregationHistory(ctx)
+}
+
+func (e *Executor) ApplyExpiredEntitlementFallbacks(ctx context.Context) (int64, error) {
+	return e.deps.Repository.ApplyExpiredEntitlementFallbacks(ctx)
 }
 
 type RuleResult struct {
@@ -260,22 +271,23 @@ func (e *Executor) checkAssetRule(
 	if language == "en" {
 		note = current.Symbol + " balance matched the monitoring condition."
 	}
+	threshold := notificationfmt.TokenAmount(rule.Threshold)
 	if rule.RuleType == plans.BalanceThreshold {
-		note = fmt.Sprintf("%s 余额达到或低于阈值 %s。", current.Symbol, rule.Threshold)
+		note = fmt.Sprintf("%s 余额达到或低于阈值 %s。", current.Symbol, threshold)
 		if language == "en" {
 			note = fmt.Sprintf(
 				"%s balance reached or fell below the threshold %s.",
 				current.Symbol,
-				rule.Threshold,
+				threshold,
 			)
 		}
 	} else if rule.RuleType == plans.HighBalanceThreshold {
-		note = fmt.Sprintf("%s 余额达到或高于阈值 %s。", current.Symbol, rule.Threshold)
+		note = fmt.Sprintf("%s 余额达到或高于阈值 %s。", current.Symbol, threshold)
 		if language == "en" {
 			note = fmt.Sprintf(
 				"%s balance reached or rose above the threshold %s.",
 				current.Symbol,
-				rule.Threshold,
+				threshold,
 			)
 		}
 	}
@@ -285,7 +297,7 @@ func (e *Executor) checkAssetRule(
 		limited.Value = currentValue
 		return *limited, nil
 	}
-	return e.recordTrigger(ctx, rule, previousValue, currentValue, note)
+	return e.recordTrigger(ctx, rule, previousValue, currentValue, note, current.Symbol)
 }
 
 func (e *Executor) checkApprovalRule(
@@ -335,7 +347,7 @@ func (e *Executor) checkApprovalRule(
 		limited.Value = currentValue
 		return *limited, nil
 	}
-	return e.recordTrigger(ctx, rule, previousValue, currentValue, note)
+	return e.recordTrigger(ctx, rule, previousValue, currentValue, note, current.Symbol)
 }
 
 func (e *Executor) checkInteractionRule(
@@ -384,7 +396,7 @@ func (e *Executor) checkInteractionRule(
 		limited.Value = cursor
 		return *limited, nil
 	}
-	return e.recordTrigger(ctx, rule, previousCursor, cursor, note)
+	return e.recordTrigger(ctx, rule, previousCursor, cursor, note, "")
 }
 
 func (e *Executor) recordTrigger(
@@ -393,12 +405,27 @@ func (e *Executor) recordTrigger(
 	previousValue *string,
 	currentValue string,
 	note string,
+	tokenSymbol string,
 ) (RuleResult, error) {
 	if rule.RuleScope == "combination" {
-		return e.recordCombinationTrigger(ctx, rule, previousValue, currentValue, note)
+		return e.recordCombinationTrigger(
+			ctx,
+			rule,
+			previousValue,
+			currentValue,
+			note,
+			tokenSymbol,
+		)
 	}
 	if rule.DeliveryMode != "stage" {
-		event, err := e.recordAndSend(ctx, rule, previousValue, currentValue, note)
+		event, err := e.recordAndSend(
+			ctx,
+			rule,
+			previousValue,
+			currentValue,
+			note,
+			tokenSymbol,
+		)
 		if err != nil {
 			return RuleResult{}, err
 		}
@@ -416,6 +443,7 @@ func (e *Executor) recordTrigger(
 		PreviousValue: previousValue,
 		CurrentValue:  stringPointer(currentValue),
 		Note:          note,
+		TokenSymbol:   tokenSymbol,
 	})
 	if err != nil {
 		return RuleResult{}, err
@@ -434,11 +462,27 @@ func (e *Executor) recordTrigger(
 		return RuleResult{}, errors.New("stage notification was claimed without a record")
 	}
 
+	text := stageAlertText(rule, stage)
+	snapshot, err := e.createAddressStageSnapshot(ctx, rule, stage, text)
+	if err != nil {
+		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
+			ctx,
+			stage.Notification.ID,
+			"failed",
+			nil,
+			err.Error(),
+		)
+		if updateErr != nil {
+			return RuleResult{}, errors.Join(err, updateErr)
+		}
+		return RuleResult{}, err
+	}
 	messageID, sendErr := e.sendAggregateNotification(
 		stage.Notification.NotificationChatID,
 		stage.Notification.NotificationChatType,
-		stageAlertText(rule, stage),
+		text,
 		rule.NotificationLanguage,
+		snapshot.PublicID,
 	)
 	if sendErr != nil {
 		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
@@ -478,6 +522,7 @@ func (e *Executor) recordCombinationTrigger(
 	previousValue *string,
 	currentValue string,
 	note string,
+	tokenSymbol string,
 ) (RuleResult, error) {
 	combination, err := e.deps.Repository.RecordCombinationTrigger(
 		ctx,
@@ -487,6 +532,7 @@ func (e *Executor) recordCombinationTrigger(
 			PreviousValue: previousValue,
 			CurrentValue:  stringPointer(currentValue),
 			Note:          note,
+			TokenSymbol:   tokenSymbol,
 		},
 	)
 	if err != nil {
@@ -505,11 +551,32 @@ func (e *Executor) recordCombinationTrigger(
 	if combination.Notification == nil {
 		return RuleResult{}, errors.New("combination notification was claimed without a record")
 	}
-	messageID, sendErr := e.sendAggregateNotification(
+	text := combinationAlertText(combination)
+	snapshot, err := e.createAddressCombinationSnapshot(
+		ctx,
+		rule,
+		combination,
+		text,
+	)
+	if err != nil {
+		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
+			ctx,
+			combination.Notification.ID,
+			"failed",
+			nil,
+			err.Error(),
+		)
+		if updateErr != nil {
+			return RuleResult{}, errors.Join(err, updateErr)
+		}
+		return RuleResult{}, err
+	}
+	messageID, sendErr := e.sendCombinationNotification(
 		combination.Notification.NotificationChatID,
 		combination.Notification.NotificationChatType,
-		combinationAlertText(combination),
+		text,
 		combination.Notification.NotificationLanguage,
+		snapshot.PublicID,
 	)
 	if sendErr != nil {
 		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
@@ -549,6 +616,7 @@ func (e *Executor) recordAndSend(
 	previousValue *string,
 	currentValue string,
 	note string,
+	tokenSymbol string,
 ) (store.AlertEvent, error) {
 	event, err := e.deps.Repository.CreateAlertEvent(ctx, store.CreateAlertEventParams{
 		WatchRuleID:        rule.ID,
@@ -560,10 +628,44 @@ func (e *Executor) recordAndSend(
 	if err != nil {
 		return store.AlertEvent{}, err
 	}
-	messageID, sendErr := e.deps.Notifications.SendNotification(
-		rule.NotificationChatID,
-		rule.NotificationChatType,
-		alertText(rule, previousValue, currentValue, note),
+	occurredAt := event.CreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	text := alertText(
+		rule,
+		previousValue,
+		currentValue,
+		tokenSymbol,
+		note,
+		occurredAt,
+	)
+	snapshot, err := e.createAddressRealtimeSnapshot(
+		ctx,
+		rule,
+		event,
+		tokenSymbol,
+		note,
+		occurredAt,
+		text,
+	)
+	if err != nil {
+		_, updateErr := e.deps.Repository.UpdateAlertEventNotification(
+			ctx,
+			event.ID,
+			"failed",
+			nil,
+			err.Error(),
+		)
+		if updateErr != nil {
+			return store.AlertEvent{}, errors.Join(err, updateErr)
+		}
+		return store.AlertEvent{}, err
+	}
+	messageID, sendErr := e.sendRealtimeNotification(
+		rule,
+		text,
+		snapshot.PublicID,
 	)
 	if sendErr != nil {
 		_, updateErr := e.deps.Repository.UpdateAlertEventNotification(
@@ -591,24 +693,72 @@ func (e *Executor) recordAndSend(
 	)
 }
 
-func (e *Executor) sendAggregateNotification(
-	chatID, chatType, text, language string,
+func (e *Executor) sendRealtimeNotification(
+	rule store.WatchRule,
+	text string,
+	notificationID string,
 ) (string, error) {
 	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
-	if !supportsAction || e.deps.PublicAppURL == "" {
+	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
+	if !supportsAction || actionURL == "" {
+		return e.deps.Notifications.SendNotification(
+			rule.NotificationChatID,
+			rule.NotificationChatType,
+			text,
+		)
+	}
+	actionText := "查看详情"
+	if normalizeLanguage(rule.NotificationLanguage) == "en" {
+		actionText = "View details"
+	}
+	return actionSender.SendNotificationWithAction(
+		rule.NotificationChatID,
+		rule.NotificationChatType,
+		text,
+		actionText,
+		actionURL,
+	)
+}
+
+func (e *Executor) sendAggregateNotification(
+	chatID, chatType, text, language, notificationID string,
+) (string, error) {
+	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
+	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
+	if !supportsAction || actionURL == "" {
 		return e.deps.Notifications.SendNotification(chatID, chatType, text)
 	}
 	actionText := "查看全部事件"
 	if normalizeLanguage(language) == "en" {
 		actionText = "View all events"
 	}
-	baseURL := strings.SplitN(e.deps.PublicAppURL, "#", 2)[0]
 	return actionSender.SendNotificationWithAction(
 		chatID,
 		chatType,
 		text,
 		actionText,
-		baseURL+"#aggregateEventsSection",
+		actionURL,
+	)
+}
+
+func (e *Executor) sendCombinationNotification(
+	chatID, chatType, text, language, notificationID string,
+) (string, error) {
+	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
+	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
+	if !supportsAction || actionURL == "" {
+		return e.deps.Notifications.SendNotification(chatID, chatType, text)
+	}
+	actionText := "查看完整分析"
+	if normalizeLanguage(language) == "en" {
+		actionText = "View full analysis"
+	}
+	return actionSender.SendNotificationWithAction(
+		chatID,
+		chatType,
+		text,
+		actionText,
+		actionURL,
 	)
 }
 
@@ -730,110 +880,6 @@ func decimal(value string) *big.Float {
 	return number
 }
 
-func alertText(
-	rule store.WatchRule,
-	previousValue *string,
-	currentValue string,
-	note string,
-) string {
-	language := normalizeLanguage(rule.NotificationLanguage)
-	previous := "-"
-	if previousValue != nil {
-		previous = *previousValue
-	}
-	label := ruleTypeLabels[language][rule.RuleType]
-	if label == "" {
-		label = rule.RuleType
-	}
-	if language == "en" {
-		return "<b>DeBox Asset Alert</b><br/>" +
-			"Rule: " + html.EscapeString(label) + "<br/>" +
-			"Network: " + html.EscapeString(rule.ChainKey) + "<br/>" +
-			"Monitored address: " + html.EscapeString(shortAddress(stringPointer(rule.WalletAddress))) + "<br/>" +
-			"Change: " + html.EscapeString(previous) + " -&gt; " + html.EscapeString(currentValue) + "<br/>" +
-			html.EscapeString(note)
-	}
-	return "<b>DeBox Asset Alert</b><br/>" +
-		"规则：" + html.EscapeString(label) + "<br/>" +
-		"网络：" + html.EscapeString(rule.ChainKey) + "<br/>" +
-		"监控地址：" + html.EscapeString(shortAddress(stringPointer(rule.WalletAddress))) + "<br/>" +
-		"变化：" + html.EscapeString(previous) + " -&gt; " + html.EscapeString(currentValue) + "<br/>" +
-		html.EscapeString(note)
-}
-
-func stageAlertText(rule store.WatchRule, result store.StageTriggerResult) string {
-	language := normalizeLanguage(rule.NotificationLanguage)
-	label := ruleTypeLabels[language][rule.RuleType]
-	if label == "" {
-		label = rule.RuleType
-	}
-	var message strings.Builder
-	if language == "en" {
-		message.WriteString("<b>DeBox Asset Alert - Stage summary</b><br/>")
-		message.WriteString("Rule: " + html.EscapeString(label) + "<br/>")
-		message.WriteString("Network: " + html.EscapeString(rule.ChainKey) + "<br/>")
-		message.WriteString("Monitored address: " + html.EscapeString(shortAddress(stringPointer(rule.WalletAddress))) + "<br/>")
-		message.WriteString(fmt.Sprintf("Cycle: %d minutes<br/>", rule.CycleMinutes))
-		message.WriteString(fmt.Sprintf("Triggers this cycle: %d<br/>", result.TotalTriggerCount))
-		message.WriteString("Recent events:")
-	} else {
-		message.WriteString("<b>DeBox Asset Alert - 阶段汇总</b><br/>")
-		message.WriteString("规则：" + html.EscapeString(label) + "<br/>")
-		message.WriteString("网络：" + html.EscapeString(rule.ChainKey) + "<br/>")
-		message.WriteString("监控地址：" + html.EscapeString(shortAddress(stringPointer(rule.WalletAddress))) + "<br/>")
-		message.WriteString(fmt.Sprintf("周期：%d 分钟<br/>", rule.CycleMinutes))
-		message.WriteString(fmt.Sprintf("本周期累计触发：%d 次<br/>", result.TotalTriggerCount))
-		message.WriteString("最近事件：")
-	}
-	for index, note := range result.RecentNotes {
-		message.WriteString(fmt.Sprintf("<br/>%d. %s", index+1, html.EscapeString(note)))
-	}
-	return message.String()
-}
-
-func combinationAlertText(result store.CombinationTriggerResult) string {
-	language := "zh"
-	note := ""
-	if result.Notification != nil {
-		language = normalizeLanguage(result.Notification.NotificationLanguage)
-		note = strings.TrimSpace(result.Notification.Note)
-	}
-	var message strings.Builder
-	if language == "en" {
-		message.WriteString("<b>DeBox Asset Alert - Combined alert</b>")
-		if note != "" {
-			message.WriteString("<br/>Note: " + html.EscapeString(note))
-		}
-		message.WriteString("<br/>All combined conditions have reached their trigger counts:")
-	} else {
-		message.WriteString("<b>DeBox Asset Alert - 组合规则提醒</b>")
-		if note != "" {
-			message.WriteString("<br/>备注：" + html.EscapeString(note))
-		}
-		message.WriteString("<br/>所有联动条件均已达到触发次数：")
-	}
-	for _, progress := range result.MemberProgress {
-		label := ruleTypeLabels[language][progress.RuleType]
-		if label == "" {
-			label = progress.RuleType
-		}
-		message.WriteString(fmt.Sprintf(
-			"<br/>- %s: %d/%d",
-			html.EscapeString(label),
-			progress.TriggerCount,
-			progress.RequiredTriggerCount,
-		))
-		for index, eventNote := range progress.RecentNotes {
-			message.WriteString(fmt.Sprintf(
-				"<br/>&nbsp;&nbsp;%d. %s",
-				index+1,
-				html.EscapeString(eventNote),
-			))
-		}
-	}
-	return message.String()
-}
-
 func normalizeLanguage(language string) string {
 	if strings.ToLower(strings.TrimSpace(language)) == "en" {
 		return "en"
@@ -853,14 +899,14 @@ func targetLabelPrefix(rule store.WatchRule, language string) string {
 }
 
 func shortAddress(address *string) string {
-	if address == nil || *address == "" {
+	if address == nil {
 		return "-"
 	}
-	value := *address
-	if len(value) <= 16 {
-		return value
+	value := notificationfmt.ShortIdentifier(*address)
+	if value == "" {
+		return "-"
 	}
-	return value[:8] + "..." + value[len(value)-6:]
+	return value
 }
 
 func stringValue(value *string) string {

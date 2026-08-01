@@ -47,6 +47,7 @@ func TestPythonBaselineRouteContract(t *testing.T) {
 		{http.MethodGet, "/api/notification-groups"},
 		{http.MethodPost, "/api/notification-groups"},
 		{http.MethodDelete, "/api/notification-groups/1"},
+		{http.MethodGet, "/api/notification-details/nd_0123456789abcdef0123456789abcdef01234567"},
 		{http.MethodGet, "/api/payment/config"},
 		{http.MethodPost, "/api/payment/prepare"},
 		{http.MethodPost, "/api/payment/verify"},
@@ -101,7 +102,7 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				"balance_threshold", "balance_threshold_high",
 			},
 			AllowedRules: ruleTypes[:5], PrivateNotification: true,
-			MarketQuery: true, MarketPoolMode: "query", FourMemeMode: "query",
+			MarketQuery: false, MarketPoolMode: "none", FourMemeMode: "none",
 			Description: "1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。",
 		},
 		{

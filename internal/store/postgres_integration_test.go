@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -60,6 +61,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_stage_window_events",
 		"market_stage_windows",
 		"nodit_webhook_subscriptions",
+		"notification_detail_snapshots",
 		"notification_groups",
 		"orders",
 		"permanent_plan_allowlist",
@@ -1040,6 +1042,7 @@ func TestPostgresStageTriggerSendsOncePerWindow(t *testing.T) {
 		t.Fatalf("create stage rule: %v", err)
 	}
 
+	var notifiedResult StageTriggerResult
 	for index, wantDue := range []bool{false, true, false} {
 		previous := fmt.Sprint(index)
 		current := fmt.Sprint(index + 1)
@@ -1049,6 +1052,7 @@ func TestPostgresStageTriggerSendsOncePerWindow(t *testing.T) {
 			PreviousValue: &previous,
 			CurrentValue:  &current,
 			Note:          "integration event",
+			TokenSymbol:   "BNB",
 		})
 		if err != nil {
 			t.Fatalf("record stage trigger %d: %v", index+1, err)
@@ -1057,6 +1061,19 @@ func TestPostgresStageTriggerSendsOncePerWindow(t *testing.T) {
 			result.NotificationDue != wantDue {
 			t.Fatalf("stage trigger %d = %#v", index+1, result)
 		}
+		if result.NotificationDue {
+			notifiedResult = result
+		}
+	}
+	if len(notifiedResult.Events) != 2 ||
+		notifiedResult.Events[0].PreviousValue == nil ||
+		*notifiedResult.Events[0].PreviousValue != "0" ||
+		notifiedResult.Events[1].CurrentValue == nil ||
+		*notifiedResult.Events[1].CurrentValue != "2" ||
+		notifiedResult.Events[0].TokenSymbol != "BNB" ||
+		notifiedResult.Events[0].OccurredAt.IsZero() ||
+		notifiedResult.Timezone == "" {
+		t.Fatalf("stage statistics events = %#v", notifiedResult)
 	}
 
 	var eventCount, notificationCount int64
@@ -1072,6 +1089,33 @@ func TestPostgresStageTriggerSendsOncePerWindow(t *testing.T) {
 	}
 	if eventCount != 3 || notificationCount != 1 {
 		t.Fatalf("stage records = events:%d notifications:%d", eventCount, notificationCount)
+	}
+	periodEnd := time.Now().UTC().Add(time.Minute)
+	periodStart := periodEnd.Add(-time.Hour)
+	statistics, err := store.DailySummaryStatistics(
+		ctx,
+		rule.DeBoxUserID,
+		periodStart,
+		periodEnd,
+	)
+	if err != nil {
+		t.Fatalf("daily stage summary statistics: %v", err)
+	}
+	if statistics.EventCount != 3 || statistics.AssetEventCount != 3 {
+		t.Fatalf("daily stage summary statistics = %#v", statistics)
+	}
+	recent, err := store.ListSummaryRecentEvents(
+		ctx,
+		rule.DeBoxUserID,
+		periodStart,
+		periodEnd,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("daily stage recent events: %v", err)
+	}
+	if len(recent) != 3 || recent[0].EventType != "balance_change" {
+		t.Fatalf("daily stage recent events = %#v", recent)
 	}
 }
 
@@ -1144,17 +1188,31 @@ func TestPostgresCombinationSendsAfterEveryMemberReachesThreshold(t *testing.T) 
 	}
 	for index, item := range sequence {
 		current := fmt.Sprint(index + 1)
+		previous := fmt.Sprint(index)
 		result, err := database.RecordCombinationTrigger(ctx, RecordCombinationTriggerParams{
-			WatchRuleID:  combination.Members[item.memberIndex].WatchRuleID,
-			DeBoxUserID:  userID,
-			CurrentValue: &current,
-			Note:         "combination event",
+			WatchRuleID:   combination.Members[item.memberIndex].WatchRuleID,
+			DeBoxUserID:   userID,
+			PreviousValue: &previous,
+			CurrentValue:  &current,
+			Note:          "combination event",
+			TokenSymbol:   "BNB",
 		})
 		if err != nil {
 			t.Fatalf("record combination trigger %d: %v", index+1, err)
 		}
 		if result.NotificationDue != item.wantDue {
 			t.Fatalf("trigger %d due = %v, want %v", index+1, result.NotificationDue, item.wantDue)
+		}
+		if result.NotificationDue {
+			if result.Timezone == "" ||
+				len(result.MemberProgress) != 2 ||
+				len(result.MemberProgress[0].Events) != 2 ||
+				len(result.MemberProgress[1].Events) != 1 ||
+				result.MemberProgress[0].Events[0].TokenSymbol != "BNB" ||
+				result.MemberProgress[0].ReachedAt == nil ||
+				result.MemberProgress[1].ReachedAt == nil {
+				t.Fatalf("combination delivery data = %#v", result)
+			}
 		}
 	}
 
@@ -1174,6 +1232,33 @@ func TestPostgresCombinationSendsAfterEveryMemberReachesThreshold(t *testing.T) 
 	}
 	if eventCount != 4 || notificationCount != 1 {
 		t.Fatalf("combination records = events:%d notifications:%d", eventCount, notificationCount)
+	}
+	periodEnd := time.Now().UTC().Add(time.Minute)
+	periodStart := periodEnd.Add(-time.Hour)
+	statistics, err := database.DailySummaryStatistics(
+		ctx,
+		userID,
+		periodStart,
+		periodEnd,
+	)
+	if err != nil {
+		t.Fatalf("daily combination summary statistics: %v", err)
+	}
+	if statistics.EventCount != 4 || statistics.AssetEventCount != 4 {
+		t.Fatalf("daily combination summary statistics = %#v", statistics)
+	}
+	recent, err := database.ListSummaryRecentEvents(
+		ctx,
+		userID,
+		periodStart,
+		periodEnd,
+		10,
+	)
+	if err != nil {
+		t.Fatalf("daily combination recent events: %v", err)
+	}
+	if len(recent) != 4 || recent[0].EventType != "balance_change" {
+		t.Fatalf("daily combination recent events = %#v", recent)
 	}
 
 	history, err := database.ListAggregationEventHistory(ctx, userID, 0, 10)
@@ -1444,6 +1529,173 @@ func TestPostgresAggregationHistoryIsScopedPaginatedAndLimitedToThirtyDays(t *te
 	if len(otherUserPage.Events) != 0 ||
 		otherUserPage.Stats.EventCount != 0 {
 		t.Fatalf("other user history = %#v", otherUserPage)
+	}
+}
+
+func TestPostgresNotificationDetailSnapshotsAreImmutableAndIndependent(t *testing.T) {
+	database, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	userID := "integration-notification-snapshot-user"
+	rule, err := database.CreateWatchRule(ctx, CreateWatchRuleParams{
+		DeBoxUserID:          userID,
+		ChainKey:             "bsc",
+		ChainID:              56,
+		WalletAddress:        "0x1111111111111111111111111111111111111111",
+		RuleType:             "outgoing",
+		Threshold:            "100",
+		NotificationChatID:   userID,
+		NotificationChatType: "private",
+		NotificationLanguage: "zh",
+	})
+	if err != nil {
+		t.Fatalf("create snapshot watch rule: %v", err)
+	}
+	ruleID := rule.ID
+	first, err := database.CreateNotificationDetailSnapshot(
+		ctx,
+		CreateNotificationDetailSnapshotParams{
+			SourceKey:            "address_realtime:integration-1",
+			NotificationKind:     NotificationKindAddressRealtime,
+			SourceType:           "alert_event",
+			DeBoxUserID:          userID,
+			RuleID:               &ruleID,
+			RuleType:             "outgoing",
+			RuleName:             "转出提醒",
+			RuleThreshold:        "100",
+			ActualValue:          "125",
+			NotificationChatID:   userID,
+			NotificationChatType: "private",
+			NotificationLanguage: "zh",
+			NotificationLabel:    "主钱包",
+			NotificationText:     "original notification",
+			Details: json.RawMessage(
+				`{"rule":{"name":"转出提醒","threshold":"100"},"actual":"125"}`,
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create notification detail snapshot: %v", err)
+	}
+	if first.PublicID == "" ||
+		first.ExpiresAt.Sub(first.CreatedAt) != NotificationDetailRetentionDays*24*time.Hour {
+		t.Fatalf("snapshot retention = %#v", first)
+	}
+	loaded, err := database.GetNotificationDetailSnapshot(ctx, first.PublicID)
+	if err != nil || loaded == nil || loaded.ID != first.ID ||
+		loaded.PublicID != first.PublicID || loaded.DeBoxUserID != userID ||
+		loaded.NotificationText != first.NotificationText ||
+		string(loaded.Details) != string(first.Details) {
+		t.Fatalf("read notification detail snapshot = %#v, %v", loaded, err)
+	}
+
+	second, err := database.CreateNotificationDetailSnapshot(
+		ctx,
+		CreateNotificationDetailSnapshotParams{
+			SourceKey:            first.SourceKey,
+			NotificationKind:     NotificationKindAddressRealtime,
+			SourceType:           "alert_event",
+			DeBoxUserID:          userID,
+			RuleID:               &ruleID,
+			RuleType:             "outgoing",
+			RuleName:             "modified rule name",
+			RuleThreshold:        "999",
+			ActualValue:          "999",
+			NotificationChatID:   userID,
+			NotificationChatType: "private",
+			NotificationText:     "modified notification",
+			Details:              json.RawMessage(`{"rule":{"threshold":"999"}}`),
+		},
+	)
+	if err != nil {
+		t.Fatalf("repeat notification detail snapshot: %v", err)
+	}
+	var persistedDetails struct {
+		Rule struct {
+			Threshold string `json:"threshold"`
+		} `json:"rule"`
+	}
+	if err := json.Unmarshal(second.Details, &persistedDetails); err != nil {
+		t.Fatalf("decode persisted notification detail snapshot: %v", err)
+	}
+	if second.ID != first.ID || second.PublicID != first.PublicID ||
+		second.RuleName != "转出提醒" || second.RuleThreshold != "100" ||
+		second.ActualValue != "125" || second.NotificationText != "original notification" ||
+		persistedDetails.Rule.Threshold != "100" {
+		t.Fatalf("idempotent snapshot was mutated: first=%#v second=%#v", first, second)
+	}
+
+	deleted, err := database.DeleteWatchRule(ctx, rule.ID, userID)
+	if err != nil || !deleted {
+		t.Fatalf("delete source rule = %t, %v", deleted, err)
+	}
+	var remaining int64
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM notification_detail_snapshots
+		WHERE id = $1 AND rule_id = $2
+	`, first.ID, rule.ID).Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("snapshot after rule deletion = %d, %v", remaining, err)
+	}
+	var foreignKeys int64
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM information_schema.table_constraints
+		WHERE table_schema = current_schema()
+		  AND table_name = 'notification_detail_snapshots'
+		  AND constraint_type = 'FOREIGN KEY'
+	`).Scan(&foreignKeys); err != nil || foreignKeys != 0 {
+		t.Fatalf("snapshot foreign keys = %d, %v", foreignKeys, err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE notification_detail_snapshots
+		SET expires_at = NOW() - INTERVAL '4 days'
+		WHERE id = $1
+	`, first.ID); err != nil {
+		t.Fatalf("age snapshot within cleanup grace: %v", err)
+	}
+	cleanup, err := database.CleanupAggregationHistory(ctx)
+	if err != nil || cleanup.NotificationDetailSnapshotsDeleted != 0 {
+		t.Fatalf("cleanup inside grace = %#v, %v", cleanup, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE notification_detail_snapshots
+		SET expires_at = NOW() - INTERVAL '6 days'
+		WHERE id = $1
+	`, first.ID); err != nil {
+		t.Fatalf("age snapshot past cleanup grace: %v", err)
+	}
+	cleanup, err = database.CleanupAggregationHistory(ctx)
+	if err != nil || cleanup.NotificationDetailSnapshotsDeleted != 1 {
+		t.Fatalf("cleanup past grace = %#v, %v", cleanup, err)
+	}
+
+	accountSnapshot, err := database.CreateNotificationDetailSnapshot(
+		ctx,
+		CreateNotificationDetailSnapshotParams{
+			SourceKey:            "daily_summary:integration-account-delete",
+			NotificationKind:     NotificationKindDailySummary,
+			SourceType:           "daily_summary_target",
+			DeBoxUserID:          userID,
+			RuleType:             "daily_summary",
+			RuleName:             "每日摘要",
+			NotificationChatID:   userID,
+			NotificationChatType: "private",
+			NotificationText:     "daily summary",
+			Details:              json.RawMessage(`{"period":"2026-07-31"}`),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create account deletion snapshot: %v", err)
+	}
+	removed, err := database.DeleteNotificationDetailSnapshotsForUser(ctx, userID)
+	if err != nil || removed != 1 {
+		t.Fatalf("delete account snapshots = %d, %v", removed, err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM notification_detail_snapshots WHERE id = $1
+	`, accountSnapshot.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("snapshot after account deletion = %d, %v", remaining, err)
 	}
 }
 

@@ -11,7 +11,8 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -65,11 +66,18 @@ type Repository interface {
 	ListSummaryRecentEvents(context.Context, string, time.Time, time.Time, int) ([]store.SummaryEvent, error)
 	ListSummaryRecentMarketEvents(context.Context, string, time.Time, time.Time, int) ([]store.MarketSummaryEvent, error)
 	ListDailyMarketProjectChainSummaries(context.Context, string, time.Time, time.Time) ([]store.MarketProjectChainSummary, error)
+	CreateNotificationDetailSnapshot(context.Context, store.CreateNotificationDetailSnapshotParams) (store.NotificationDetailSnapshot, error)
 	MarkScheduledPushSent(context.Context, int64, string, time.Time) error
 }
 
 type NotificationService interface {
 	SendNotification(string, string, string) (string, error)
+}
+
+type ActionNotificationService interface {
+	SendNotificationWithAction(
+		chatID, chatType, text, actionText, actionURL string,
+	) (string, error)
 }
 
 type Lock interface {
@@ -83,6 +91,7 @@ type Dependencies struct {
 	Notifications NotificationService
 	TryLock       TryLockFunc
 	Now           func() time.Time
+	PublicAppURL  string
 }
 
 type Executor struct {
@@ -93,6 +102,7 @@ func New(dependencies Dependencies) *Executor {
 	if dependencies.Now == nil {
 		dependencies.Now = func() time.Time { return time.Now().UTC() }
 	}
+	dependencies.PublicAppURL = strings.TrimSpace(dependencies.PublicAppURL)
 	return &Executor{deps: dependencies}
 }
 
@@ -203,7 +213,7 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		}
 		periodStart, periodEnd := summaryTargetPeriod(target, periodEnd)
 		summarySubscription := summarySubscriptionForTarget(*subscription, target)
-		text, err := e.summaryText(
+		content, err := e.loadDailySummaryContent(
 			ctx,
 			summarySubscription,
 			periodStart,
@@ -212,11 +222,28 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		if err != nil {
 			return "error", err
 		}
-		if _, err := e.deps.Notifications.SendNotification(
-			target.ChatID,
-			target.ChatType,
+		text := buildSummaryText(
+			summarySubscription,
+			periodStart,
+			periodEnd,
+			content.Statistics,
+			content.AddressEvents,
+			content.MarketEvents,
+			content.MarketSummaries,
+		)
+		snapshot, err := e.createDailySummarySnapshot(
+			ctx,
+			*subscription,
+			target,
+			periodStart,
+			periodEnd,
 			text,
-		); err != nil {
+			content,
+		)
+		if err != nil {
+			return "error", err
+		}
+		if _, err := e.sendSummaryNotification(target, text, snapshot.PublicID); err != nil {
 			return "error", err
 		}
 		target.LastSentDate = localDate
@@ -244,6 +271,33 @@ func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (str
 		return "error", err
 	}
 	return "sent", nil
+}
+
+func (e *Executor) sendSummaryNotification(
+	target store.DailySummaryTarget,
+	text string,
+	notificationID string,
+) (string, error) {
+	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
+	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
+	if !supportsAction || actionURL == "" {
+		return e.deps.Notifications.SendNotification(
+			target.ChatID,
+			target.ChatType,
+			text,
+		)
+	}
+	actionText := "查看完整日报"
+	if normalizeLanguage(target.Language) == "en" {
+		actionText = "View full report"
+	}
+	return actionSender.SendNotificationWithAction(
+		target.ChatID,
+		target.ChatType,
+		text,
+		actionText,
+		actionURL,
+	)
 }
 
 func effectiveSummaryTarget(
@@ -347,38 +401,9 @@ func (e *Executor) summaryText(
 	periodStart time.Time,
 	periodEnd time.Time,
 ) (string, error) {
-	statistics, err := e.deps.Repository.DailySummaryStatistics(
+	content, err := e.loadDailySummaryContent(
 		ctx,
-		subscription.DeBoxUserID,
-		periodStart,
-		periodEnd,
-	)
-	if err != nil {
-		return "", err
-	}
-	events, err := e.deps.Repository.ListSummaryRecentEvents(
-		ctx,
-		subscription.DeBoxUserID,
-		periodStart,
-		periodEnd,
-		recentEventLimit,
-	)
-	if err != nil {
-		return "", err
-	}
-	marketEvents, err := e.deps.Repository.ListSummaryRecentMarketEvents(
-		ctx,
-		subscription.DeBoxUserID,
-		periodStart,
-		periodEnd,
-		recentEventLimit,
-	)
-	if err != nil {
-		return "", err
-	}
-	marketSummaries, err := e.deps.Repository.ListDailyMarketProjectChainSummaries(
-		ctx,
-		subscription.DeBoxUserID,
+		subscription,
 		periodStart,
 		periodEnd,
 	)
@@ -389,14 +414,14 @@ func (e *Executor) summaryText(
 		subscription,
 		periodStart,
 		periodEnd,
-		statistics,
-		events,
-		marketEvents,
-		marketSummaries,
+		content.Statistics,
+		content.AddressEvents,
+		content.MarketEvents,
+		content.MarketSummaries,
 	), nil
 }
 
-func buildSummaryText(
+func buildLegacySummaryText(
 	subscription store.Subscription,
 	periodStart time.Time,
 	periodEnd time.Time,
@@ -562,7 +587,7 @@ func marketProjectSummariesText(
 		lines = append(lines, fmt.Sprintf(
 			"<b>%s</b> · %s",
 			html.EscapeString(chainName),
-			html.EscapeString(item.TokenAddress),
+			html.EscapeString(notificationfmt.ShortIdentifier(item.TokenAddress)),
 		))
 		if english {
 			lines = append(lines,
@@ -613,9 +638,9 @@ func priceChangeText(start, end *string) string {
 	startValue, startOK := new(big.Rat).SetString(*start)
 	endValue, endOK := new(big.Rat).SetString(*end)
 	if !startOK || !endOK {
-		return "$" + moneyText(*start) + " → $" + moneyText(*end)
+		return "$" + notificationfmt.Price(*start) + " → $" + notificationfmt.Price(*end)
 	}
-	result := "$" + moneyText(*start) + " → $" + moneyText(*end)
+	result := "$" + notificationfmt.Price(*start) + " → $" + notificationfmt.Price(*end)
 	if startValue.Sign() == 0 {
 		return result
 	}
@@ -650,7 +675,7 @@ func recentMarketEventsText(events []store.MarketSummaryEvent, english bool) str
 		if event.USDValue != nil && strings.TrimSpace(*event.USDValue) != "" {
 			detail = " $" + moneyText(*event.USDValue)
 		} else if event.TokenAmount != nil && strings.TrimSpace(*event.TokenAmount) != "" {
-			detail = " " + *event.TokenAmount
+			detail = " " + notificationfmt.TokenAmount(*event.TokenAmount)
 		}
 		wallet := ""
 		if event.WalletAddress != nil && strings.TrimSpace(*event.WalletAddress) != "" {
@@ -671,7 +696,13 @@ func recentMarketEventsText(events []store.MarketSummaryEvent, english bool) str
 
 func marketPoolSummary(event store.MarketSummaryEvent) string {
 	dex := strings.TrimSpace(event.Protocol + " " + event.ProtocolVersion)
-	pool := valueOrDash(event.PoolAddress)
+	pool := "-"
+	if event.PoolAddress != nil {
+		pool = notificationfmt.ShortIdentifier(*event.PoolAddress)
+		if pool == "" {
+			pool = "-"
+		}
+	}
 	if dex == "" {
 		return pool
 	}
@@ -679,33 +710,25 @@ func marketPoolSummary(event store.MarketSummaryEvent) string {
 }
 
 func marketChainName(chainKey string) string {
-	if strings.TrimSpace(chainKey) == "" {
+	name := notificationfmt.ChainName(chainKey)
+	if name == "" {
 		return "-"
 	}
-	profile, err := chain.ChainProfile(chainKey, "")
-	if err == nil {
-		return profile.Name
-	}
-	return chainKey
+	return name
 }
 
 func moneyText(value string) string {
-	value = strings.TrimSpace(value)
+	value = notificationfmt.Money(value)
 	if value == "" {
 		return "0"
 	}
-	number, ok := new(big.Rat).SetString(value)
-	if !ok {
-		return value
-	}
-	text := number.FloatString(2)
-	return strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	return value
 }
 
 func signedMoneyText(value string) string {
-	value = moneyText(value)
-	if value != "0" && !strings.HasPrefix(value, "-") {
-		return "+" + value
+	value = notificationfmt.SignedMoney(value)
+	if value == "" {
+		return "0"
 	}
 	return value
 }
@@ -734,8 +757,8 @@ func recentEventsText(events []store.SummaryEvent, english bool) string {
 			html.EscapeString(label),
 			separator,
 			html.EscapeString(shortAddress(event.WalletAddress)),
-			html.EscapeString(valueOrDash(event.PreviousValue)),
-			html.EscapeString(valueOrDash(event.CurrentValue)),
+			html.EscapeString(summaryEventValue(event.EventType, event.PreviousValue)),
+			html.EscapeString(summaryEventValue(event.EventType, event.CurrentValue)),
 		))
 	}
 	return strings.Join(lines, "<br/>")
@@ -790,20 +813,21 @@ func normalizeLanguage(value string) string {
 }
 
 func shortAddress(value string) string {
+	value = notificationfmt.ShortIdentifier(value)
 	if value == "" {
 		return "-"
 	}
-	if len(value) <= 16 {
-		return value
-	}
-	return value[:8] + "..." + value[len(value)-6:]
+	return value
 }
 
-func valueOrDash(value *string) string {
-	if value == nil || *value == "" {
+func summaryEventValue(eventType string, value *string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
 		return "-"
 	}
-	return *value
+	if eventType == "address_interaction" {
+		return notificationfmt.ShortIdentifier(*value)
+	}
+	return notificationfmt.TokenAmount(*value)
 }
 
 func clamp(value, minimum, maximum int) int {

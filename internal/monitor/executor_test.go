@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
@@ -12,17 +13,46 @@ import (
 )
 
 type fakeRepository struct {
-	rules             []store.WatchRule
-	dailyEvents       int64
-	nextEventID       int64
-	calls             []string
-	lastValue         string
-	lastStatus        string
-	lastError         string
-	stageParams       store.RecordStageTriggerParams
-	stageResult       store.StageTriggerResult
-	combinationParams store.RecordCombinationTriggerParams
-	combinationResult store.CombinationTriggerResult
+	rules              []store.WatchRule
+	dailyEvents        int64
+	nextEventID        int64
+	calls              []string
+	lastValue          string
+	lastStatus         string
+	lastError          string
+	stageParams        store.RecordStageTriggerParams
+	stageResult        store.StageTriggerResult
+	combinationParams  store.RecordCombinationTriggerParams
+	combinationResult  store.CombinationTriggerResult
+	snapshots          []store.CreateNotificationDetailSnapshotParams
+	snapshotErr        error
+	expiredUsersPaused int64
+	expiryErr          error
+}
+
+func (f *fakeRepository) ApplyExpiredEntitlementFallbacks(
+	context.Context,
+) (int64, error) {
+	f.calls = append(f.calls, "expire_entitlements")
+	return f.expiredUsersPaused, f.expiryErr
+}
+
+func (f *fakeRepository) CreateNotificationDetailSnapshot(
+	_ context.Context,
+	params store.CreateNotificationDetailSnapshotParams,
+) (store.NotificationDetailSnapshot, error) {
+	f.calls = append(f.calls, "create_snapshot")
+	if f.snapshotErr != nil {
+		return store.NotificationDetailSnapshot{}, f.snapshotErr
+	}
+	f.snapshots = append(f.snapshots, params)
+	return store.NotificationDetailSnapshot{
+		ID:               int64(len(f.snapshots)),
+		PublicID:         "nd_0123456789abcdef0123456789abcdef01234567",
+		SourceKey:        params.SourceKey,
+		NotificationKind: params.NotificationKind,
+		Details:          params.Details,
+	}, nil
 }
 
 func (f *fakeRepository) ListEnabledWatchRules(
@@ -234,6 +264,34 @@ func TestShouldAlertAssetPreservesRuleSemantics(t *testing.T) {
 	}
 }
 
+func TestAlertTextUsesSharedDisplayFormatting(t *testing.T) {
+	rule := testRule(plans.BalanceChange, nil, plans.Standard)
+	previous := "1234567.89"
+	message := alertText(
+		rule,
+		&previous,
+		"2850000",
+		"BNB",
+		"BNB 余额触发监控条件。",
+		time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC),
+	)
+	plainMessage := plainNotificationText(message)
+	for _, expected := range []string{
+		"0x1111…1111 余额增加 1.62M BNB",
+		"当前余额：2,850,000 BNB",
+		"变化前：1,234,567.89 BNB",
+		"网络：BNB Chain · 今天 20:00",
+	} {
+		if !strings.Contains(plainMessage, expected) {
+			t.Fatalf("notification missing %q: %s", expected, message)
+		}
+	}
+	if strings.Contains(message, "网络：bsc") ||
+		strings.Contains(message, rule.WalletAddress) {
+		t.Fatalf("notification contains an internal chain key or full address: %s", message)
+	}
+}
+
 func TestInitialBalanceBelowThresholdAlertsOnceAndRecordsBeforeSending(t *testing.T) {
 	repository := &fakeRepository{}
 	chainService := &fakeChain{balance: chain.BalanceResult{Value: "5", Symbol: "BNB"}}
@@ -246,12 +304,33 @@ func TestInitialBalanceBelowThresholdAlertsOnceAndRecordsBeforeSending(t *testin
 	if result.Status != "alerted" || result.Event == nil || result.Event.NotificationStatus != "sent" {
 		t.Fatalf("result = %#v", result)
 	}
-	wantCalls := []string{"update_rule", "create_event", "send", "update_event_sent"}
+	wantCalls := []string{
+		"update_rule", "create_event", "create_snapshot", "send", "update_event_sent",
+	}
 	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
 	}
-	if !strings.Contains(notifier.message, "余额达到或低于阈值 10") {
+	if len(repository.snapshots) != 1 {
+		t.Fatalf("snapshots = %#v", repository.snapshots)
+	}
+	snapshot := repository.snapshots[0]
+	if snapshot.NotificationKind != store.NotificationKindAddressRealtime ||
+		snapshot.SourceKey != "address_realtime:31" ||
+		snapshot.RuleID == nil || *snapshot.RuleID != rule.ID ||
+		snapshot.RuleThreshold != "10" || snapshot.ActualValue != "5" ||
+		snapshot.NotificationText != notifier.message ||
+		!strings.Contains(string(snapshot.Details), `"rule_type":"balance_threshold"`) {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	plainMessage := plainNotificationText(notifier.message)
+	if !strings.Contains(plainMessage, "余额低于 10 BNB") ||
+		!strings.Contains(plainMessage, "低于阈值：5 BNB") ||
+		!strings.Contains(plainMessage, "🔴 风险等级：高") {
 		t.Fatalf("notification = %q", notifier.message)
+	}
+	if notifier.actionText != "查看详情" ||
+		notifier.actionURL != "https://example.test?notification_id=nd_0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("realtime action = %q / %q", notifier.actionText, notifier.actionURL)
 	}
 }
 
@@ -285,7 +364,9 @@ func TestInitialBalanceAboveHighThresholdAlertsOnce(t *testing.T) {
 	if result.Status != "alerted" || result.Event == nil || result.Event.NotificationStatus != "sent" {
 		t.Fatalf("result = %#v", result)
 	}
-	if !strings.Contains(notifier.message, "余额达到或高于阈值 10") {
+	plainMessage := plainNotificationText(notifier.message)
+	if !strings.Contains(plainMessage, "余额高于 10 BNB") ||
+		!strings.Contains(plainMessage, "超过阈值：5 BNB") {
 		t.Fatalf("notification = %q", notifier.message)
 	}
 }
@@ -333,7 +414,8 @@ func TestStageRuleCountsWithoutSendingBeforeThreshold(t *testing.T) {
 	if repository.stageParams.WatchRuleID != rule.ID ||
 		repository.stageParams.DeBoxUserID != rule.DeBoxUserID ||
 		repository.stageParams.CurrentValue == nil ||
-		*repository.stageParams.CurrentValue != "12" {
+		*repository.stageParams.CurrentValue != "12" ||
+		repository.stageParams.TokenSymbol != "BNB" {
 		t.Fatalf("stage params = %#v", repository.stageParams)
 	}
 	wantCalls := []string{"update_rule", "record_stage"}
@@ -344,12 +426,29 @@ func TestStageRuleCountsWithoutSendingBeforeThreshold(t *testing.T) {
 
 func TestStageRuleSendsOnceWhenThresholdIsReached(t *testing.T) {
 	lastValue := "10"
+	start := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	repository := &fakeRepository{stageResult: store.StageTriggerResult{
 		WindowID:              41,
 		TotalTriggerCount:     3,
 		TriggerCountThreshold: 3,
+		WindowStartsAt:        start,
+		WindowEndsAt:          start.Add(30 * time.Minute),
+		Timezone:              "Asia/Shanghai",
 		NotificationDue:       true,
-		RecentNotes:           []string{"BNB 余额触发监控条件。", "上一条事件。"},
+		Events: []store.StageTriggerEvent{
+			{
+				PreviousValue: stringPointer("10"), CurrentValue: stringPointer("11"),
+				TokenSymbol: "BNB", OccurredAt: start.Add(5 * time.Minute),
+			},
+			{
+				PreviousValue: stringPointer("11"), CurrentValue: stringPointer("13"),
+				TokenSymbol: "BNB", OccurredAt: start.Add(15 * time.Minute),
+			},
+			{
+				PreviousValue: stringPointer("13"), CurrentValue: stringPointer("12"),
+				TokenSymbol: "BNB", OccurredAt: start.Add(25 * time.Minute),
+			},
+		},
 		Notification: &store.AggregateNotification{
 			ID:                   51,
 			NotificationChatID:   "user-1",
@@ -372,24 +471,49 @@ func TestStageRuleSendsOnceWhenThresholdIsReached(t *testing.T) {
 		result.Aggregate.NotificationStatus != "sent" {
 		t.Fatalf("result = %#v", result)
 	}
-	if !strings.Contains(notifier.message, "阶段汇总") ||
-		!strings.Contains(notifier.message, "监控地址：") ||
-		!strings.Contains(notifier.message, "本周期累计触发：3 次") ||
-		!strings.Contains(notifier.message, "1. BNB 余额触发监控条件。") {
-		t.Fatalf("notification = %q", notifier.message)
+	for _, expected := range []string{
+		"阶段余额净变化 +2 BNB",
+		"统计周期：2026-07-31 20:00 → 2026-07-31 20:30",
+		"触发次数：3 次（达到 3 次时发送）",
+		"阶段余额：10 BNB → 12 BNB",
+		"累计净变化：+2 BNB",
+		"最大单次变化：2 BNB",
+		"首次 / 最近：20:05 / 20:25",
+		"网络：BNB Chain",
+	} {
+		if !strings.Contains(plainNotificationText(notifier.message), expected) {
+			t.Fatalf("notification missing %q: %q", expected, notifier.message)
+		}
+	}
+	if strings.Contains(notifier.message, "最近事件") ||
+		strings.Contains(notifier.message, "余额触发监控条件") {
+		t.Fatalf("stage notification copied realtime events: %q", notifier.message)
 	}
 	if notifier.actionText != "查看全部事件" ||
-		notifier.actionURL != "https://example.test#aggregateEventsSection" {
+		notifier.actionURL != "https://example.test?notification_id=nd_0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("stage action = %q / %q", notifier.actionText, notifier.actionURL)
 	}
 	wantCalls := []string{
 		"update_rule",
 		"record_stage",
+		"create_snapshot",
 		"send",
 		"update_aggregate_sent",
 	}
 	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
+	}
+	if len(repository.snapshots) != 1 {
+		t.Fatalf("snapshots = %#v", repository.snapshots)
+	}
+	snapshot := repository.snapshots[0]
+	if snapshot.NotificationKind != store.NotificationKindAddressStage ||
+		snapshot.SourceKey != "address_stage:51" ||
+		snapshot.RuleThreshold != "1;send_after=3" ||
+		snapshot.ActualValue != "12" ||
+		snapshot.NotificationText != notifier.message ||
+		!strings.Contains(string(snapshot.Details), `"total_trigger_count":3`) {
+		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
 
@@ -418,14 +542,16 @@ func TestApprovalAndInteractionRulesAlertOnNewValues(t *testing.T) {
 		ruleType string
 		prepare  func(*fakeChain)
 		last     string
+		expected string
 	}{
 		{
 			name:     "approval",
 			ruleType: plans.ApprovalChange,
 			prepare: func(service *fakeChain) {
-				service.allowance = chain.AllowanceResult{Value: "25"}
+				service.allowance = chain.AllowanceResult{Value: "25", Symbol: "USDT"}
 			},
-			last: "10",
+			last:     "10",
+			expected: "授权对象：项目金库 · 0x3333…3333",
 		},
 		{
 			name:     "interaction",
@@ -433,7 +559,8 @@ func TestApprovalAndInteractionRulesAlertOnNewValues(t *testing.T) {
 			prepare: func(service *fakeChain) {
 				service.interaction = chain.InteractionResult{Cursor: "0xnew", Matched: true}
 			},
-			last: "0xold",
+			last:     "0xold",
+			expected: "目标地址：项目金库 · 0x3333…3333",
 		},
 	}
 	for _, test := range tests {
@@ -451,7 +578,7 @@ func TestApprovalAndInteractionRulesAlertOnNewValues(t *testing.T) {
 			if result.Status != "alerted" {
 				t.Fatalf("result = %#v", result)
 			}
-			if !strings.Contains(notifier.message, "目标备注：项目金库") {
+			if !strings.Contains(plainNotificationText(notifier.message), test.expected) {
 				t.Fatalf("notification missing target label: %q", notifier.message)
 			}
 		})
@@ -565,7 +692,9 @@ func TestNotificationFailureIsRecorded(t *testing.T) {
 	if repository.lastStatus != "failed" || repository.lastError != "DeBox unavailable" {
 		t.Fatalf("notification state = %q/%q", repository.lastStatus, repository.lastError)
 	}
-	wantCalls := []string{"update_rule", "create_event", "send", "update_event_failed"}
+	wantCalls := []string{
+		"update_rule", "create_event", "create_snapshot", "send", "update_event_failed",
+	}
 	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
 	}
@@ -603,6 +732,9 @@ func TestCombinationMemberCountsWithoutSendingUntilAllMembersReachThreshold(t *t
 	if repository.combinationParams.WatchRuleID != rule.ID {
 		t.Fatalf("combination params = %#v", repository.combinationParams)
 	}
+	if repository.combinationParams.TokenSymbol != "BNB" {
+		t.Fatalf("combination token symbol = %q", repository.combinationParams.TokenSymbol)
+	}
 	if strings.Contains(strings.Join(repository.calls, ","), "send") {
 		t.Fatalf("calls = %v", repository.calls)
 	}
@@ -611,6 +743,9 @@ func TestCombinationMemberCountsWithoutSendingUntilAllMembersReachThreshold(t *t
 func TestCombinationMemberSendsOneSummaryWhenCombinationIsDue(t *testing.T) {
 	t.Parallel()
 	previous := "10"
+	firstAt := time.Date(2026, 7, 31, 2, 1, 0, 0, time.UTC)
+	secondAt := firstAt.Add(4 * time.Minute)
+	ten, twelve, fifteen, zero, hundred := "10", "12", "15", "0", "100"
 	notification := store.AggregateNotification{
 		ID:                   55,
 		NotificationChatID:   "user-1",
@@ -628,14 +763,30 @@ func TestCombinationMemberSendsOneSummaryWhenCombinationIsDue(t *testing.T) {
 				RuleType:             plans.BalanceChange,
 				TriggerCount:         2,
 				RequiredTriggerCount: 2,
+				ReachedAt:            &firstAt,
 				RecentNotes:          []string{"BNB balance changed.", "Another BNB change."},
+				Events: []store.StageTriggerEvent{
+					{
+						PreviousValue: &ten, CurrentValue: &twelve,
+						TokenSymbol: "BNB", OccurredAt: firstAt.Add(-time.Minute),
+					},
+					{
+						PreviousValue: &twelve, CurrentValue: &fifteen,
+						TokenSymbol: "BNB", OccurredAt: firstAt,
+					},
+				},
 			},
 			{
 				WatchRuleID:          8,
 				RuleType:             plans.ApprovalChange,
 				TriggerCount:         1,
 				RequiredTriggerCount: 1,
+				ReachedAt:            &secondAt,
 				RecentNotes:          []string{"Approval changed."},
+				Events: []store.StageTriggerEvent{{
+					PreviousValue: &zero, CurrentValue: &hundred,
+					TokenSymbol: "BNB", OccurredAt: secondAt,
+				}},
 			},
 		},
 	}}
@@ -659,16 +810,75 @@ func TestCombinationMemberSendsOneSummaryWhenCombinationIsDue(t *testing.T) {
 		result.Aggregate.NotificationStatus != "sent" {
 		t.Fatalf("combination result = %#v", result)
 	}
-	if !strings.Contains(notifier.message, "Treasury safety") ||
-		!strings.Contains(notifier.message, "2/2") ||
-		!strings.Contains(notifier.message, "BNB balance changed.") ||
-		!strings.Contains(notifier.message, "Another BNB change.") ||
-		!strings.Contains(notifier.message, "Approval changed.") {
+	for _, expected := range []string{
+		"Multiple address signals appeared in the same window",
+		"Combination: Treasury safety",
+		"Balance change · 2/2 · net change +5 BNB",
+		"Approval change · 1/1 · allowance 0 BNB → 100 BNB",
+		"Signal order: ① 10:01 Balance change → ② 10:05 Approval change",
+		"not causation",
+	} {
+		if !strings.Contains(plainNotificationText(notifier.message), expected) {
+			t.Fatalf("combination message missing %q: %q", expected, notifier.message)
+		}
+	}
+	for _, unexpected := range []string{
+		"BNB balance changed.",
+		"Another BNB change.",
+		"Approval changed.",
+		"\n",
+	} {
+		if strings.Contains(notifier.message, unexpected) {
+			t.Fatalf("combination message contains %q: %q", unexpected, notifier.message)
+		}
+	}
+	if notifier.actionText != "View full analysis" ||
+		notifier.actionURL != "https://example.test?notification_id=nd_0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("combination message = %q", notifier.message)
 	}
-	if notifier.actionText != "View all events" ||
-		notifier.actionURL != "https://example.test#aggregateEventsSection" {
-		t.Fatalf("combination action = %q / %q", notifier.actionText, notifier.actionURL)
+	if len(repository.snapshots) != 1 {
+		t.Fatalf("snapshots = %#v", repository.snapshots)
+	}
+	snapshot := repository.snapshots[0]
+	if snapshot.NotificationKind != store.NotificationKindAddressCombination ||
+		snapshot.SourceKey != "address_combination:55" ||
+		snapshot.RuleID == nil || *snapshot.RuleID != 44 ||
+		snapshot.RuleThreshold != "balance_change>=2;approval_change>=1" ||
+		snapshot.ActualValue != "balance_change=2;approval_change=1" ||
+		snapshot.NotificationText != notifier.message ||
+		!strings.Contains(string(snapshot.Details), `"combination_rule_id":44`) {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestAddressSnapshotFailurePreventsNotificationDelivery(t *testing.T) {
+	t.Parallel()
+	lastValue := "10"
+	repository := &fakeRepository{snapshotErr: errors.New("snapshot database unavailable")}
+	notifier := &fakeNotifier{calls: &repository.calls}
+	executor := newTestExecutor(
+		t,
+		repository,
+		&fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "BNB"}},
+		notifier,
+	)
+	rule := testRule(plans.BalanceChange, &lastValue, plans.Standard)
+	rule.Threshold = "0"
+
+	result := executor.checkRule(context.Background(), rule, plans.Standard)
+
+	if result.Status != "error" ||
+		!strings.Contains(result.Error, "snapshot database unavailable") {
+		t.Fatalf("result = %#v", result)
+	}
+	if notifier.message != "" {
+		t.Fatalf("notification was sent without a snapshot: %q", notifier.message)
+	}
+	wantCalls := []string{
+		"update_rule", "create_event", "create_snapshot", "update_event_failed",
+	}
+	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
 	}
 }
 

@@ -1,4 +1,5 @@
 const UI_LANGUAGE_STORAGE_KEY = "debox_asset_alert_h5_language";
+const NOTIFICATION_ID_PATTERN = /^nd_[a-f0-9]{40}$/;
 
 function storedUiLanguage() {
   try {
@@ -36,7 +37,11 @@ const state = {
   aggregateLoading: false,
   aggregateLoadingMore: false,
   aggregateLoadError: "",
-  aggregateScrollPaused: false,
+  notificationDetailID: notificationIDFromLocation(),
+  notificationDetail: null,
+  notificationDetailLoading: false,
+  notificationDetailError: "",
+  detailDrawer: null,
   marketCatalog: null,
   marketGoal: "price",
   marketWizard: freshMarketWizard(),
@@ -91,18 +96,19 @@ function freshMarketEventFilters() {
 const $ = (id) => document.getElementById(id);
 const I18N = window.H5_I18N;
 const TIME = window.H5_TIME;
-let aggregateScrollFrame = 0;
-let aggregateScrollLastTime = 0;
-let aggregateScrollDirection = 1;
-let aggregateScrollHoverPaused = false;
 let marketSearchTimer = 0;
 const MOBILE_SHELL_QUERY = "(max-width: 768px)";
 const MOBILE_VIEW_STORAGE_KEY = "debox_asset_alert_mobile_view";
-const MOBILE_VIEWS = new Set(["overview", "market", "address", "account"]);
+const MOBILE_VIEWS = new Set(["overview", "monitoring", "market", "address", "account"]);
 const mobileScrollPositions = Object.create(null);
 let mobileShellMedia = null;
 let mobileActionFrame = 0;
 let mobileMarketStep = "";
+let eventDrawerReturnFocus = null;
+
+function notificationIDFromLocation() {
+  return (new URLSearchParams(window.location.search).get("notification_id") || "").trim();
+}
 
 function storedMobileView() {
   return "account";
@@ -453,6 +459,8 @@ function renderLocalizedState() {
   renderBalanceInfo();
   renderBalanceInfo("combination");
   renderMarket();
+  renderNotificationDetailPage();
+  renderEventDetailDrawer();
 }
 
 function toggleUiLanguage() {
@@ -502,6 +510,162 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function notificationDetailOptions() {
+  return {
+    t,
+    language: state.uiLanguage,
+    ruleLabel: notificationRuleLabel,
+    chainName: aggregateChainName,
+    eventLabel: marketEventLabel,
+  };
+}
+
+function notificationRuleLabel(code) {
+  return marketRuleName(marketRuleDefinition(code)) || ruleLabel(code);
+}
+
+function bindNotificationDetailActions() {
+  const content = $("notificationDetailContent");
+  if (!content || !state.notificationDetail) return;
+  const values = Array.isArray(state.notificationDetail.copy_values)
+    ? state.notificationDetail.copy_values
+    : [];
+  content.querySelectorAll("[data-notification-copy]").forEach((button) => {
+    button.addEventListener("click", guardAsync(async () => {
+      const item = values[Number(button.dataset.notificationCopy)];
+      if (!item) return;
+      await copyText(item.value);
+      toast(t("copied"));
+    }));
+  });
+}
+
+function notificationDetailErrorKey(error) {
+  if (error?.status === 410) return "notificationDetailExpired";
+  if (error?.status === 404) return "notificationDetailNotFound";
+  if (error?.status === 400) return "notificationDetailInvalid";
+  return "notificationDetailLoadFailed";
+}
+
+function renderNotificationDetailPage() {
+  const page = $("notificationDetailPage");
+  if (!page) return;
+  const active = Boolean(state.notificationDetailID);
+  page.hidden = !active;
+  document.body.classList.toggle("notification-detail-route", active);
+  if (!active) return;
+
+  const status = $("notificationDetailStatus");
+  const content = $("notificationDetailContent");
+  content.innerHTML = "";
+  status.hidden = false;
+  status.className = "notification-detail-status";
+
+  if (!NOTIFICATION_ID_PATTERN.test(state.notificationDetailID)) {
+    status.classList.add("error");
+    status.innerHTML = `
+      <div class="notification-detail-state-card">
+        <span aria-hidden="true">!</span>
+        <div><strong>${escapeHtml(t("notificationDetailInvalid"))}</strong><p>${escapeHtml(t("notificationDetailInvalidHint"))}</p></div>
+      </div>
+    `;
+    return;
+  }
+
+  if (!state.deboxUserId) {
+    status.innerHTML = `
+      <div class="notification-detail-state-card">
+        <span aria-hidden="true">🔒</span>
+        <div><strong>${escapeHtml(t("notificationDetailSignInTitle"))}</strong><p>${escapeHtml(t("notificationDetailSignIn"))}</p></div>
+        <button class="primary" type="button" data-notification-detail-connect>${escapeHtml(t("connectWallet"))}</button>
+      </div>
+    `;
+    status.querySelector("[data-notification-detail-connect]")
+      ?.addEventListener("click", guardAsync(toggleWalletConnection));
+    return;
+  }
+  if (state.notificationDetailLoading) {
+    status.innerHTML = `<div class="notification-detail-state-card loading"><span class="notification-detail-spinner" aria-hidden="true"></span><p>${escapeHtml(t("notificationDetailLoading"))}</p></div>`;
+    return;
+  }
+  if (state.notificationDetailError) {
+    const key = notificationDetailErrorKey(state.notificationDetailError);
+    const retry = ![400, 404, 410].includes(state.notificationDetailError.status);
+    status.classList.add("error");
+    status.innerHTML = `
+      <div class="notification-detail-state-card">
+        <span aria-hidden="true">!</span>
+        <div><strong>${escapeHtml(t(key))}</strong><p>${escapeHtml(state.notificationDetailError.message || t(key))}</p></div>
+        ${retry ? `<button class="secondary" type="button" data-notification-detail-retry>${escapeHtml(t("retry"))}</button>` : ""}
+      </div>
+    `;
+    status.querySelector("[data-notification-detail-retry]")
+      ?.addEventListener("click", guardAsync(loadNotificationDetail));
+    return;
+  }
+  if (!state.notificationDetail) {
+    status.innerHTML = `<div class="notification-detail-state-card"><p>${escapeHtml(t("notificationDetailWaiting"))}</p></div>`;
+    return;
+  }
+
+  status.hidden = true;
+  const renderer = window.H5_NOTIFICATION_DETAIL;
+  if (!renderer?.render) {
+    status.hidden = false;
+    status.innerHTML = `<div class="notification-detail-state-card"><p>${escapeHtml(t("notificationDetailLoadFailed"))}</p></div>`;
+    return;
+  }
+  content.innerHTML = renderer.render(state.notificationDetail, notificationDetailOptions());
+  bindNotificationDetailActions();
+}
+
+async function loadNotificationDetail() {
+  if (!state.notificationDetailID || !state.deboxUserId || state.notificationDetailLoading) return false;
+  if (!NOTIFICATION_ID_PATTERN.test(state.notificationDetailID)) {
+    state.notificationDetailError = { status: 400, message: t("notificationDetailInvalidHint") };
+    renderNotificationDetailPage();
+    return false;
+  }
+  state.notificationDetailLoading = true;
+  state.notificationDetailError = "";
+  renderNotificationDetailPage();
+  try {
+    state.notificationDetail = await api(`/api/notification-details/${encodeURIComponent(state.notificationDetailID)}`);
+    return true;
+  } catch (error) {
+    state.notificationDetail = null;
+    state.notificationDetailError = { status: error?.status || 0, message: localizedApiError(error?.message) };
+    return false;
+  } finally {
+    state.notificationDetailLoading = false;
+    renderNotificationDetailPage();
+  }
+}
+
+function closeNotificationDetailPage() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("notification_id");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  state.notificationDetailID = "";
+  state.notificationDetail = null;
+  state.notificationDetailError = "";
+  renderNotificationDetailPage();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function syncNotificationDetailRoute() {
+  const nextID = notificationIDFromLocation();
+  if (nextID !== state.notificationDetailID) {
+    state.notificationDetailID = nextID;
+    state.notificationDetail = null;
+    state.notificationDetailError = "";
+  }
+  renderNotificationDetailPage();
+  if (NOTIFICATION_ID_PATTERN.test(state.notificationDetailID) && state.deboxUserId && !state.notificationDetail) {
+    guardAsync(loadNotificationDetail)();
+  }
 }
 
 function guardAsync(handler) {
@@ -619,6 +783,21 @@ function profileInitial(profile) {
 
 function currentPlan() {
   return state.entitlement?.plan || null;
+}
+
+function marketPoolDiscoveryAllowed() {
+  return currentPlan()?.market_query === true;
+}
+
+function syncMarketPoolDiscoveryAccess() {
+  const button = $("marketVerifyAndDiscoverBtn");
+  if (!button) return;
+  const allowed = marketPoolDiscoveryAllowed();
+  button.disabled = state.marketWizard.busy || !allowed;
+  button.title = allowed ? "" : t("marketPoolDiscoveryPaidOnly");
+  if (!allowed && state.marketWizard.step === 2) {
+    $("marketIdentityStatus").textContent = t("marketPoolDiscoveryPaidOnly");
+  }
 }
 
 function chainPickerIds(prefix = "") {
@@ -790,7 +969,10 @@ function resetConnectionState() {
   state.aggregateLoading = false;
   state.aggregateLoadingMore = false;
   state.aggregateLoadError = "";
-  state.aggregateScrollPaused = false;
+  state.notificationDetail = null;
+  state.notificationDetailLoading = false;
+  state.notificationDetailError = "";
+  state.detailDrawer = null;
   state.marketCatalog = null;
   state.marketWizard = freshMarketWizard();
   state.marketProjects = [];
@@ -826,6 +1008,8 @@ function resetConnectionState() {
   renderSummaryStatus();
   renderPlans();
   updateConnectionButton();
+  renderNotificationDetailPage();
+  closeEventDetailDrawer();
 }
 
 function showIdentityModal() {
@@ -1327,70 +1511,31 @@ function aggregateEventHtml(event) {
         required: event.required_trigger_count,
       });
   const status = aggregateEventStatus(event);
+  const current = Number(event.window_total_trigger_count || 0);
+  const required = Math.max(1, Number(event.required_trigger_count || 1));
+  const progressPercent = Math.min(100, Math.max(0, current / required * 100));
   return `
-    <article class="aggregate-event">
+    <article class="aggregate-event aggregate-timeline-item">
+      <span class="aggregate-timeline-dot" aria-hidden="true"></span>
       <div class="aggregate-event-main">
-        <strong>${escapeHtml(title)}</strong>
-        <span>${escapeHtml(`${kind} · ${aggregateChainName(event.chain_key)} · ${shortAddress(event.wallet_address)}`)}</span>
-        <small>${escapeHtml(aggregateEventValue(event))}</small>
+        <div class="aggregate-event-title-row">
+          <span class="aggregate-kind">${escapeHtml(kind)}</span>
+          <strong>${escapeHtml(title)}</strong>
+        </div>
+        <span>${escapeHtml(`${aggregateChainName(event.chain_key)} · ${shortAddress(event.wallet_address)}`)}</span>
+        <p>${escapeHtml(aggregateEventValue(event) || t("eventDetails"))}</p>
+        <div class="aggregate-progress" aria-label="${escapeHtml(progress)}">
+          <span style="width: ${progressPercent}%"></span>
+        </div>
+        <small>${escapeHtml(progress)}</small>
       </div>
       <div class="aggregate-event-side">
         <strong class="${status.className}">${escapeHtml(status.text)}</strong>
-        <span>${escapeHtml(progress)}</span>
-        <span>${escapeHtml(formatAggregateEventTime(event.occurred_at || event.detected_at || event.created_at))}</span>
+        <time>${escapeHtml(formatAggregateEventTime(event.occurred_at || event.detected_at || event.created_at))}</time>
+        <button class="secondary compact" type="button" data-aggregate-event-detail="${escapeHtml(event.id)}">${escapeHtml(t("viewDetails"))}</button>
       </div>
     </article>
   `;
-}
-
-function updateAggregateScrollStatus() {
-  const button = $("aggregateScrollToggleBtn");
-  const paused = state.aggregateScrollPaused || aggregateScrollHoverPaused;
-  button.textContent = t(paused ? "scrollPaused" : "autoScrolling");
-  button.classList.toggle("paused", paused);
-  button.setAttribute("aria-pressed", String(state.aggregateScrollPaused));
-}
-
-function animateAggregateEvents(timestamp) {
-  const viewport = $("aggregateEventViewport");
-  if (!viewport) {
-    aggregateScrollFrame = 0;
-    return;
-  }
-  const elapsed = aggregateScrollLastTime ? Math.min(timestamp - aggregateScrollLastTime, 80) : 0;
-  aggregateScrollLastTime = timestamp;
-  if (!state.aggregateScrollPaused && !aggregateScrollHoverPaused && !document.hidden) {
-    const maximum = viewport.scrollHeight - viewport.clientHeight;
-    if (maximum > 1) {
-      let next = viewport.scrollTop + aggregateScrollDirection * elapsed * 0.018;
-      if (next >= maximum) {
-        next = maximum;
-        aggregateScrollDirection = -1;
-      } else if (next <= 0) {
-        next = 0;
-        aggregateScrollDirection = 1;
-      }
-      viewport.scrollTop = next;
-    }
-  }
-  aggregateScrollFrame = requestAnimationFrame(animateAggregateEvents);
-}
-
-function startAggregateAutoScroll(reset = false) {
-  const viewport = $("aggregateEventViewport");
-  if (reset && viewport) {
-    viewport.scrollTop = 0;
-    aggregateScrollDirection = 1;
-  }
-  if (aggregateScrollFrame) return;
-  aggregateScrollLastTime = 0;
-  aggregateScrollFrame = requestAnimationFrame(animateAggregateEvents);
-}
-
-function setAggregateScrollPaused(paused) {
-  state.aggregateScrollPaused = paused;
-  updateAggregateScrollStatus();
-  startAggregateAutoScroll();
 }
 
 function renderAggregateEvents({ resetScroll = false } = {}) {
@@ -1438,6 +1583,9 @@ function renderAggregateEvents({ resetScroll = false } = {}) {
       ?.addEventListener("click", guardAsync(() => loadAggregateEvents()));
   } else if (hasEvents) {
     list.innerHTML = state.aggregateEvents.map(aggregateEventHtml).join("");
+    list.querySelectorAll("[data-aggregate-event-detail]").forEach((button) => {
+      button.addEventListener("click", () => openEventDetailDrawer("aggregate", button.dataset.aggregateEventDetail));
+    });
   } else {
     list.innerHTML = aggregatePlaceholderRows();
   }
@@ -1463,9 +1611,7 @@ function renderAggregateEvents({ resetScroll = false } = {}) {
   loadMoreButton.hidden = !connected || !hasEvents || !state.aggregateHasMore;
   loadMoreButton.disabled = state.aggregateLoadingMore;
   loadMoreButton.textContent = t(state.aggregateLoadingMore ? "loadingMoreEvents" : "loadMoreEvents");
-  $("aggregateScrollToggleBtn").disabled = Boolean(state.aggregateLoadError && !hasEvents);
-  updateAggregateScrollStatus();
-  startAggregateAutoScroll(resetScroll);
+  if (resetScroll) $("aggregateEventViewport").scrollTop = 0;
 }
 
 async function loadAggregateEvents({ append = false } = {}) {
@@ -1492,7 +1638,6 @@ async function loadAggregateEvents({ append = false } = {}) {
       ];
     } else {
       state.aggregateEvents = incoming;
-      state.aggregateScrollPaused = false;
     }
     state.aggregateStats = page.stats || null;
     state.aggregateRetentionDays = Number(page.retention_days || 30);
@@ -1514,6 +1659,168 @@ async function loadAggregateEvents({ append = false } = {}) {
     renderAggregateEvents({ resetScroll: !append });
   }
   return loaded;
+}
+
+function detailFactsHtml(items) {
+  return `<dl class="event-detail-facts">${items
+    .filter(([, value]) => value !== null && value !== undefined && String(value) !== "")
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join("")}</dl>`;
+}
+
+function detailSectionHtml(title, content) {
+  return content ? `<section class="event-detail-section"><h3>${escapeHtml(title)}</h3>${content}</section>` : "";
+}
+
+function detailCopyRow(label, value) {
+  if (!value) return "";
+  return `
+    <div class="event-detail-copy-row">
+      <div><span>${escapeHtml(label)}</span><code>${escapeHtml(value)}</code></div>
+      <button class="secondary compact" type="button" data-event-detail-copy="${escapeHtml(value)}">${escapeHtml(t("copy"))}</button>
+    </div>
+  `;
+}
+
+function aggregateEventDetailHtml(event) {
+  const combination = event.source_type === "combination";
+  const current = Number(event.window_total_trigger_count || 0);
+  const required = Math.max(1, Number(event.required_trigger_count || 1));
+  const status = aggregateEventStatus(event);
+  const ruleTitle = combination ? event.combination_note || t("combinationLabel") : ruleLabel(event.rule_type);
+  const copyRows = [
+    detailCopyRow(t("monitoredAddress"), event.wallet_address),
+    detailCopyRow(t("tokenContract"), event.token_address),
+    detailCopyRow(t("targetAddress"), event.target_address),
+  ].join("");
+  return `
+    <div class="event-detail-summary">
+      <span class="aggregate-kind">${escapeHtml(t(combination ? "combinationEvent" : "stageEvent"))}</span>
+      <h3>${escapeHtml(ruleTitle)}</h3>
+      <p>${escapeHtml(aggregateEventValue(event) || t("eventDetails"))}</p>
+    </div>
+    <div class="event-detail-metrics">
+      <div><span>${escapeHtml(t("detailTriggerCount"))}</span><strong>${escapeHtml(current)}</strong></div>
+      <div><span>${escapeHtml(t("detailRequiredCount"))}</span><strong>${escapeHtml(required)}</strong></div>
+      <div><span>${escapeHtml(t("eventDetailDelivery"))}</span><strong class="${status.className}">${escapeHtml(status.text)}</strong></div>
+    </div>
+    ${detailSectionHtml(t("eventDetailRuleBasis"), detailFactsHtml([
+      [t("ruleType"), ruleTitle],
+      [t("chain"), aggregateChainName(event.chain_key)],
+      [t("detailPeriod"), `${marketDate(event.window_starts_at)} — ${marketDate(event.window_ends_at)}`],
+      [t("eventDetailCycle"), `${event.cycle_minutes || 0} ${t("minutes")}`],
+    ]))}
+    ${detailSectionHtml(t("eventDetailResult"), detailFactsHtml([
+      [t("detailOccurredAt"), marketDate(event.occurred_at || event.detected_at || event.created_at)],
+      [t("detailPreviousValue"), event.previous_value],
+      [t("detailCurrentValue"), event.current_value],
+      [t("note"), event.note || event.target_label],
+      [t("notificationFailedReason"), event.notification_error],
+    ]))}
+    ${copyRows ? detailSectionHtml(t("detailCopyValues"), `<div class="event-detail-copy-list">${copyRows}</div>`) : ""}
+  `;
+}
+
+function marketEventSummary(event) {
+  const actual = marketRuleEventValue(event.current_value, event.threshold_unit);
+  const thresholdless = ["market_new_pool", "market_four_meme_migration"].includes(event.rule_type);
+  if (thresholdless) return `${marketEventLabel(event.event_type)} · ${marketChainName(event.chain_key)}`;
+  return t("marketEventSummary", {
+    event: marketEventLabel(event.event_type),
+    actual,
+    threshold: marketRuleEventValue(event.threshold_value, event.threshold_unit),
+  });
+}
+
+function marketEventDetailHtml(event) {
+  const pool = (state.marketDetail?.pools || []).find((item) => item.id === event.market_pool_id);
+  const explorer = chainExplorerTransaction(event.chain_key, event.transaction_hash);
+  const copyRows = [
+    detailCopyRow(t("holderAddress"), event.wallet_address),
+    detailCopyRow(t("eventDetailTransaction"), event.transaction_hash),
+  ].join("");
+  return `
+    <div class="event-detail-summary">
+      <span class="aggregate-kind">${escapeHtml(marketEventLabel(event.event_type))}</span>
+      <h3>${escapeHtml(marketRuleDisplayName(event.rule_type))}</h3>
+      <p>${escapeHtml(marketEventSummary(event))}</p>
+    </div>
+    <div class="event-detail-metrics">
+      <div><span>${escapeHtml(t("detailActualValue"))}</span><strong>${escapeHtml(marketRuleEventValue(event.current_value, event.threshold_unit))}</strong></div>
+      <div><span>${escapeHtml(t("threshold"))}</span><strong>${escapeHtml(marketRuleEventValue(event.threshold_value, event.threshold_unit))}</strong></div>
+      <div><span>${escapeHtml(t("eventDetailDelivery"))}</span><strong class="${event.notification_successful ? "sent" : "failed"}">${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}</strong></div>
+    </div>
+    ${detailSectionHtml(t("eventDetailRuleBasis"), detailFactsHtml([
+      [t("ruleType"), marketRuleDisplayName(event.rule_type)],
+      [t("marketEventType"), marketEventLabel(event.event_type)],
+      [t("chain"), marketChainName(event.chain_key)],
+      [t("marketPool"), pool ? `${pool.protocol} ${pool.protocol_version} · ${pool.token0_symbol}/${pool.token1_symbol}` : ""],
+      [t("marketEventThreshold"), marketRuleEventValue(event.threshold_value, event.threshold_unit)],
+    ]))}
+    ${detailSectionHtml(t("eventDetailResult"), detailFactsHtml([
+      [t("detailOccurredAt"), marketDate(event.occurred_at)],
+      [t("detailCurrentValue"), marketRuleEventValue(event.current_value, event.threshold_unit)],
+      [t("marketEventAddressLabel"), event.address_label],
+      [t("notificationFailedReason"), event.notification_successful ? "" : marketRuleEventReason(event)],
+    ]))}
+    ${copyRows ? detailSectionHtml(t("detailCopyValues"), `<div class="event-detail-copy-list">${copyRows}</div>`) : ""}
+    ${explorer ? `<a class="primary button-link event-detail-explorer" href="${escapeHtml(explorer)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t("viewOnExplorer"))}</a>` : ""}
+  `;
+}
+
+function renderEventDetailDrawer() {
+  const backdrop = $("eventDetailBackdrop");
+  if (!backdrop) return;
+  const selection = state.detailDrawer;
+  if (!selection) {
+    backdrop.hidden = true;
+    document.body.classList.remove("detail-drawer-open");
+    document.querySelectorAll(".app-header, .layout, .usage-help-fab, .mobile-bottom-nav")
+      .forEach((element) => { element.inert = false; });
+    return;
+  }
+  const event = selection.kind === "aggregate"
+    ? state.aggregateEvents.find((item) => String(item.id) === String(selection.id))
+    : state.marketEvents.find((item) => String(item.id) === String(selection.id));
+  if (!event) {
+    state.detailDrawer = null;
+    backdrop.hidden = true;
+    document.body.classList.remove("detail-drawer-open");
+    document.querySelectorAll(".app-header, .layout, .usage-help-fab, .mobile-bottom-nav")
+      .forEach((element) => { element.inert = false; });
+    return;
+  }
+  const aggregate = selection.kind === "aggregate";
+  $("eventDetailDrawerEyebrow").textContent = aggregate ? t("addressEventEyebrow") : t("marketEventEyebrow");
+  $("eventDetailDrawerTitle").textContent = aggregate ? t("addressEventDetails") : t("marketEventDetails");
+  $("eventDetailDrawerContent").innerHTML = aggregate
+    ? aggregateEventDetailHtml(event)
+    : marketEventDetailHtml(event);
+  $("eventDetailDrawerContent").querySelectorAll("[data-event-detail-copy]").forEach((button) => {
+    button.addEventListener("click", guardAsync(async () => {
+      await copyText(button.dataset.eventDetailCopy);
+      toast(t("copied"));
+    }));
+  });
+  backdrop.hidden = false;
+  document.body.classList.add("detail-drawer-open");
+  document.querySelectorAll(".app-header, .layout, .usage-help-fab, .mobile-bottom-nav")
+    .forEach((element) => { element.inert = true; });
+}
+
+function openEventDetailDrawer(kind, id) {
+  eventDrawerReturnFocus = document.activeElement;
+  state.detailDrawer = { kind, id };
+  renderEventDetailDrawer();
+  $("closeEventDetailDrawerBtn").focus();
+}
+
+function closeEventDetailDrawer() {
+  const wasOpen = Boolean(state.detailDrawer);
+  state.detailDrawer = null;
+  renderEventDetailDrawer();
+  if (wasOpen && eventDrawerReturnFocus?.focus) eventDrawerReturnFocus.focus();
+  eventDrawerReturnFocus = null;
 }
 
 function fillSummaryForm() {
@@ -2004,7 +2311,11 @@ async function connectWallet() {
   state.deboxUserId = authenticated.debox_user_id;
   renderProfile();
   updateConnectionButton();
-  await refreshAccount();
+  await Promise.all([
+    refreshAccount(),
+    state.notificationDetailID ? loadNotificationDetail() : Promise.resolve(false),
+  ]);
+  renderNotificationDetailPage();
   toast(t("walletConnected"));
 }
 
@@ -2016,7 +2327,11 @@ async function restoreSession() {
     state.profile = authenticated.profile || { user_id: authenticated.debox_user_id };
     renderProfile();
     updateConnectionButton();
-    await refreshAccount();
+    await Promise.all([
+      refreshAccount(),
+      state.notificationDetailID ? loadNotificationDetail() : Promise.resolve(false),
+    ]);
+    renderNotificationDetailPage();
     return true;
   } catch (error) {
     resetConnectionState();
@@ -2288,6 +2603,9 @@ async function createRule(event) {
     body: JSON.stringify(payload),
   });
   await refreshAccount();
+  if (isMobileShell()) {
+    setMobileView("monitoring", { restoreScroll: false, target: $("activeRulesSection") });
+  }
   toast(t("ruleCreated"));
 }
 
@@ -2331,6 +2649,9 @@ async function createCombinationRule(event) {
   $("combinationNoteInput").value = "";
   renderCombinationDraft();
   await refreshAccount();
+  if (isMobileShell()) {
+    setMobileView("monitoring", { restoreScroll: false, target: $("activeRulesSection") });
+  }
   toast(t("combinationCreated"));
 }
 
@@ -2659,6 +2980,28 @@ function marketRuleDescription(rule) {
   return state.uiLanguage === "en" ? rule.description_en : rule.description_zh;
 }
 
+function marketRuleDisplayName(code) {
+  return marketRuleName(marketRuleDefinition(code)) || t("marketUnknownRule");
+}
+
+const MARKET_PAUSE_REASON_KEYS = {
+  project_archived: "marketPauseProjectArchived",
+  subscription_expired: "marketPauseSubscriptionExpired",
+  free_plan: "marketPauseFreePlan",
+  user_archived: "marketPauseUserArchived",
+};
+
+function marketPauseReason(reason) {
+  const normalized = String(reason || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return t(MARKET_PAUSE_REASON_KEYS[normalized] || "marketPauseUnavailable");
+}
+
+function marketDeliveryModeLabel(mode) {
+  const key = { realtime: "realtimeMode", stage: "stageMode" }[String(mode || "").toLowerCase()];
+  return t(key || "marketDeliveryModeUnknown");
+}
+
 function marketMoney(value, currency = true) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
@@ -2696,7 +3039,7 @@ function marketEventLabel(type) {
         holder_rank_exited: "退出大户榜", pool_initialized: "新交易池",
         migrated: "迁移外盘", token_transfer: "代币转账",
       };
-  return labels[type] || type;
+  return labels[type] || marketRuleDisplayName(type);
 }
 
 function marketStatusSuffix(status) {
@@ -2757,6 +3100,7 @@ function renderMarketWizard() {
   renderMarketAssetCandidates();
   renderMarketManualRows();
   renderMarketSelectedAsset();
+  syncMarketPoolDiscoveryAccess();
   renderMarketWizardPools();
   renderMarketWizardRuleEditor();
   renderMarketWizardSummary();
@@ -3380,6 +3724,19 @@ function chainExplorerAddress(chainKey, address) {
   return `${roots[chainKey] || ""}${address}`;
 }
 
+function chainExplorerTransaction(chainKey, transactionHash) {
+  const roots = {
+    bsc: "https://bscscan.com/tx/",
+    ethereum: "https://etherscan.io/tx/",
+    base: "https://basescan.org/tx/",
+    polygon: "https://polygonscan.com/tx/",
+    arbitrum: "https://arbiscan.io/tx/",
+    optimism: "https://optimistic.etherscan.io/tx/",
+  };
+  const hash = String(transactionHash || "");
+  return roots[chainKey] && /^0x[a-fA-F0-9]{64}$/.test(hash) ? `${roots[chainKey]}${hash}` : "";
+}
+
 function renderMarketOverview() {
   const detail = state.marketDetail;
   if (!detail) return;
@@ -3431,7 +3788,7 @@ function renderMarketOverview() {
   const activeCombinations = (detail.combinations || []).filter(marketCombinationIsActive);
   const items = [
     ...activeRules.map((rule) => ({
-      name: marketRuleName(marketRuleDefinition(rule.rule_type)) || rule.rule_type,
+      name: marketRuleDisplayName(rule.rule_type),
       note: rule.last_triggered_at
         ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) })
         : t("marketNotTriggeredYet"),
@@ -3621,7 +3978,7 @@ function renderMarketCombinationEditor() {
     <label class="market-combination-member-option">
       <input type="checkbox" value="${rule.id}" data-market-combination-member />
       <span>
-        <strong>${escapeHtml(marketRuleName(marketRuleDefinition(rule.rule_type)) || rule.rule_type)}</strong>
+        <strong>${escapeHtml(marketRuleDisplayName(rule.rule_type))}</strong>
         <small>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))}</small>
       </span>
       <span class="market-trigger-count">
@@ -3907,12 +4264,13 @@ function renderMarketRules() {
   $("marketRulesList").innerHTML = rules.length ? rules.map((rule) => {
     const definition = marketRuleDefinition(rule.rule_type);
     const active = Number(rule.enabled) === 1 && rule.run_status === "active";
+    const pauseReason = active ? "" : marketPauseReason(rule.pause_reason);
     return `
       <div class="list-item">
         <div>
-          <strong>${escapeHtml(marketRuleName(definition) || rule.rule_type)}</strong>
-          <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(t(rule.deployment_scope === "all" ? "marketAllChains" : "marketSelectedChainsScope"))} · ${escapeHtml(rule.delivery_mode)}</span>
-          <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${rule.pause_reason ? ` · ${escapeHtml(rule.pause_reason)}` : ""}</small>
+          <strong>${escapeHtml(marketRuleName(definition) || marketRuleDisplayName(rule.rule_type))}</strong>
+          <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(t(rule.deployment_scope === "all" ? "marketAllChains" : "marketSelectedChainsScope"))} · ${escapeHtml(marketDeliveryModeLabel(rule.delivery_mode))}</span>
+          <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${pauseReason ? ` · ${escapeHtml(pauseReason)}` : ""}</small>
           <small>${escapeHtml(rule.last_triggered_at ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) }) : t("marketNotTriggeredYet"))}</small>
         </div>
         <div class="list-item-actions"${frozen ? " hidden" : ""}>
@@ -3937,11 +4295,12 @@ function renderMarketCombinations() {
   $("marketCombinationsList").innerHTML = combinations.length
     ? combinations.map((combination) => {
       const active = marketCombinationIsActive(combination);
+      const pauseReason = active ? "" : marketPauseReason(combination.pause_reason);
       const memberNames = (combination.members || []).map((member) => {
         const rule = (state.marketDetail?.rules || []).find(
           (item) => item.id === member.market_rule_id,
         );
-        return `${marketRuleName(marketRuleDefinition(rule?.rule_type)) || rule?.rule_type || "-"} × ${member.required_trigger_count}`;
+        return `${rule?.rule_type ? marketRuleDisplayName(rule.rule_type) : "-"} × ${member.required_trigger_count}`;
       });
       return `
         <div class="list-item market-combination-item">
@@ -3949,7 +4308,7 @@ function renderMarketCombinations() {
             <strong>${escapeHtml(combination.note || t("marketCombinationRule"))}</strong>
             <span>${escapeHtml(memberNames.join(" + "))}</span>
             <small>${escapeHtml(t("marketCombinationCycle", { minutes: combination.cycle_minutes }))}</small>
-            <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${combination.pause_reason ? ` · ${escapeHtml(combination.pause_reason)}` : ""}</small>
+            <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${pauseReason ? ` · ${escapeHtml(pauseReason)}` : ""}</small>
           </div>
           <div class="list-item-actions"${frozen ? " hidden" : ""}>
             ${!active && projectActive ? `<button type="button" class="secondary compact" data-restore-market-combination="${combination.id}">${escapeHtml(t("restoreMonitor"))}</button>` : ""}
@@ -4083,7 +4442,7 @@ function renderMarketEventFilters() {
   const ruleTypes = state.marketCatalog?.rules || [];
   $("marketEventTypeFilter").innerHTML = `
     <option value="">${escapeHtml(t("allEventTypes"))}</option>
-    ${ruleTypes.map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(localizedRuleLabel(rule.code))}</option>`).join("")}
+    ${ruleTypes.map((rule) => `<option value="${escapeHtml(rule.code)}">${escapeHtml(marketRuleName(rule) || marketRuleDisplayName(rule.code))}</option>`).join("")}
   `;
   $("marketEventTypeFilter").value = filters.ruleType;
   const monitorablePools = pools.filter((pool) => Number(pool.supports_event_parsing) === 1);
@@ -4134,40 +4493,41 @@ function renderMarketEvents() {
   const visibleEvents = state.marketEventsExpanded
     ? state.marketEvents
     : state.marketEvents.slice(0, 1);
-  list.innerHTML = visibleEvents.length ? visibleEvents.map((event) => `
-    <div class="market-event-row">
-      <div>
-        <span class="market-event-title">
-          <strong>${escapeHtml(marketRuleName(marketRuleDefinition(event.rule_type)) || event.rule_type)}</strong>
-          <span class="badge">${escapeHtml(marketChainName(event.chain_key))}</span>
-          <span class="market-notification-status ${event.notification_successful ? "notified" : "not-notified"}">
-            ${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}
+  list.innerHTML = visibleEvents.length ? visibleEvents.map((event) => {
+    const definition = marketRuleDefinition(event.rule_type);
+    const pool = event.market_pool_id ? pools.get(event.market_pool_id) : null;
+    return `
+      <article class="market-event-row">
+        <div class="market-event-main">
+          <span class="market-event-title">
+            <strong>${escapeHtml(marketRuleName(definition) || marketRuleDisplayName(event.rule_type))}</strong>
+            <span class="badge">${escapeHtml(marketChainName(event.chain_key))}</span>
+            <span class="market-notification-status ${event.notification_successful ? "notified" : "not-notified"}">
+              ${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}
+            </span>
+            ${event.address_excluded ? `<span class="badge">${escapeHtml(t("marketEventExcluded"))}</span>` : ""}
           </span>
-          ${event.address_excluded ? `<span class="badge">${escapeHtml(t("marketEventExcluded"))}</span>` : ""}
-        </span>
-        <span>
-          ${escapeHtml(marketEventLabel(event.event_type))}
-          ${event.current_value ? ` · ${escapeHtml(t("marketEventCurrentValue"))} ${escapeHtml(marketRuleEventValue(event.current_value, event.threshold_unit))}` : ""}
-          ${!["market_new_pool", "market_four_meme_migration"].includes(event.rule_type)
-            ? ` · ${escapeHtml(t("marketEventThreshold"))} ${escapeHtml(marketRuleEventValue(event.threshold_value, event.threshold_unit))}`
-            : ""}
-        </span>
-        ${event.note ? `<small>${escapeHtml(event.note)}</small>` : ""}
-        ${Array.isArray(event.combination_notes) ? event.combination_notes.map((note) => `
-          <small>${escapeHtml(t("marketEventCombinationNote"))}：${escapeHtml(note)}</small>
-        `).join("") : ""}
-        ${event.address_label ? `<small>${escapeHtml(t("marketEventAddressLabel"))}：${escapeHtml(event.address_label)}</small>` : ""}
-        ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
-        <small>${escapeHtml(event.market_pool_id && pools.get(event.market_pool_id)
-          ? `${pools.get(event.market_pool_id).protocol} ${pools.get(event.market_pool_id).protocol_version} · ${pools.get(event.market_pool_id).token0_symbol}/${pools.get(event.market_pool_id).token1_symbol}`
-          : event.wallet_address ? shortAddress(event.wallet_address) : event.source || "-")}</small>
-      </div>
-      <div>
-        <time>${escapeHtml(marketDate(event.occurred_at))}</time>
-        <small>${escapeHtml(event.transaction_hash ? shortAddress(event.transaction_hash) : event.source || "")}</small>
-      </div>
-    </div>
-  `).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;
+          <p class="market-event-summary">${escapeHtml(marketEventSummary(event))}</p>
+          <div class="market-event-basis">
+            <span><b>${escapeHtml(t("eventDetailRuleBasis"))}</b> ${escapeHtml(marketRuleDescription(definition) || t("marketRuleConfiguredBasis"))}</span>
+            ${pool ? `<span><b>${escapeHtml(t("marketPool"))}</b> ${escapeHtml(`${pool.protocol} ${pool.protocol_version} · ${pool.token0_symbol}/${pool.token1_symbol}`)}</span>` : ""}
+          </div>
+          ${Array.isArray(event.combination_notes) ? event.combination_notes.map((note) => `
+            <small>${escapeHtml(t("marketEventCombinationNote"))}：${escapeHtml(note)}</small>
+          `).join("") : ""}
+          ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
+        </div>
+        <div class="market-event-side">
+          <time>${escapeHtml(marketDate(event.occurred_at))}</time>
+          ${event.transaction_hash ? `<small>${escapeHtml(shortAddress(event.transaction_hash))}</small>` : ""}
+          <button class="secondary compact" type="button" data-market-event-detail="${escapeHtml(event.id)}">${escapeHtml(t("viewDetails"))}</button>
+        </div>
+      </article>
+    `;
+  }).join("") : `<div class="empty-state">${escapeHtml(t("marketNoEvents"))}</div>`;
+  list.querySelectorAll("[data-market-event-detail]").forEach((button) => {
+    button.addEventListener("click", () => openEventDetailDrawer("market", button.dataset.marketEventDetail));
+  });
   if (state.marketEvents.length > 1) {
     list.insertAdjacentHTML("beforeend", `
       <button type="button" class="market-list-toggle" data-market-events-toggle aria-expanded="${state.marketEventsExpanded}">
@@ -4216,9 +4576,13 @@ function setMarketWizardBusy(busy) {
   ].forEach((id) => {
     const control = $(id);
     if (!control) return;
-    control.disabled = id === "marketPoolsContinueBtn"
-      ? busy || !marketWizardPoolsReady()
-      : busy;
+    if (id === "marketPoolsContinueBtn") {
+      control.disabled = busy || !marketWizardPoolsReady();
+    } else if (id === "marketVerifyAndDiscoverBtn") {
+      control.disabled = busy || !marketPoolDiscoveryAllowed();
+    } else {
+      control.disabled = busy;
+    }
   });
 }
 
@@ -4399,6 +4763,11 @@ function selectedWizardDeployments() {
 }
 
 async function verifyAndDiscoverMarketPools() {
+  if (!marketPoolDiscoveryAllowed()) {
+    toast(t("marketPoolDiscoveryPaidOnly"));
+    syncMarketPoolDiscoveryAccess();
+    return;
+  }
   const asset = state.marketWizard.selectedAsset;
   const deployments = selectedWizardDeployments();
   if (!asset || !deployments.length) {
@@ -4580,7 +4949,11 @@ async function createMarketProject() {
     state.marketEventsNextBeforeId = null;
     await loadMarketProjectExtras(detail.project.id);
     resetMarketWizard();
-    $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (isMobileShell()) {
+      setMobileView("monitoring", { restoreScroll: false, target: $("marketProjectDetail") });
+    } else {
+      $("marketProjectDetail").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   } catch (error) {
     $("marketWizardCreateStatus").textContent = t("marketCreationFailed");
     $("marketWizardCreateStatus").hidden = false;
@@ -4961,6 +5334,12 @@ function bindMarketSymbolTooltips() {
 function bindEvents() {
   $("languageToggleBtn").addEventListener("click", toggleUiLanguage);
   $("connectWalletBtn").addEventListener("click", guardAsync(toggleWalletConnection));
+  $("closeNotificationDetailPageBtn").addEventListener("click", closeNotificationDetailPage);
+  $("closeEventDetailDrawerBtn").addEventListener("click", closeEventDetailDrawer);
+  $("eventDetailBackdrop").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeEventDetailDrawer();
+  });
+  window.addEventListener("popstate", syncNotificationDetailRoute);
   $("payBtn").addEventListener("click", guardAsync(payOrRenew));
   document.querySelectorAll("[data-billing-cycle]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -4983,28 +5362,6 @@ function bindEvents() {
     }),
   );
   $("loadMoreAggregateEventsBtn").addEventListener("click", guardAsync(() => loadAggregateEvents({ append: true })));
-  $("aggregateScrollToggleBtn").addEventListener("click", () => {
-    setAggregateScrollPaused(!state.aggregateScrollPaused);
-  });
-  $("aggregateEventViewport").addEventListener("mouseenter", () => {
-    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
-    aggregateScrollHoverPaused = true;
-    updateAggregateScrollStatus();
-  });
-  $("aggregateEventViewport").addEventListener("mouseleave", () => {
-    aggregateScrollHoverPaused = false;
-    updateAggregateScrollStatus();
-  });
-  $("aggregateEventViewport").addEventListener("pointerdown", () => {
-    if (window.matchMedia("(hover: none), (pointer: coarse)").matches && !state.aggregateScrollPaused) {
-      setAggregateScrollPaused(true);
-    }
-  });
-  $("aggregateEventViewport").addEventListener("keydown", (event) => {
-    if (event.key !== " ") return;
-    event.preventDefault();
-    setAggregateScrollPaused(!state.aggregateScrollPaused);
-  });
   $("queryBalanceBtn").addEventListener("click", guardAsync(() => queryBalance()));
   $("combinationQueryBalanceBtn").addEventListener("click", guardAsync(() => queryBalance("combination")));
   $("ruleForm").addEventListener("submit", guardAsync(createRule));
@@ -5240,6 +5597,7 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      closeEventDetailDrawer();
       closeAllChainPickers();
       document.querySelectorAll(".help-control.open").forEach((control) => control.classList.remove("open"));
       helpButtonIds.forEach((id) => {
@@ -5263,6 +5621,7 @@ function bindEvents() {
 
 async function boot() {
   applyStaticTranslations();
+  renderNotificationDetailPage();
   initMobileShell();
   initPersistentHorizontalScrollbars();
   bindEvents();

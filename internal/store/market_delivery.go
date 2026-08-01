@@ -1329,22 +1329,19 @@ func (s *Store) loadRealtimeMarketDelivery(
 		Project:              project,
 		Rule:                 &rule,
 		Event:                &event,
+		PreviousValue:        ruleEvent.PreviousValue,
+		CurrentValue:         ruleEvent.CurrentValue,
 		TriggerCount:         1,
 		StartsAt:             event.OccurredAt,
 		EndsAt:               event.OccurredAt,
 		Note:                 ruleEvent.Note,
 		AddressLabel:         marketRuleEventAddressLabel(ruleEvent.Details),
 	}
-	delivery.Timezone = s.marketNotificationTimezone(ctx, rule.DeBoxUserID)
+	delivery.Timezone = s.notificationTimezone(ctx, rule.DeBoxUserID)
 	if event.MarketPoolID != nil {
 		delivery.Pool, _ = s.GetMarketPool(ctx, *event.MarketPoolID)
 	}
-	delivery.Snapshot, _ = s.LatestMarketSnapshot(
-		ctx,
-		event.ChainID,
-		event.TokenAddress,
-		event.MarketPoolID,
-	)
+	delivery.Snapshot = s.marketNotificationSnapshot(ctx, ruleEvent, event)
 	return delivery, nil
 }
 
@@ -1375,9 +1372,18 @@ func (s *Store) loadStageMarketDelivery(
 	if err != nil {
 		return MarketNotificationDelivery{}, fmt.Errorf("load stage market project: %w", err)
 	}
-	recentEvents, err := s.marketStageRecentEvents(ctx, id, project, 5)
+	stageEvents, err := s.marketStageEvents(
+		ctx,
+		id,
+		project,
+		int(window.TriggerCount),
+	)
 	if err != nil {
 		return MarketNotificationDelivery{}, err
+	}
+	recentStart := len(stageEvents) - 5
+	if recentStart < 0 {
+		recentStart = 0
 	}
 	return MarketNotificationDelivery{
 		Kind:                 "stage",
@@ -1393,12 +1399,13 @@ func (s *Store) loadStageMarketDelivery(
 		TriggerCount:         window.TriggerCount,
 		StartsAt:             window.StartsAt,
 		EndsAt:               window.EndsAt,
-		RecentEvents:         recentEvents,
-		Timezone:             s.marketNotificationTimezone(ctx, rule.DeBoxUserID),
+		RecentEvents:         stageEvents[recentStart:],
+		StageEvents:          stageEvents,
+		Timezone:             s.notificationTimezone(ctx, rule.DeBoxUserID),
 	}, nil
 }
 
-func (s *Store) marketStageRecentEvents(
+func (s *Store) marketStageEvents(
 	ctx context.Context,
 	windowID int64,
 	project MarketProject,
@@ -1413,7 +1420,7 @@ func (s *Store) marketStageRecentEvents(
 		JOIN market_rule_events mre ON mre.id = mswe.market_rule_event_id
 		JOIN market_events me ON me.id = mre.market_event_id
 		WHERE mswe.market_stage_window_id = $1 AND me.reorged = 0
-		ORDER BY mre.created_at DESC, mre.id DESC
+		ORDER BY me.occurred_at, mre.created_at, mre.id
 		LIMIT $2
 	`, windowID, limit)
 	if err != nil {
@@ -1453,7 +1460,7 @@ func (s *Store) loadCombinationMarketDelivery(
 	if err != nil {
 		return MarketNotificationDelivery{}, fmt.Errorf("load market combination rule: %w", err)
 	}
-	progress, err := s.marketCombinationProgress(ctx, id)
+	progress, err := s.marketCombinationProgress(ctx, id, combination.DeBoxUserID)
 	if err != nil {
 		return MarketNotificationDelivery{}, err
 	}
@@ -1472,24 +1479,28 @@ func (s *Store) loadCombinationMarketDelivery(
 		EndsAt:                  window.EndsAt,
 		Note:                    combination.Note,
 		CombinationMembers:      progress,
-		Timezone:                s.marketNotificationTimezone(ctx, combination.DeBoxUserID),
+		Timezone:                s.notificationTimezone(ctx, combination.DeBoxUserID),
 	}, nil
 }
 
 func (s *Store) marketCombinationProgress(
 	ctx context.Context,
 	windowID int64,
+	deboxUserID string,
 ) ([]MarketCombinationProgress, error) {
 	values, err := collectMany[MarketCombinationProgress](ctx, s.db, `
 		SELECT
 			mcm.id AS member_id,
 			mcm.source_type,
+			mcm.watch_rule_id,
+			mcm.market_rule_id,
 			CASE
 			  WHEN mcm.source_type = 'watch' THEN wr.rule_type
 			  ELSE mr.rule_type
 			END AS rule_type,
 			mcwm.required_trigger_count,
-			mcwm.trigger_count
+			mcwm.trigger_count,
+			mcwm.reached_at
 		FROM market_combination_window_members mcwm
 		JOIN market_combination_members mcm
 		  ON mcm.id = mcwm.market_combination_member_id
@@ -1503,30 +1514,98 @@ func (s *Store) marketCombinationProgress(
 	}
 	for index := range values {
 		type triggerValue struct {
-			Note              string `db:"note"`
-			MarketRuleEventID *int64 `db:"market_rule_event_id"`
+			WatchTriggerEventID *int64 `db:"watch_trigger_event_id"`
+			Note                string `db:"note"`
+			MarketRuleEventID   *int64 `db:"market_rule_event_id"`
+		}
+		if values[index].MarketRuleID != nil {
+			values[index].MarketRule, err = s.GetMarketRule(
+				ctx,
+				*values[index].MarketRuleID,
+				deboxUserID,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if values[index].WatchRuleID != nil {
+			values[index].WatchRule, err = s.GetWatchRule(
+				ctx,
+				*values[index].WatchRuleID,
+				deboxUserID,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if values[index].WatchRule == nil {
+				return nil, ErrNotFound
+			}
 		}
 		triggers, err := collectMany[triggerValue](ctx, s.db, `
-			SELECT mcte.note, mcte.market_rule_event_id
+			SELECT
+				mcte.watch_trigger_event_id,
+				mcte.note,
+				mcte.market_rule_event_id
 			FROM market_combination_trigger_events mcte
 			WHERE mcte.market_combination_window_id = $1
 			  AND mcte.market_combination_member_id = $2
-			ORDER BY mcte.created_at DESC, mcte.id DESC
-			LIMIT 3
+			ORDER BY mcte.occurred_at, mcte.id
 		`, windowID, values[index].MemberID)
 		if err != nil {
 			return nil, fmt.Errorf("load market combination triggers: %w", err)
 		}
 		for _, trigger := range triggers {
+			if trigger.WatchTriggerEventID != nil {
+				event, err := collectOne[stageEventValue](ctx, s.db, `
+					SELECT
+						previous_value,
+						current_value,
+						COALESCE(details->>'token_symbol', '') AS token_symbol,
+						COALESCE(details->>'note', $2) AS note,
+						COALESCE(occurred_at, detected_at, created_at) AS occurred_at
+					FROM rule_trigger_events
+					WHERE id = $1
+				`, *trigger.WatchTriggerEventID, trigger.Note)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"load watch combination event: %w",
+						err,
+					)
+				}
+				values[index].WatchEvents = append(
+					values[index].WatchEvents,
+					StageTriggerEvent{
+						PreviousValue: event.PreviousValue,
+						CurrentValue:  event.CurrentValue,
+						TokenSymbol:   event.TokenSymbol,
+						Note:          event.Note,
+						OccurredAt:    event.OccurredAt,
+					},
+				)
+				continue
+			}
 			if trigger.MarketRuleEventID == nil {
-				values[index].RecentNotes = append(values[index].RecentNotes, trigger.Note)
 				continue
 			}
 			event, err := s.loadMarketNotificationEvent(ctx, *trigger.MarketRuleEventID, nil)
 			if err != nil {
 				return nil, err
 			}
-			values[index].RecentEvents = append(values[index].RecentEvents, event)
+			values[index].MarketEvents = append(values[index].MarketEvents, event)
+		}
+		for eventIndex := len(values[index].WatchEvents) - 1; eventIndex >= 0 &&
+			len(values[index].RecentNotes) < combinationRecentEventLimit; eventIndex-- {
+			values[index].RecentNotes = append(
+				values[index].RecentNotes,
+				values[index].WatchEvents[eventIndex].Note,
+			)
+		}
+		for eventIndex := len(values[index].MarketEvents) - 1; eventIndex >= 0 &&
+			len(values[index].RecentEvents) < combinationRecentEventLimit; eventIndex-- {
+			values[index].RecentEvents = append(
+				values[index].RecentEvents,
+				values[index].MarketEvents[eventIndex],
+			)
 		}
 	}
 	return values, nil
@@ -1571,15 +1650,42 @@ func (s *Store) loadMarketNotificationEvent(
 		}
 	}
 	result := MarketNotificationEvent{
-		Project:      project,
-		Event:        event,
-		Note:         ruleEvent.Note,
-		AddressLabel: marketRuleEventAddressLabel(ruleEvent.Details),
+		Project:       project,
+		Event:         event,
+		Snapshot:      s.marketNotificationSnapshot(ctx, ruleEvent, event),
+		PreviousValue: ruleEvent.PreviousValue,
+		CurrentValue:  ruleEvent.CurrentValue,
+		Note:          ruleEvent.Note,
+		AddressLabel:  marketRuleEventAddressLabel(ruleEvent.Details),
 	}
 	if event.MarketPoolID != nil {
 		result.Pool, _ = s.GetMarketPool(ctx, *event.MarketPoolID)
 	}
 	return result, nil
+}
+
+func (s *Store) marketNotificationSnapshot(
+	ctx context.Context,
+	ruleEvent MarketRuleEvent,
+	event MarketEvent,
+) *MarketSnapshot {
+	var snapshot *MarketSnapshot
+	if snapshotID := marketRuleEventSnapshotID(ruleEvent.Details); snapshotID > 0 {
+		snapshot, _ = collectOptional[MarketSnapshot](ctx, s.db, `
+			SELECT `+marketSnapshotColumns+`
+			FROM market_snapshots
+			WHERE id = $1 AND chain_id = $2 AND token_address = $3
+		`, snapshotID, event.ChainID, event.TokenAddress)
+	}
+	if snapshot == nil {
+		snapshot, _ = s.LatestMarketSnapshot(
+			ctx,
+			event.ChainID,
+			event.TokenAddress,
+			event.MarketPoolID,
+		)
+	}
+	return snapshot
 }
 
 func marketRuleEventAddressLabel(details json.RawMessage) string {
@@ -1592,7 +1698,17 @@ func marketRuleEventAddressLabel(details json.RawMessage) string {
 	return strings.TrimSpace(values.AddressLabel)
 }
 
-func (s *Store) marketNotificationTimezone(ctx context.Context, deboxUserID string) string {
+func marketRuleEventSnapshotID(details json.RawMessage) int64 {
+	values := struct {
+		SnapshotID int64 `json:"snapshot_id"`
+	}{}
+	if err := json.Unmarshal(details, &values); err != nil {
+		return 0
+	}
+	return values.SnapshotID
+}
+
+func (s *Store) notificationTimezone(ctx context.Context, deboxUserID string) string {
 	type timezoneValue struct {
 		Timezone string `db:"timezone"`
 	}

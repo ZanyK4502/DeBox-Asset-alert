@@ -457,7 +457,9 @@ func (h handler) marketResourceRequest(
 
 func writeMarketError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
-	if errors.Is(err, marketview.ErrMarketDataUnavailable) {
+	if errors.Is(err, marketview.ErrPaidMarketAccessRequired) {
+		status = http.StatusForbidden
+	} else if errors.Is(err, marketview.ErrMarketDataUnavailable) {
 		status = http.StatusServiceUnavailable
 	} else if errors.Is(err, store.ErrNotFound) {
 		status = http.StatusNotFound

@@ -27,6 +27,9 @@ func TestCleanupAggregationHistoryDeletesExpiredRecordsInTransaction(t *testing.
 	mock.ExpectExec("DELETE FROM aggregation_windows aw").
 		WithArgs(AggregationHistoryRetentionDays).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	mock.ExpectExec("DELETE FROM notification_detail_snapshots").
+		WithArgs(NotificationDetailCleanupGraceDays).
+		WillReturnResult(pgxmock.NewResult("DELETE", 4))
 	mock.ExpectCommit()
 
 	result, err := newWithDB(mock).CleanupAggregationHistory(context.Background())
@@ -35,7 +38,8 @@ func TestCleanupAggregationHistoryDeletesExpiredRecordsInTransaction(t *testing.
 	}
 	if result.NotificationsDeleted != 2 ||
 		result.EventsDeleted != 5 ||
-		result.WindowsDeleted != 3 {
+		result.WindowsDeleted != 3 ||
+		result.NotificationDetailSnapshotsDeleted != 4 {
 		t.Fatalf("cleanup result = %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

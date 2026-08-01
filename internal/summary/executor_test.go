@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
@@ -21,6 +23,8 @@ type fakeRepository struct {
 	events          []store.SummaryEvent
 	marketEvents    []store.MarketSummaryEvent
 	marketSummaries []store.MarketProjectChainSummary
+	snapshots       []store.CreateNotificationDetailSnapshotParams
+	snapshotErr     error
 	listAfterIDs    []int64
 	marks           []summaryMark
 	targetMarks     []targetMark
@@ -32,6 +36,24 @@ type fakeRepository struct {
 	eventsErr       error
 	markErr         error
 	targetMarkErr   error
+}
+
+func (f *fakeRepository) CreateNotificationDetailSnapshot(
+	_ context.Context,
+	params store.CreateNotificationDetailSnapshotParams,
+) (store.NotificationDetailSnapshot, error) {
+	f.calls = append(f.calls, "snapshot")
+	if f.snapshotErr != nil {
+		return store.NotificationDetailSnapshot{}, f.snapshotErr
+	}
+	f.snapshots = append(f.snapshots, params)
+	return store.NotificationDetailSnapshot{
+		ID:               int64(len(f.snapshots)),
+		PublicID:         "nd_1123456789abcdef0123456789abcdef01234567",
+		SourceKey:        params.SourceKey,
+		NotificationKind: params.NotificationKind,
+		Details:          params.Details,
+	}, nil
 }
 
 type summaryMark struct {
@@ -212,6 +234,7 @@ func (f *fakeRepository) MarkScheduledPushSent(
 
 type fakeNotifier struct {
 	messages []sentMessage
+	actions  []sentAction
 	err      error
 	calls    *[]string
 }
@@ -220,6 +243,14 @@ type sentMessage struct {
 	chatID   string
 	chatType string
 	text     string
+}
+
+type sentAction struct {
+	chatID     string
+	chatType   string
+	text       string
+	actionText string
+	actionURL  string
 }
 
 func (f *fakeNotifier) SendNotification(chatID, chatType, text string) (string, error) {
@@ -233,6 +264,30 @@ func (f *fakeNotifier) SendNotification(chatID, chatType, text string) (string, 
 		chatID:   chatID,
 		chatType: chatType,
 		text:     text,
+	})
+	return "message-1", nil
+}
+
+func (f *fakeNotifier) SendNotificationWithAction(
+	chatID, chatType, text, actionText, actionURL string,
+) (string, error) {
+	if f.calls != nil {
+		*f.calls = append(*f.calls, "send")
+	}
+	if f.err != nil {
+		return "", f.err
+	}
+	f.messages = append(f.messages, sentMessage{
+		chatID:   chatID,
+		chatType: chatType,
+		text:     text,
+	})
+	f.actions = append(f.actions, sentAction{
+		chatID:     chatID,
+		chatType:   chatType,
+		text:       text,
+		actionText: actionText,
+		actionURL:  actionURL,
 	})
 	return "message-1", nil
 }
@@ -409,26 +464,15 @@ func TestBuildSummaryTextPreservesTotalsAndEscapesLabel(t *testing.T) {
 	statistics := store.SummaryStatistics{
 		RuleCount:               3,
 		WalletCount:             2,
-		AssetRuleCount:          1,
-		ApprovalRuleCount:       1,
-		InteractionRuleCount:    1,
 		EventCount:              81,
-		AssetEventCount:         78,
-		ApprovalEventCount:      2,
-		InteractionEventCount:   1,
+		AddressRiskEventCount:   1,
+		AddressOutgoingCount:    1,
 		FailedNotificationCount: 2,
 	}
-	previous := "1"
-	current := "2"
-	events := make([]store.SummaryEvent, 0, 7)
-	for index := 0; index < 7; index++ {
-		events = append(events, store.SummaryEvent{
-			EventType:     "balance_change",
-			WalletAddress: "0x1111111111111111111111111111111111111111",
-			PreviousValue: &previous,
-			CurrentValue:  &current,
-		})
-	}
+	events := []store.SummaryEvent{{
+		EventType:     "outgoing",
+		WalletAddress: "0x1111111111111111111111111111111111111111",
+	}}
 	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 
 	text := buildSummaryText(
@@ -443,26 +487,76 @@ func TestBuildSummaryTextPreservesTotalsAndEscapesLabel(t *testing.T) {
 
 	for _, expected := range []string{
 		"Daily Summary · Treasury &lt;Main&gt;",
-		"Alerts this period: 81",
-		"Notification failures: 2",
-		"Monitored wallets: 2",
-		"Running rules: 3",
-		"Events: Assets 78, approvals 2, interactions 1",
+		"Today&#39;s conclusion",
+		"2 notification deliveries need attention",
+		"wallet 0x1111",
+		"Risk overview",
+		"2 wallets, 3 active rules",
+		"Period",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, text)
 		}
 	}
-	if strings.Contains(strings.ToLower(text), "today") {
-		t.Fatalf("summary should describe the reporting period, not today:\n%s", text)
+	if strings.Contains(text, "<Main>") {
+		t.Fatalf("summary label was not escaped:\n%s", text)
 	}
-	if count := strings.Count(text, "- Balance change:"); count != 5 {
-		t.Fatalf("recent event count = %d, want 5", count)
+	if lines := strings.Count(text, notificationfmt.BlockBreak) + 1; lines > 10 {
+		t.Fatalf("summary lines = %d, want at most 10:\n%s", lines, text)
+	}
+	for _, omitted := range []string{
+		"Asset rules",
+		"Recent address events",
+		"81 alerts",
+	} {
+		if strings.Contains(text, omitted) {
+			t.Fatalf("summary should omit verbose detail %q:\n%s", omitted, text)
+		}
 	}
 }
 
 func TestBuildChineseSummaryWithoutEvents(t *testing.T) {
 	subscription := testSubscription(1)
+	subscription.DailySummaryLabel = "晚间摘要"
+	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+
+	text := buildSummaryText(
+		subscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		store.SummaryStatistics{
+			RuleCount:   2,
+			WalletCount: 1,
+		},
+		nil,
+		nil,
+		nil,
+	)
+
+	for _, expected := range []string{
+		"每日摘要 · 晚间摘要",
+		"今日监控正常，无需处理",
+		"1 个钱包，2 条运行规则",
+		"统计周期",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("summary missing %q:\n%s", expected, text)
+		}
+	}
+	if lines := strings.Count(text, notificationfmt.BlockBreak) + 1; lines > 6 {
+		t.Fatalf("normal summary lines = %d, want at most 6:\n%s", lines, text)
+	}
+	for _, omitted := range []string{"0 次", "0 条", "最近", "风险概览"} {
+		if strings.Contains(text, omitted) {
+			t.Fatalf("normal summary should omit %q:\n%s", omitted, text)
+		}
+	}
+}
+
+func TestBuildSummaryDoesNotCallEmptyConfigurationNormal(t *testing.T) {
+	subscription := testSubscription(1)
+	subscription.DailySummaryLanguage = "en"
+	subscription.DailySummaryLabel = ""
 	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 
 	text := buildSummaryText(
@@ -475,15 +569,18 @@ func TestBuildChineseSummaryWithoutEvents(t *testing.T) {
 		nil,
 	)
 
-	for _, expected := range []string{
-		"DeBox Asset Alert 每日摘要 · 晚间摘要",
-		"本期触发次数：0",
-		"异常提醒：无",
-		"本期暂无触发事件。",
-	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("summary missing %q:\n%s", expected, text)
+	if !strings.Contains(text, "No monitoring items are enabled") ||
+		!strings.Contains(text, "No active monitoring items") ||
+		strings.Contains(text, "normal") {
+		t.Fatalf("empty monitoring summary is misleading:\n%s", text)
+	}
+	for _, zeroValue := range []string{"0 wallet", "0 rule", "0 event", "$0"} {
+		if strings.Contains(text, zeroValue) {
+			t.Fatalf("summary should hide zero value %q:\n%s", zeroValue, text)
 		}
+	}
+	if lines := strings.Count(text, notificationfmt.BlockBreak) + 1; lines > 6 {
+		t.Fatalf("empty summary lines = %d, want at most 6:\n%s", lines, text)
 	}
 }
 
@@ -500,6 +597,7 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 		store.SummaryStatistics{
 			MarketProjectCount:            2,
 			MarketRuleCount:               7,
+			MarketAnomalyCount:            3,
 			MarketEventCount:              9,
 			MarketBuyCount:                4,
 			MarketSellCount:               3,
@@ -521,17 +619,39 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 			WalletAddress:   &wallet,
 			USDValue:        &buyUSD,
 		}},
-		nil,
+		[]store.MarketProjectChainSummary{
+			{
+				MarketProjectID:      1,
+				TokenSymbol:          "<PRJ>",
+				ChainKey:             "base",
+				SnapshotCount:        4,
+				PriceSampleCount:     4,
+				LiquiditySampleCount: 4,
+				VolumeSampleCount:    4,
+				StartPriceUSD:        pointerString("1"),
+				EndPriceUSD:          pointerString("1.1"),
+			},
+			{
+				MarketProjectID:      2,
+				TokenSymbol:          "PRJ2",
+				ChainKey:             "bsc",
+				SnapshotCount:        4,
+				PriceSampleCount:     4,
+				LiquiditySampleCount: 4,
+				VolumeSampleCount:    4,
+				StartPriceUSD:        pointerString("1"),
+				EndPriceUSD:          pointerString("1.02"),
+			},
+		},
 	)
 
 	for _, expected := range []string{
-		"通知失败次数：2",
-		"市场监控：2 个代币，7 条运行规则",
-		"买入 4 笔（$1250.5）",
-		"卖出 3 笔（$400）",
-		"净买入 $+850.5",
-		"市场事件：共 9 条，流动性 1 条，大户变化 1 条",
-		"&lt;PRJ&gt; · Base · uniswap v3 / 0x2222222222222222222222222222222222222222 · 买入 $1250.5",
+		"有 2 条通知发送失败",
+		"<b>最大价格波动</b>：&lt;PRJ&gt;（Base）+10.00%",
+		"<b>最大成交</b>：&lt;PRJ&gt; 买入 $1,250.5",
+		"市场异常 3",
+		"净流入 $850.5（买入 4 笔，卖出 3 笔）",
+		"2 个代币项目，7 条运行规则",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("unified summary missing %q:\n%s", expected, text)
@@ -540,14 +660,29 @@ func TestBuildUnifiedSummaryIncludesMarketStatisticsAndEscapesEvents(t *testing.
 	if strings.Contains(text, "<PRJ>") {
 		t.Fatalf("market token symbol was not escaped:\n%s", text)
 	}
+	for _, privateDetail := range []string{
+		wallet,
+		"0x1111",
+		"0x2222",
+		"uniswap",
+	} {
+		if strings.Contains(text, privateDetail) {
+			t.Fatalf("digest leaked market detail %q:\n%s", privateDetail, text)
+		}
+	}
+	if lines := strings.Count(text, notificationfmt.BlockBreak) + 1; lines > 10 {
+		t.Fatalf("summary lines = %d, want at most 10:\n%s", lines, text)
+	}
 }
 
 func pointerString(value string) *string {
 	return &value
 }
 
-func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
+func TestBuildSummaryReportsPartialMarketCoverageWithoutRawIdentifiers(t *testing.T) {
 	subscription := testSubscription(1)
+	subscription.DailySummaryChatType = "group"
+	subscription.DailySummaryLabel = "群监控"
 	startPrice := "1"
 	endPrice := "1.25"
 	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
@@ -556,23 +691,31 @@ func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
 		subscription,
 		periodEnd.Add(-24*time.Hour),
 		periodEnd,
-		store.SummaryStatistics{},
+		store.SummaryStatistics{
+			MarketProjectCount: 1,
+			MarketRuleCount:    4,
+			MarketEventCount:   1,
+		},
 		nil,
 		nil,
 		[]store.MarketProjectChainSummary{
 			{
-				MarketProjectID:     1,
-				TokenName:           "ABC",
-				TokenSymbol:         "ABC",
-				ChainKey:            "bsc",
-				TokenAddress:        "0x1111111111111111111111111111111111111111",
-				StartPriceUSD:       &startPrice,
-				EndPriceUSD:         &endPrice,
-				TradeVolumeUSD:      "15000.5",
-				BuyCount:            4,
-				SellCount:           2,
-				LargeTradeCount:     2,
-				HolderIncreaseCount: 1,
+				MarketProjectID:      1,
+				TokenName:            "ABC",
+				TokenSymbol:          "ABC",
+				ChainKey:             "bsc",
+				TokenAddress:         "0x1111111111111111111111111111111111111111",
+				StartPriceUSD:        &startPrice,
+				EndPriceUSD:          &endPrice,
+				SnapshotCount:        4,
+				PriceSampleCount:     4,
+				LiquiditySampleCount: 4,
+				VolumeSampleCount:    4,
+				TradeVolumeUSD:       "15000.5",
+				BuyCount:             4,
+				SellCount:            2,
+				LargeTradeCount:      2,
+				HolderIncreaseCount:  1,
 			},
 			{
 				MarketProjectID:     1,
@@ -589,57 +732,67 @@ func TestBuildSummaryGroupsEachProjectByChain(t *testing.T) {
 	)
 
 	for _, expected := range []string{
-		"<b>ABC 代币日报</b>",
-		"<b>BNB Chain</b> · 0x1111111111111111111111111111111111111111",
-		"价格变化：$1 → $1.25 (+25.00%)",
-		"成交量：$15000.5（买入 4 笔 / 卖出 2 笔）",
-		"大额买卖：2 笔",
-		"大户变化：增持 1，减持 0，进榜 0，退榜 0",
-		"<b>Base</b> · 0x2222222222222222222222222222222222222222",
+		"群组每日摘要 · 群监控",
+		"<b>最大价格波动</b>：ABC（BNB Chain）+25.00%",
+		"缺少价格、流动性、成交量",
+		"影响涨跌与价格规则、流动性规则、成交量规则",
+		"1 个代币项目，4 条运行规则",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("multichain summary missing %q:\n%s", expected, text)
 		}
 	}
-	if strings.Count(text, "<b>ABC 代币日报</b>") != 1 {
-		t.Fatalf("project heading should appear once:\n%s", text)
+	for _, rawIdentifier := range []string{"0x1111", "0x2222"} {
+		if strings.Contains(text, rawIdentifier) {
+			t.Fatalf("group digest leaked identifier %q:\n%s", rawIdentifier, text)
+		}
 	}
 }
 
-func TestBuildEnglishSummaryGroupsProjectsAndEscapesNames(t *testing.T) {
+func TestBuildEnglishGroupSummaryHidesWalletAndUsesEnglishOnly(t *testing.T) {
 	subscription := testSubscription(1)
 	subscription.DailySummaryLanguage = "en"
+	subscription.DailySummaryChatType = "group"
+	subscription.DailySummaryLabel = "Risk desk"
 	startPrice, endPrice := "2", "1.5"
 	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
 	text := buildSummaryText(
 		subscription,
 		periodEnd.Add(-24*time.Hour),
 		periodEnd,
-		store.SummaryStatistics{},
-		nil,
+		store.SummaryStatistics{
+			RuleCount:             1,
+			WalletCount:           1,
+			EventCount:            1,
+			AddressRiskEventCount: 1,
+			MarketProjectCount:    1,
+			MarketRuleCount:       1,
+			MarketEventCount:      1,
+		},
+		[]store.SummaryEvent{{
+			EventType:     "outgoing",
+			WalletAddress: "0x1111111111111111111111111111111111111111",
+		}},
 		nil,
 		[]store.MarketProjectChainSummary{{
-			MarketProjectID:     1,
-			TokenName:           "<ABC>",
-			ChainKey:            "ethereum",
-			TokenAddress:        "0x1111111111111111111111111111111111111111",
-			StartPriceUSD:       &startPrice,
-			EndPriceUSD:         &endPrice,
-			TradeVolumeUSD:      "500",
-			BuyCount:            1,
-			SellCount:           2,
-			LargeTradeCount:     1,
-			HolderDecreaseCount: 1,
-			HolderRankExitCount: 1,
+			MarketProjectID:      1,
+			TokenName:            "<ABC>",
+			ChainKey:             "ethereum",
+			TokenAddress:         "0x1111111111111111111111111111111111111111",
+			StartPriceUSD:        &startPrice,
+			EndPriceUSD:          &endPrice,
+			SnapshotCount:        3,
+			PriceSampleCount:     3,
+			LiquiditySampleCount: 3,
+			VolumeSampleCount:    3,
 		}},
 	)
 	for _, expected := range []string{
-		"<b>&lt;ABC&gt; token report</b>",
-		"<b>Ethereum</b>",
-		"Price change: $2 → $1.5 (-25.00%)",
-		"Volume: $500 (buys 1 / sells 2)",
-		"Large trades: 1",
-		"Holder changes: increase 0, decrease 1, entered 0, exited 1",
+		"Group Daily Summary · Risk desk",
+		"Address monitoring detected 1 risk event",
+		"wallet details are hidden",
+		"<b>Largest price move</b>: &lt;ABC&gt; on Ethereum, -25.00%",
+		"1 wallet, 1 token project, 2 active rules",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("English multichain summary missing %q:\n%s", expected, text)
@@ -647,6 +800,71 @@ func TestBuildEnglishSummaryGroupsProjectsAndEscapesNames(t *testing.T) {
 	}
 	if strings.Contains(text, "<ABC>") {
 		t.Fatalf("English project name was not escaped:\n%s", text)
+	}
+	for _, address := range []string{
+		"0x1111111111111111111111111111111111111111",
+		"0x1111",
+	} {
+		if strings.Contains(text, address) {
+			t.Fatalf("group summary leaked wallet %q:\n%s", address, text)
+		}
+	}
+	for _, character := range text {
+		if unicode.Is(unicode.Han, character) {
+			t.Fatalf("English summary contains Chinese text %q:\n%s", character, text)
+		}
+	}
+}
+
+func TestChinesePrivateSummaryMayIdentifyWalletButGroupSummaryDoesNot(t *testing.T) {
+	wallet := "0x1234567890123456789012345678901234567890"
+	periodEnd := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	statistics := store.SummaryStatistics{
+		RuleCount:             1,
+		WalletCount:           1,
+		EventCount:            1,
+		AddressRiskEventCount: 1,
+		AddressOutgoingCount:  1,
+	}
+	events := []store.SummaryEvent{{
+		EventType:     "outgoing",
+		WalletAddress: wallet,
+	}}
+	privateSubscription := testSubscription(1)
+	privateSubscription.DailySummaryLabel = "个人监控"
+	privateText := buildSummaryText(
+		privateSubscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		statistics,
+		events,
+		nil,
+		nil,
+	)
+	shortWallet := shortAddress(wallet)
+	if !strings.Contains(privateText, shortWallet) {
+		t.Fatalf("private summary missing shortened wallet %q:\n%s", shortWallet, privateText)
+	}
+
+	groupSubscription := privateSubscription
+	groupSubscription.DailySummaryChatType = "group"
+	groupSubscription.DailySummaryLabel = "群监控"
+	groupText := buildSummaryText(
+		groupSubscription,
+		periodEnd.Add(-24*time.Hour),
+		periodEnd,
+		statistics,
+		events,
+		nil,
+		nil,
+	)
+	if !strings.Contains(groupText, "群组摘要已隐藏钱包信息") {
+		t.Fatalf("group privacy notice missing:\n%s", groupText)
+	}
+	for _, identifier := range []string{wallet, shortWallet} {
+		if strings.Contains(groupText, identifier) {
+			t.Fatalf("group summary leaked wallet %q:\n%s", identifier, groupText)
+		}
 	}
 }
 
@@ -680,11 +898,17 @@ func TestSendDuePagesAllSubscriptionsAndMarksAfterSend(t *testing.T) {
 			len(repository.marks),
 		)
 	}
+	if len(repository.snapshots) != 205 {
+		t.Fatalf("snapshots = %d, want 205", len(repository.snapshots))
+	}
 	wantAfterIDs := []int64{0, 100, 200, 205}
 	if fmt.Sprint(repository.listAfterIDs) != fmt.Sprint(wantAfterIDs) {
 		t.Fatalf("after IDs = %v, want %v", repository.listAfterIDs, wantAfterIDs)
 	}
 	for index, call := range repository.calls {
+		if call == "send" && (index == 0 || repository.calls[index-1] != "snapshot") {
+			t.Fatalf("snapshot must immediately precede a send: %v", repository.calls)
+		}
 		if call == "mark-target" && (index == 0 || repository.calls[index-1] != "send") {
 			t.Fatalf("target mark must immediately follow a successful send: %v", repository.calls)
 		}
@@ -740,6 +964,14 @@ func TestSummarySendsToAllSelectedTargets(t *testing.T) {
 	subscription := testSubscription(1)
 	repository := &fakeRepository{
 		subscriptions: []store.Subscription{subscription},
+		statistics: store.SummaryStatistics{
+			EventCount: 2, MarketEventCount: 3, MarketAnomalyCount: 1,
+		},
+		events:       []store.SummaryEvent{{ID: 11, EventType: "incoming"}},
+		marketEvents: []store.MarketSummaryEvent{{ID: 12, EventType: "buy"}},
+		marketSummaries: []store.MarketProjectChainSummary{{
+			MarketProjectID: 13, TokenSymbol: "TEST", ChainKey: "bsc",
+		}},
 		targets: map[int64][]store.DailySummaryTarget{
 			1: {
 				{SubscriptionID: 1, ChatType: "private", ChatID: "user-1"},
@@ -761,6 +993,82 @@ func TestSummarySendsToAllSelectedTargets(t *testing.T) {
 		notifier.messages[1].chatID != "group-1" ||
 		notifier.messages[1].chatType != "group" {
 		t.Fatalf("messages/marks = %#v / %#v", notifier.messages, repository.targetMarks)
+	}
+	if len(repository.snapshots) != 2 {
+		t.Fatalf("snapshots = %#v", repository.snapshots)
+	}
+	for index, snapshot := range repository.snapshots {
+		if snapshot.NotificationKind != store.NotificationKindDailySummary ||
+			snapshot.SourceType != "daily_summary_target" ||
+			snapshot.DeBoxUserID != "user-1" ||
+			snapshot.NotificationChatID != notifier.messages[index].chatID ||
+			snapshot.NotificationChatType != notifier.messages[index].chatType ||
+			snapshot.NotificationText != notifier.messages[index].text ||
+			snapshot.ActualValue != "address_events=2;market_events=3;market_anomalies=1" ||
+			!strings.Contains(string(snapshot.Details), `"schema_version":1`) ||
+			!strings.Contains(string(snapshot.Details), `"address_events":[{"id":11`) ||
+			!strings.Contains(string(snapshot.Details), `"market_events":[{"id":12`) ||
+			!strings.Contains(string(snapshot.Details), `"market_project_chain_summaries":[{"market_project_id":13`) {
+			t.Fatalf("snapshot[%d] = %#v", index, snapshot)
+		}
+	}
+}
+
+func TestSummarySnapshotFailurePreventsSendAndCursorAdvance(t *testing.T) {
+	t.Parallel()
+	subscription := testSubscription(1)
+	repository := &fakeRepository{
+		subscriptions: []store.Subscription{subscription},
+		snapshotErr:   errors.New("snapshot database unavailable"),
+	}
+	notifier := &fakeNotifier{}
+	executor := newTestExecutor(repository, notifier, acquiredLock(nil))
+
+	result, err := executor.SendDue(context.Background(), 100)
+
+	if err != nil {
+		t.Fatalf("SendDue() error = %v", err)
+	}
+	if len(result.Errors) != 1 ||
+		!strings.Contains(result.Errors[0].Error, "snapshot database unavailable") {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(notifier.messages) != 0 || len(repository.targetMarks) != 0 ||
+		len(repository.marks) != 0 {
+		t.Fatalf(
+			"summary advanced without a snapshot: messages=%d targets=%d marks=%d",
+			len(notifier.messages), len(repository.targetMarks), len(repository.marks),
+		)
+	}
+}
+
+func TestSummaryUsesFullReportActionWhenPublicAppURLIsConfigured(t *testing.T) {
+	subscription := testSubscription(1)
+	subscription.DailySummaryLanguage = "en"
+	repository := &fakeRepository{
+		subscriptions: []store.Subscription{subscription},
+	}
+	notifier := &fakeNotifier{}
+	executor := New(Dependencies{
+		Repository:    repository,
+		Notifications: notifier,
+		PublicAppURL:  "https://alerts.example/app#old",
+		TryLock:       acquiredLock(nil),
+		Now:           func() time.Time { return testNow },
+	})
+
+	result, err := executor.SendDue(context.Background(), 100)
+
+	if err != nil || result.Sent != 1 || len(result.Errors) != 0 {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	if len(notifier.actions) != 1 {
+		t.Fatalf("actions = %#v", notifier.actions)
+	}
+	action := notifier.actions[0]
+	if action.actionText != "View full report" ||
+		action.actionURL != "https://alerts.example/app?notification_id=nd_1123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("action = %#v", action)
 	}
 }
 
@@ -808,7 +1116,7 @@ func TestSummaryTargetsUseIndependentSchedulesAndLanguages(t *testing.T) {
 		!strings.Contains(notifier.messages[0].text, "Asia/Shanghai") {
 		t.Fatalf("private summary = %s", notifier.messages[0].text)
 	}
-	if !strings.Contains(notifier.messages[1].text, "Daily Summary · New York close") ||
+	if !strings.Contains(notifier.messages[1].text, "Group Daily Summary · New York close") ||
 		!strings.Contains(notifier.messages[1].text, "America/New_York") {
 		t.Fatalf("group summary = %s", notifier.messages[1].text)
 	}

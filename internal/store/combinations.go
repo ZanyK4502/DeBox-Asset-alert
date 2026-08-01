@@ -47,6 +47,15 @@ type combinationRecentEvent struct {
 	Note        string `db:"note"`
 }
 
+type combinationEventValue struct {
+	WatchRuleID   int64     `db:"watch_rule_id"`
+	PreviousValue *string   `db:"previous_value"`
+	CurrentValue  *string   `db:"current_value"`
+	TokenSymbol   string    `db:"token_symbol"`
+	Note          string    `db:"note"`
+	OccurredAt    time.Time `db:"occurred_at"`
+}
+
 func (s *Store) CreateCombinationRuleWithinQuota(
 	ctx context.Context,
 	params CreateCombinationRuleParams,
@@ -441,6 +450,7 @@ type RecordCombinationTriggerParams struct {
 	PreviousValue *string
 	CurrentValue  *string
 	Note          string
+	TokenSymbol   string
 	EventKey      string
 	OccurredAt    *time.Time
 }
@@ -464,7 +474,7 @@ func (s *Store) RecordCombinationTrigger(
 	ctx context.Context,
 	params RecordCombinationTriggerParams,
 ) (CombinationTriggerResult, error) {
-	return withTxValue(ctx, s.db, func(tx DBTX) (CombinationTriggerResult, error) {
+	result, err := withTxValue(ctx, s.db, func(tx DBTX) (CombinationTriggerResult, error) {
 		config, err := collectOne[combinationTriggerConfiguration](ctx, tx, `
 			SELECT
 				cr.id AS combination_rule_id,
@@ -506,7 +516,10 @@ func (s *Store) RecordCombinationTrigger(
 		if err != nil {
 			return CombinationTriggerResult{}, err
 		}
-		details, err := json.Marshal(map[string]string{"note": truncate(params.Note, 1000)})
+		details, err := json.Marshal(map[string]string{
+			"note":         truncate(params.Note, 1000),
+			"token_symbol": strings.TrimSpace(params.TokenSymbol),
+		})
 		if err != nil {
 			return CombinationTriggerResult{}, fmt.Errorf("encode combination trigger details: %w", err)
 		}
@@ -610,6 +623,25 @@ func (s *Store) RecordCombinationTrigger(
 		if err != nil {
 			return CombinationTriggerResult{}, fmt.Errorf("create combination notification: %w", err)
 		}
+		events, err := collectMany[combinationEventValue](ctx, tx, `
+			SELECT
+				watch_rule_id,
+				previous_value,
+				current_value,
+				COALESCE(details->>'token_symbol', '') AS token_symbol,
+				COALESCE(details->>'note', '') AS note,
+				COALESCE(occurred_at, detected_at, created_at) AS occurred_at
+			FROM rule_trigger_events
+			WHERE aggregation_window_id = $1
+			ORDER BY COALESCE(occurred_at, detected_at, created_at), id
+		`, window.ID)
+		if err != nil {
+			return CombinationTriggerResult{}, fmt.Errorf(
+				"list combination events: %w",
+				err,
+			)
+		}
+		result.MemberProgress = attachCombinationEvents(result.MemberProgress, events)
 		recentEvents, err := collectMany[combinationRecentEvent](ctx, tx, `
 			SELECT watch_rule_id, note
 			FROM (
@@ -634,6 +666,35 @@ func (s *Store) RecordCombinationTrigger(
 		result.Notification = &notification
 		return result, nil
 	})
+	if err == nil {
+		result.Timezone = s.notificationTimezone(ctx, params.DeBoxUserID)
+	}
+	return result, err
+}
+
+func attachCombinationEvents(
+	progress []CombinationMemberProgress,
+	events []combinationEventValue,
+) []CombinationMemberProgress {
+	memberIndex := make(map[int64]int, len(progress))
+	for index := range progress {
+		progress[index].Events = []StageTriggerEvent{}
+		memberIndex[progress[index].WatchRuleID] = index
+	}
+	for _, event := range events {
+		index, ok := memberIndex[event.WatchRuleID]
+		if !ok {
+			continue
+		}
+		progress[index].Events = append(progress[index].Events, StageTriggerEvent{
+			PreviousValue: event.PreviousValue,
+			CurrentValue:  event.CurrentValue,
+			TokenSymbol:   event.TokenSymbol,
+			Note:          event.Note,
+			OccurredAt:    event.OccurredAt,
+		})
+	}
+	return progress
 }
 
 func attachRecentCombinationEvents(
@@ -733,7 +794,8 @@ func combinationProgress(
 			awm.watch_rule_id,
 			wr.rule_type,
 			awm.required_trigger_count,
-			awm.trigger_count
+			awm.trigger_count,
+			awm.reached_at
 		FROM aggregation_window_members awm
 		JOIN watch_rules wr ON wr.id = awm.watch_rule_id
 		WHERE awm.aggregation_window_id = $1
@@ -741,6 +803,17 @@ func combinationProgress(
 	`, windowID)
 	if err != nil {
 		return nil, fmt.Errorf("list combination progress: %w", err)
+	}
+	for index := range progress {
+		rule, err := collectOne[WatchRule](ctx, tx, `
+			SELECT `+watchRuleColumns+`
+			FROM watch_rules
+			WHERE id = $1
+		`, progress[index].WatchRuleID)
+		if err != nil {
+			return nil, fmt.Errorf("load combination member rule snapshot: %w", err)
+		}
+		progress[index].Rule = &rule
 	}
 	return progress, nil
 }

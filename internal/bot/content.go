@@ -17,10 +17,10 @@ import (
 func menuText(language string) string {
 	if normalizeLanguage(language) == "en" {
 		return "🤖 <b>DeBox Asset Alert</b><br/>" +
-			"Monitor on-chain addresses and BNB Chain token markets, and receive notifications through DeBox Asset Alert Bot.<br/><br/>" +
+			"Monitor on-chain addresses and EVM multi-chain token markets, and receive notifications through Monitor Bot.<br/><br/>" +
 			"✨ <b>Core Features:</b><br/><br/>" +
 			"🌐 <b>Multi-chain Monitoring:</b> Covers major blockchains and L2 networks<br/><br/>" +
-			"💰 <b>Balance Alerts:</b> Set custom low and high balance thresholds<br/><br/>" +
+			"📍 <b>Address Monitoring:</b> Track balances, incoming and outgoing transfers, approval changes, and interactions with specified addresses<br/><br/>" +
 			"📈 <b>Token Monitoring:</b> Track price, liquidity, volume, large trades, holders, and Four.meme activity<br/><br/>" +
 			"⚡ <b>Real-time Alerts:</b> Key changes delivered in seconds, with stage alerts<br/><br/>" +
 			"📊 <b>Professional Mode:</b> Supports combination rule configuration<br/><br/>" +
@@ -29,10 +29,10 @@ func menuText(language string) string {
 			"Open the personal monitoring dashboard and securely sign in with your wallet signature 🔐"
 	}
 	return "🤖 <b>DeBox Asset Alert</b><br/>" +
-		"监控链上地址与 BNB Chain 代币行情，通过 DeBox Asset Alert Bot 接收通知。<br/><br/>" +
+		"监控链上地址与 EVM 多链代币行情，通过 Monitor Bot 接收通知。<br/><br/>" +
 		"✨ <b>核心功能支持：</b><br/><br/>" +
 		"🌐 <b>多链监控：</b>覆盖主流公链与 L2<br/><br/>" +
-		"💰 <b>余额预警：</b>自定义低余额与高余额阈值<br/><br/>" +
+		"📍 <b>地址监控：</b>跟踪地址余额、资金转入转出、授权变化和指定地址交互<br/><br/>" +
 		"📈 <b>代币监控：</b>价格、流动性、成交量、大额买卖、大户与 Four.meme 动态<br/><br/>" +
 		"⚡ <b>实时提醒：</b>关键变动秒级推送与阶段提醒<br/><br/>" +
 		"📊 <b>专业模式：</b>支持组合规则配置<br/><br/>" +
@@ -53,8 +53,8 @@ func featuresText(language string) string {
 			"• High balance threshold: alerts once when the balance reaches or rises above the threshold; it alerts again only after falling below it and another rise<br/>" +
 			"• Approval change<br/>" +
 			"• Specified address interaction (Professional)<br/><br/>" +
-			"- BNB Chain token monitoring:<br/>" +
-			"• Free users can query token and pool market data<br/>" +
+			"- EVM multi-chain token monitoring:<br/>" +
+			"• Free users can search basic token information; identity verification and pool discovery require Standard or Professional<br/>" +
 			"• Standard supports one token, its primary pool, and price/liquidity/volume rules<br/>" +
 			"• Professional supports five tokens, multiple pools, large trades, holder changes, Four.meme, group alerts, and combination rules<br/>" +
 			"• Supported protocols: PancakeSwap V2/V3/Infinity and Four.meme<br/><br/>" +
@@ -63,7 +63,7 @@ func featuresText(language string) string {
 			"• Stage alert (Standard and Professional): counts events in a user-defined cycle, sends once when the configured count is reached, then resets for the next cycle<br/>" +
 			"• Combination rule (Professional): uses at least two dedicated member rules; it sends one combined alert after every member reaches its own count in the same cycle. Members do not send individual alerts.<br/><br/>" +
 			"Stage and combination events remain available in the dashboard for 30 days.<br/><br/>" +
-			"Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours and includes notification failures.<br/><br/>" +
+			"Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours.<br/><br/>" +
 			"If a summary group is unbound, only that group is removed from the delivery targets. The daily summary is turned off if no targets remain."
 	}
 	return "<b>监控能力</b><br/><br/>" +
@@ -76,8 +76,8 @@ func featuresText(language string) string {
 		"• 高余额阈值：余额达到或高于阈值时提醒一次；持续高于不重复，回落至阈值以下后再次突破才重新提醒<br/>" +
 		"• 授权变化<br/>" +
 		"• 指定地址交互（专业版）<br/><br/>" +
-		"- BNB Chain 代币监控：<br/>" +
-		"• 免费版可查询代币与交易池行情<br/>" +
+		"- EVM 多链代币监控：<br/>" +
+		"• 免费版可搜索代币基础信息；同币验证与交易池查询需标准版或专业版<br/>" +
 		"• 标准版可持续监控 1 个代币、主交易池及价格/流动性/成交量规则<br/>" +
 		"• 专业版可监控 5 个代币、多交易池、大额买卖、大户变化、Four.meme、群通知和组合规则<br/>" +
 		"• 支持 PancakeSwap V2/V3/Infinity 与 Four.meme<br/><br/>" +
@@ -86,7 +86,7 @@ func featuresText(language string) string {
 		"• 阶段提醒（标准版、专业版）：按用户设置的周期累计事件，达到设定次数后发送一次，进入下一周期后重新计数<br/>" +
 		"• 组合规则（专业版）：至少包含两条专用成员规则；同一周期内所有成员分别达到设定次数后发送一条总通知，成员不会单独通知<br/><br/>" +
 		"阶段提醒和组合规则事件会在个人监控面板保留 30 天。<br/><br/>" +
-		"每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时，并显示本期通知失败次数。<br/><br/>" +
+		"每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时。<br/><br/>" +
 		"解绑摘要群后，只会从推送对象中移除该群；如果没有剩余推送对象，每日摘要会自动关闭。"
 }
 
@@ -101,9 +101,9 @@ func (s *Service) plansText(language string) string {
 	professionalAnnual, _ := professional.BillingOption(plans.Annual)
 	if normalizeLanguage(language) == "en" {
 		return "<b>Plans</b><br/><br/>" +
-			"Free: 1 wallet, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
+			"Free: 1 address, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
 			fmt.Sprintf(
-				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 wallets, 10 total rules, real-time or stage alerts, 1 token with primary-pool price/liquidity/volume monitoring, private delivery, and a unified private daily summary.<br/><br/>",
+				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 addresses, 10 total rules, real-time or stage alerts, 1 token with primary-pool price/liquidity/volume monitoring, private delivery, and a unified private daily summary.<br/><br/>",
 				standardMonthly.Price,
 				standard.Asset,
 				standardMonthly.Days,
@@ -115,7 +115,7 @@ func (s *Service) plansText(language string) string {
 				standardAnnual.Days,
 			) +
 			fmt.Sprintf(
-				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 wallets, 100 total rules, 5 tokens, multi-pool monitoring, large trades, holders and Four.meme, combination rules, alerts to 5 groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
+				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 addresses, 100 total rules, 5 tokens, multi-pool monitoring, large trades, holders and Four.meme, combination rules, alerts to 5 groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
 				professionalMonthly.Price,
 				professional.Asset,
 				professionalMonthly.Days,
@@ -131,9 +131,9 @@ func (s *Service) plansText(language string) string {
 			"Subscriptions take effect immediately. Digital service purchases are non-refundable, so please review the plan before purchase."
 	}
 	return "<b>订阅方案</b><br/><br/>" +
-		"免费版：1 个钱包，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
+		"免费版：1 个地址，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
 		fmt.Sprintf(
-			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个钱包，10 条总规则，支持实时或阶段提醒、1 个代币及主交易池的价格/流动性/成交量监控、私聊通知和统一每日摘要。<br/><br/>",
+			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个地址，10 条总规则，支持实时或阶段提醒、1 个代币及主交易池的价格/流动性/成交量监控、私聊通知和统一每日摘要。<br/><br/>",
 			standardMonthly.Price,
 			standard.Asset,
 			standardMonthly.Days,
@@ -145,7 +145,7 @@ func (s *Service) plansText(language string) string {
 			standardAnnual.Days,
 		) +
 		fmt.Sprintf(
-			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个钱包，100 条总规则，支持 5 个代币、多交易池、大额买卖、大户与 Four.meme、组合规则、5 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
+			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个地址，100 条总规则，支持 5 个代币、多交易池、大额买卖、大户与 Four.meme、组合规则、5 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
 			professionalMonthly.Price,
 			professional.Asset,
 			professionalMonthly.Days,
@@ -511,10 +511,6 @@ func (s *Service) menuMarkup(language string) boxbotapi.InlineKeyboardMarkup {
 			buttonURL(
 				choice(english, "Dashboard", "个人监控面板"),
 				s.publicAppURL,
-			),
-			buttonData(
-				choice(english, "Summary", "汇总类通知详情"),
-				localizedCallbackData("aggregate-details", language),
 			),
 		))
 	}

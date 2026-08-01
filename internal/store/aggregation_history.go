@@ -8,9 +8,10 @@ import (
 const AggregationHistoryRetentionDays = 30
 
 type AggregationCleanupResult struct {
-	NotificationsDeleted int64
-	EventsDeleted        int64
-	WindowsDeleted       int64
+	NotificationsDeleted               int64
+	EventsDeleted                      int64
+	WindowsDeleted                     int64
+	NotificationDetailSnapshotsDeleted int64
 }
 
 func (s *Store) CleanupAggregationHistory(
@@ -61,6 +62,15 @@ func (s *Store) CleanupAggregationHistory(
 			return result, fmt.Errorf("delete expired aggregation windows: %w", err)
 		}
 		result.WindowsDeleted = tag.RowsAffected()
+
+		tag, err = tx.Exec(ctx, `
+			DELETE FROM notification_detail_snapshots
+			WHERE expires_at < NOW() - ($1 * INTERVAL '1 day')
+		`, NotificationDetailCleanupGraceDays)
+		if err != nil {
+			return result, fmt.Errorf("delete expired notification detail snapshots: %w", err)
+		}
+		result.NotificationDetailSnapshotsDeleted = tag.RowsAffected()
 
 		return result, nil
 	})

@@ -18,6 +18,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/monitor"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -179,6 +180,7 @@ func buildDependencies(
 			Repository:    repository,
 			Notifications: messenger,
 			Holders:       chainClient,
+			PublicAppURL:  cfg.PublicAppURL,
 			TryLock: func(
 				ctx context.Context,
 				task string,
@@ -277,24 +279,29 @@ func buildDependencies(
 	summaryExecutor := summary.New(summary.Dependencies{
 		Repository:    repository,
 		Notifications: messenger,
+		PublicAppURL:  cfg.PublicAppURL,
 		TryLock: func(ctx context.Context, subscriptionID int64) (summary.Lock, bool, error) {
 			return repository.TryScheduledSummaryLock(ctx, subscriptionID)
 		},
 	})
+	notificationDetails := notificationdetail.New(repository, notificationdetail.Settings{
+		PublicAppURL: cfg.PublicAppURL,
+	})
 	return dependencies{
 		httpapi: httpapi.Dependencies{
-			Auth:          auth.New(repository, deboxClient),
-			Subscriptions: subscriptions,
-			Chain:         chainClient,
-			DeBox:         deboxClient,
-			Management:    managementService,
-			Payments:      paymentService,
-			Bot:           botService,
-			MarketWebhook: marketCluster,
-			Market:        marketViewService,
-			Assets:        assetCatalog,
-			Catalog:       catalog,
-			ReadyCheck:    repository.Ping,
+			Auth:                auth.New(repository, deboxClient),
+			Subscriptions:       subscriptions,
+			Chain:               chainClient,
+			DeBox:               deboxClient,
+			Management:          managementService,
+			Payments:            paymentService,
+			Bot:                 botService,
+			MarketWebhook:       marketCluster,
+			Market:              marketViewService,
+			Assets:              assetCatalog,
+			NotificationDetails: notificationDetails,
+			Catalog:             catalog,
+			ReadyCheck:          repository.Ping,
 		},
 		bot:     botRunner,
 		monitor: monitorRunner,

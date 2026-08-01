@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -51,10 +52,14 @@ func TestRunnerUnlocksAfterCompletedCycle(t *testing.T) {
 	if !lock.unlocked {
 		t.Fatal("monitor lock was not released")
 	}
-	if len(repository.calls) != 2 ||
-		repository.calls[0] != "list" ||
-		repository.calls[1] != "cleanup" {
-		t.Fatalf("repository calls = %v, want [list cleanup]", repository.calls)
+	if len(repository.calls) != 3 ||
+		repository.calls[0] != "expire_entitlements" ||
+		repository.calls[1] != "list" ||
+		repository.calls[2] != "cleanup" {
+		t.Fatalf(
+			"repository calls = %v, want [expire_entitlements list cleanup]",
+			repository.calls,
+		)
 	}
 }
 
@@ -72,7 +77,10 @@ func TestRunnerCleansAggregationHistoryOnlyOncePerInterval(t *testing.T) {
 	runner.runCycle(context.Background(), discardLogger())
 	runner.runCycle(context.Background(), discardLogger())
 
-	want := []string{"list", "cleanup", "list"}
+	want := []string{
+		"expire_entitlements", "list", "cleanup",
+		"expire_entitlements", "list",
+	}
 	if len(repository.calls) != len(want) {
 		t.Fatalf("repository calls = %v, want %v", repository.calls, want)
 	}
@@ -80,6 +88,34 @@ func TestRunnerCleansAggregationHistoryOnlyOncePerInterval(t *testing.T) {
 		if repository.calls[index] != want[index] {
 			t.Fatalf("repository calls = %v, want %v", repository.calls, want)
 		}
+	}
+}
+
+func TestRunnerContinuesSafelyWhenExpiryReconciliationFails(t *testing.T) {
+	repository := &fakeRepository{expiryErr: errors.New("database unavailable")}
+	executor := newTestExecutor(t, repository, &fakeChain{}, &fakeNotifier{})
+	lock := &fakeLock{}
+	runner := NewRunner(
+		executor,
+		func(context.Context) (Lock, bool, error) {
+			return lock, true, nil
+		},
+		DefaultInterval,
+	)
+
+	runner.runCycle(context.Background(), discardLogger())
+
+	want := []string{"expire_entitlements", "list", "cleanup"}
+	if len(repository.calls) != len(want) {
+		t.Fatalf("repository calls = %v, want %v", repository.calls, want)
+	}
+	for index := range want {
+		if repository.calls[index] != want[index] {
+			t.Fatalf("repository calls = %v, want %v", repository.calls, want)
+		}
+	}
+	if !lock.unlocked {
+		t.Fatal("monitor lock was not released after expiry reconciliation failure")
 	}
 }
 

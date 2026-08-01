@@ -85,3 +85,15 @@ func TestWriteMarketErrorMapsTemporaryProviderFailure(t *testing.T) {
 		t.Fatalf("unexpected response body: %s", body)
 	}
 }
+
+func TestWriteMarketErrorMapsPaidMarketAccessToForbidden(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeMarketError(recorder, marketview.ErrPaidMarketAccessRequired)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf(
+			"status = %d, want %d",
+			recorder.Code,
+			http.StatusForbidden,
+		)
+	}
+}

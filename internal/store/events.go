@@ -123,21 +123,57 @@ func (s *Store) DailySummaryStatistics(
 				COUNT(*) FILTER (WHERE rule_type = 'address_interaction') AS interaction_rule_count
 			FROM active_rules
 		),
+		address_events AS MATERIALIZED (
+			SELECT ae.event_type, ae.created_at AS occurred_at
+			FROM alert_events ae
+			JOIN active_rules ar ON ar.id = ae.watch_rule_id
+			WHERE ae.created_at >= $2 AND ae.created_at < $3
+			UNION ALL
+			SELECT
+				rte.event_type,
+				COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) AS occurred_at
+			FROM rule_trigger_events rte
+			JOIN active_rules ar ON ar.id = rte.watch_rule_id
+			WHERE COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) >= $2
+			  AND COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) < $3
+		),
 		event_stats AS (
 			SELECT
 				COUNT(*) AS event_count,
 				COUNT(*) FILTER (
-					WHERE ae.event_type IN (
+					WHERE event_type IN (
 						'balance_change', 'incoming', 'outgoing',
 						'balance_threshold', 'balance_threshold_high'
 					)
 				) AS asset_event_count,
-				COUNT(*) FILTER (WHERE ae.event_type = 'approval_change') AS approval_event_count,
-				COUNT(*) FILTER (WHERE ae.event_type = 'address_interaction') AS interaction_event_count,
-				COUNT(*) FILTER (WHERE ae.notification_status = 'failed') AS failed_notification_count
-			FROM alert_events ae
-			JOIN active_rules ar ON ar.id = ae.watch_rule_id
-			WHERE ae.created_at >= $2 AND ae.created_at < $3
+				COUNT(*) FILTER (WHERE event_type = 'approval_change') AS approval_event_count,
+				COUNT(*) FILTER (WHERE event_type = 'address_interaction') AS interaction_event_count,
+				COUNT(*) FILTER (
+					WHERE event_type IN (
+						'outgoing', 'balance_threshold',
+						'approval_change', 'address_interaction'
+					)
+				) AS address_risk_event_count,
+				COUNT(*) FILTER (WHERE event_type = 'incoming') AS address_incoming_count,
+				COUNT(*) FILTER (WHERE event_type = 'outgoing') AS address_outgoing_count
+			FROM address_events
+		),
+		address_notification_stats AS (
+			SELECT (
+				(
+					SELECT COUNT(*)
+					FROM alert_events ae
+					JOIN active_rules ar ON ar.id = ae.watch_rule_id
+					WHERE ae.notification_status = 'failed'
+					  AND ae.created_at >= $2 AND ae.created_at < $3
+				) + (
+					SELECT COUNT(*)
+					FROM aggregate_notifications an
+					WHERE an.debox_user_id = $1
+					  AND an.notification_status = 'failed'
+					  AND an.created_at >= $2 AND an.created_at < $3
+				)
+			) AS failed_notification_count
 		),
 		active_market_projects AS MATERIALIZED (
 			SELECT id
@@ -219,9 +255,27 @@ func (s *Store) DailySummaryStatistics(
 			  )
 		),
 		market_notification_stats AS (
-			SELECT COUNT(*) FILTER (
-				WHERE mre.notification_status = 'failed'
-			) AS market_failed_notification_count
+			SELECT
+				COUNT(*) AS market_anomaly_count,
+				(
+					COUNT(*) FILTER (
+						WHERE mre.notification_status = 'failed'
+					) + (
+						SELECT COUNT(*)
+						FROM market_stage_windows msw
+						JOIN market_rules stage_rule ON stage_rule.id = msw.market_rule_id
+						JOIN active_market_projects stage_project
+						  ON stage_project.id = stage_rule.market_project_id
+						WHERE msw.notification_status = 'failed'
+						  AND msw.created_at >= $2 AND msw.created_at < $3
+					) + (
+						SELECT COUNT(*)
+						FROM market_combination_windows mcw
+						WHERE mcw.debox_user_id = $1
+						  AND mcw.notification_status = 'failed'
+						  AND mcw.created_at >= $2 AND mcw.created_at < $3
+					)
+				) AS market_failed_notification_count
 			FROM market_rule_events mre
 			JOIN market_rules mr ON mr.id = mre.market_rule_id
 			JOIN active_market_projects amp ON amp.id = mr.market_project_id
@@ -230,6 +284,7 @@ func (s *Store) DailySummaryStatistics(
 		SELECT *
 		FROM rule_stats
 		CROSS JOIN event_stats
+		CROSS JOIN address_notification_stats
 		CROSS JOIN market_rule_stats
 		CROSS JOIN market_event_stats
 		CROSS JOIN market_notification_stats
@@ -368,6 +423,10 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			ad.token_address,
 			start_snapshot.price_usd::text AS start_price_usd,
 			end_snapshot.price_usd::text AS end_price_usd,
+			COALESCE(coverage.snapshot_count, 0) AS snapshot_count,
+			COALESCE(coverage.price_sample_count, 0) AS price_sample_count,
+			COALESCE(coverage.liquidity_sample_count, 0) AS liquidity_sample_count,
+			COALESCE(coverage.volume_sample_count, 0) AS volume_sample_count,
 			COALESCE(events.trade_volume_usd, 0)::text AS trade_volume_usd,
 			COALESCE(events.buy_count, 0) AS buy_count,
 			COALESCE(events.buy_usd, 0)::text AS buy_usd,
@@ -460,6 +519,28 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			ORDER BY ms.captured_at DESC, ms.id DESC
 			LIMIT 1
 		) end_snapshot ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT
+				COUNT(*) AS snapshot_count,
+				COUNT(ms.price_usd) AS price_sample_count,
+				COUNT(ms.liquidity_usd) AS liquidity_sample_count,
+				COUNT(*) FILTER (
+					WHERE ms.volume_5m_usd IS NOT NULL
+					   OR ms.volume_15m_usd IS NOT NULL
+					   OR ms.volume_1h_usd IS NOT NULL
+					   OR ms.volume_6h_usd IS NOT NULL
+					   OR ms.volume_24h_usd IS NOT NULL
+				) AS volume_sample_count
+			FROM market_snapshots ms
+			WHERE ms.chain_id = ad.chain_id
+			  AND ms.token_address = ad.token_address
+			  AND (
+				ad.default_market_pool_id IS NULL
+				OR ms.market_pool_id = ad.default_market_pool_id
+			  )
+			  AND ms.captured_at >= $2
+			  AND ms.captured_at < $3
+		) coverage ON TRUE
 		ORDER BY ad.market_project_id, ad.chain_id
 	`, deboxUserID, periodStart, periodEnd)
 	if err != nil {
@@ -476,17 +557,85 @@ func (s *Store) ListSummaryRecentEvents(
 	limit int,
 ) ([]SummaryEvent, error) {
 	events, err := collectMany[SummaryEvent](ctx, s.db, `
-		SELECT `+alertEventColumnsQualified+`,
-		       wr.chain_key, wr.wallet_address, wr.token_address,
-		       wr.rule_type, wr.target_address
-		FROM alert_events ae
-		JOIN watch_rules wr ON wr.id = ae.watch_rule_id
-		WHERE wr.debox_user_id = $1
-		  AND wr.enabled = 1
-		  AND wr.run_status = 'active'
-		  AND ae.created_at >= $2
-		  AND ae.created_at < $3
-		ORDER BY ae.created_at DESC, ae.id DESC
+		WITH summary_events AS (
+			SELECT
+				ae.id,
+				ae.watch_rule_id,
+				ae.event_type,
+				ae.previous_value,
+				ae.current_value,
+				ae.notification_message_id,
+				ae.notification_status,
+				ae.notification_error,
+				ae.notification_attempts,
+				ae.notification_attempted_at,
+				ae.notification_sent_at,
+				ae.created_at,
+				wr.chain_key,
+				wr.wallet_address,
+				wr.token_address,
+				wr.rule_type,
+				wr.target_address,
+				ae.created_at AS sort_at
+			FROM alert_events ae
+			JOIN watch_rules wr ON wr.id = ae.watch_rule_id
+			WHERE wr.debox_user_id = $1
+			  AND wr.enabled = 1
+			  AND wr.run_status = 'active'
+			  AND ae.created_at >= $2
+			  AND ae.created_at < $3
+
+			UNION ALL
+
+			SELECT
+				rte.id,
+				rte.watch_rule_id,
+				rte.event_type,
+				rte.previous_value,
+				rte.current_value,
+				an.notification_message_id,
+				COALESCE(an.notification_status, 'staged') AS notification_status,
+				COALESCE(an.notification_error, '') AS notification_error,
+				COALESCE(an.notification_attempts, 0) AS notification_attempts,
+				an.notification_attempted_at,
+				an.notification_sent_at,
+				rte.created_at,
+				wr.chain_key,
+				wr.wallet_address,
+				wr.token_address,
+				wr.rule_type,
+				wr.target_address,
+				COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) AS sort_at
+			FROM rule_trigger_events rte
+			JOIN watch_rules wr ON wr.id = rte.watch_rule_id
+			LEFT JOIN aggregate_notifications an
+			  ON an.aggregation_window_id = rte.aggregation_window_id
+			WHERE wr.debox_user_id = $1
+			  AND wr.enabled = 1
+			  AND wr.run_status = 'active'
+			  AND COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) >= $2
+			  AND COALESCE(rte.occurred_at, rte.detected_at, rte.created_at) < $3
+		)
+		SELECT
+			id,
+			watch_rule_id,
+			event_type,
+			previous_value,
+			current_value,
+			notification_message_id,
+			notification_status,
+			notification_error,
+			notification_attempts,
+			notification_attempted_at,
+			notification_sent_at,
+			created_at,
+			chain_key,
+			wallet_address,
+			token_address,
+			rule_type,
+			target_address
+		FROM summary_events
+		ORDER BY sort_at DESC, id DESC
 		LIMIT $4
 	`, deboxUserID, periodStart, periodEnd, clamp(limit, 1, 20))
 	if err != nil {

@@ -92,7 +92,7 @@ func TestAcceptanceDailySummaryReadsEventsAndMarksDelivery(t *testing.T) {
 	if message.chatID != userID ||
 		message.chatType != "private" ||
 		!strings.Contains(message.text, "Acceptance") ||
-		!strings.Contains(message.text, "Balance change") {
+		!strings.Contains(message.text, "Address monitoring recorded 1 event") {
 		t.Fatalf("unexpected summary message: %#v", message)
 	}
 

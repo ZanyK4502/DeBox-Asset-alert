@@ -17,6 +17,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketcollector"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -144,19 +145,24 @@ type AssetCatalogService interface {
 	Logo(context.Context, string) (assetcatalog.Logo, error)
 }
 
+type NotificationDetailService interface {
+	Detail(context.Context, string, string) (notificationdetail.Detail, error)
+}
+
 type Dependencies struct {
-	Auth          AuthService
-	Subscriptions SubscriptionService
-	Chain         ChainService
-	DeBox         DeBoxService
-	Management    ManagementService
-	Payments      PaymentService
-	Bot           BotService
-	MarketWebhook MarketWebhookService
-	Market        MarketManagementService
-	Assets        AssetCatalogService
-	Catalog       *plans.Catalog
-	ReadyCheck    func(context.Context) error
+	Auth                AuthService
+	Subscriptions       SubscriptionService
+	Chain               ChainService
+	DeBox               DeBoxService
+	Management          ManagementService
+	Payments            PaymentService
+	Bot                 BotService
+	MarketWebhook       MarketWebhookService
+	Market              MarketManagementService
+	Assets              AssetCatalogService
+	NotificationDetails NotificationDetailService
+	Catalog             *plans.Catalog
+	ReadyCheck          func(context.Context) error
 }
 
 func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
@@ -238,6 +244,7 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
 	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
 	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)
+	mux.HandleFunc("GET /api/notification-details/{notification_id}", h.getNotificationDetail)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
 	mux.HandleFunc("GET /", h.index)
 	return mux

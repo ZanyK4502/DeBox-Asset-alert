@@ -16,8 +16,8 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0018_independent_daily_summary_targets.sql" {
-		t.Fatalf("latest migration = %q, want independent daily summary targets migration", got)
+	if got := names[len(names)-1]; got != "0020_add_professional_permanent_allowlist.sql" {
+		t.Fatalf("latest migration = %q, want professional permanent allowlist migration", got)
 	}
 
 	requiredTables := []string{
@@ -67,6 +67,7 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"market_combination_windows",
 		"market_combination_window_members",
 		"market_combination_trigger_events",
+		"notification_detail_snapshots",
 	}
 	destructive := regexp.MustCompile(
 		`(?im)^\s*(drop\s+(table|column)|truncate|delete|rename)\b`,
@@ -157,6 +158,10 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"0x50d593be2c06d7b13c5deb3b9565b4b54ebda3a1",
 		"0xdd7e931d86c1ae7d38453e2c261e048f323497c4",
 		"0xcd44ffeb623bdc62a821a0301fad91e1c44c3643",
+		"0xafd51cf3f190fda0615e93b409924c747c96addb",
+		"0x5bca2ee4cc86f092083e8699a68bd4a05380a80a",
+		"0x4f321ba96a75cd522511697bc5c3e0b3228df8b8",
+		"0xf10112f10e6073e935cebca085a32abc8b856b5e",
 	} {
 		if !strings.Contains(combined, wallet) {
 			t.Errorf("permanent allowlist is missing wallet %q", wallet)

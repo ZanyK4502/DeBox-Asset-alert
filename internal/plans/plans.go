@@ -252,9 +252,9 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 		),
 	}}
 	free := catalog.plans[Free]
-	free.MarketQuery = true
-	free.MarketPoolMode = "query"
-	free.FourMemeMode = "query"
+	free.MarketQuery = false
+	free.MarketPoolMode = "none"
+	free.FourMemeMode = "none"
 	catalog.plans[Free] = free
 
 	standard := catalog.plans[Standard]

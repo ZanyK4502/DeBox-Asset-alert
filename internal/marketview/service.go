@@ -23,6 +23,8 @@ import (
 
 const defaultChainKey = "bsc"
 
+var ErrPaidMarketAccessRequired = errors.New("同币验证和交易池查询仅支持标准版和专业版。")
+
 var ErrMarketDataUnavailable = errors.New("行情数据服务暂时繁忙，请稍后重试。")
 
 type Repository interface {
@@ -1454,7 +1456,7 @@ func (s *Service) requireMarketQuery(ctx context.Context, deboxUserID string) er
 		return err
 	}
 	if !plan.MarketQuery {
-		return errors.New("当前套餐不支持代币行情查询。")
+		return ErrPaidMarketAccessRequired
 	}
 	return nil
 }

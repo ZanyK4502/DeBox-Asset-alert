@@ -70,6 +70,13 @@ func (r *Runner) runCycle(ctx context.Context, logger *slog.Logger) {
 		}
 	}()
 
+	paused, err := r.executor.ApplyExpiredEntitlementFallbacks(ctx)
+	if err != nil {
+		logger.Error("expired entitlement reconciliation failed", "error", err)
+	} else if paused > 0 {
+		logger.Info("expired entitlements reconciled", "users_paused", paused)
+	}
+
 	result, err := r.executor.CheckAll(ctx, 200)
 	if err != nil {
 		logger.Error("monitor cycle failed", "error", err)
@@ -100,5 +107,7 @@ func (r *Runner) cleanupHistory(ctx context.Context, logger *slog.Logger) {
 		"notifications_deleted", result.NotificationsDeleted,
 		"events_deleted", result.EventsDeleted,
 		"windows_deleted", result.WindowsDeleted,
+		"notification_detail_snapshots_deleted",
+		result.NotificationDetailSnapshotsDeleted,
 	)
 }

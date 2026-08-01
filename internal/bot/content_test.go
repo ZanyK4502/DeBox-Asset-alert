@@ -43,13 +43,13 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 	english := featuresText("en")
 
 	for _, text := range []string{
+		"EVM 多链代币监控",
 		"低余额阈值",
 		"高余额阈值",
 		"阶段提醒（标准版、专业版）",
 		"组合规则（专业版）",
 		"个人监控面板保留 30 天",
 		"首次统计此前 24 小时",
-		"通知失败次数",
 		"没有剩余推送对象",
 	} {
 		if !strings.Contains(chinese, text) {
@@ -57,17 +57,27 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 		}
 	}
 	for _, text := range []string{
+		"EVM multi-chain token monitoring",
 		"Low balance threshold",
 		"High balance threshold",
 		"Stage alert (Standard and Professional)",
 		"Combination rule (Professional)",
 		"dashboard for 30 days",
 		"previous 24 hours",
-		"notification failures",
 		"no targets remain",
 	} {
 		if !strings.Contains(english, text) {
 			t.Fatalf("English monitoring copy is missing %q", text)
+		}
+	}
+	for _, text := range []string{"BNB Chain 代币监控", "本期通知失败次数"} {
+		if strings.Contains(chinese, text) {
+			t.Fatalf("Chinese monitoring copy still contains removed text %q", text)
+		}
+	}
+	for _, text := range []string{"BNB Chain token monitoring", "notification failures"} {
+		if strings.Contains(english, text) {
+			t.Fatalf("English monitoring copy still contains removed text %q", text)
 		}
 	}
 }
@@ -104,6 +114,19 @@ func TestPlanCopyExplainsCapabilitiesPaymentAndSwitchingRules(t *testing.T) {
 		if !strings.Contains(english, text) {
 			t.Fatalf("English plan copy is missing %q", text)
 		}
+	}
+	for _, text := range []string{"1 个地址", "3 个地址", "20 个地址"} {
+		if !strings.Contains(chinese, text) {
+			t.Fatalf("Chinese plan copy is missing address limit %q", text)
+		}
+	}
+	for _, text := range []string{"1 address", "3 addresses", "20 addresses"} {
+		if !strings.Contains(english, text) {
+			t.Fatalf("English plan copy is missing address limit %q", text)
+		}
+	}
+	if strings.Contains(chinese, "钱包") || strings.Contains(english, "wallet") {
+		t.Fatal("plan copy still describes monitoring limits as wallets")
 	}
 }
 
@@ -197,33 +220,36 @@ func TestBotCopyFitsMessageLimitAndHasBalancedBoldTags(t *testing.T) {
 	}
 }
 
-func TestMenuIncludesLocalizedSummaryDetailsEntry(t *testing.T) {
+func TestMenuDoesNotIncludeSummaryDetailsEntry(t *testing.T) {
 	service, _, _, _ := newTestService(t)
-	tests := []struct {
-		language string
-		label    string
-	}{
-		{language: "zh", label: "汇总类通知详情"},
-		{language: "en", label: "Summary"},
-	}
-	for _, test := range tests {
-		t.Run(test.language, func(t *testing.T) {
-			markup := service.menuMarkup(test.language)
-			found := false
+	for _, language := range []string{"zh", "en"} {
+		t.Run(language, func(t *testing.T) {
+			markup := service.menuMarkup(language)
 			for _, row := range markup.InlineKeyboard {
 				for _, button := range row {
-					if button.Text == test.label &&
-						button.CallbackData != nil &&
-						*button.CallbackData ==
-							"alert:aggregate-details:"+test.language {
-						found = true
+					if button.CallbackData != nil &&
+						strings.HasPrefix(*button.CallbackData, "alert:aggregate-details:") {
+						t.Fatalf("summary details entry remains in %s menu", language)
 					}
 				}
 			}
-			if !found {
-				t.Fatalf("summary details entry missing from %s menu", test.language)
-			}
 		})
+	}
+}
+
+func TestMenuUsesAddressMonitoringAndEVMMultiChainCopy(t *testing.T) {
+	chinese := menuText("zh")
+	english := menuText("en")
+	if !strings.Contains(chinese, "监控链上地址与 EVM 多链代币行情，通过 Monitor Bot 接收通知。") ||
+		!strings.Contains(chinese, "📍 <b>地址监控：</b>跟踪地址余额、资金转入转出、授权变化和指定地址交互") {
+		t.Fatalf("Chinese menu copy = %q", chinese)
+	}
+	if !strings.Contains(english, "Monitor on-chain addresses and EVM multi-chain token markets, and receive notifications through Monitor Bot.") ||
+		!strings.Contains(english, "📍 <b>Address Monitoring:</b> Track balances, incoming and outgoing transfers, approval changes, and interactions with specified addresses") {
+		t.Fatalf("English menu copy = %q", english)
+	}
+	if strings.Contains(chinese, "余额预警") || strings.Contains(english, "Balance Alerts") {
+		t.Fatal("legacy balance-alert copy remains in menu")
 	}
 }
 

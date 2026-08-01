@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
@@ -37,6 +39,10 @@ type Repository interface {
 	ClaimMarketDeliveries(context.Context, int) ([]store.MarketDeliveryClaim, error)
 	LoadMarketDelivery(context.Context, store.MarketDeliveryClaim) (store.MarketNotificationDelivery, error)
 	CompleteMarketDelivery(context.Context, store.MarketDeliveryClaim, *string, string) error
+	CreateNotificationDetailSnapshot(
+		context.Context,
+		store.CreateNotificationDetailSnapshotParams,
+	) (store.NotificationDetailSnapshot, error)
 	ListMarketProjectsDueHolderRefresh(context.Context, int64, time.Time, int) ([]store.MarketProject, error)
 	ApplyExpiredEntitlementFallbacks(context.Context) (int64, error)
 	UpsertMarketHolder(context.Context, store.UpsertMarketHolderParams) (store.MarketHolder, error)
@@ -91,6 +97,12 @@ type NotificationService interface {
 	SendNotification(chatID, chatType, text string) (string, error)
 }
 
+type ActionNotificationService interface {
+	SendNotificationWithAction(
+		chatID, chatType, text, actionText, actionURL string,
+	) (string, error)
+}
+
 type HolderProvider interface {
 	TokenHoldersByContract(
 		context.Context,
@@ -112,6 +124,7 @@ type Dependencies struct {
 	Notifications NotificationService
 	Holders       HolderProvider
 	TryLock       TryLock
+	PublicAppURL  string
 }
 
 type Settings struct {
@@ -130,6 +143,7 @@ type Service struct {
 	now                  func() time.Time
 	lastEntitlementCheck time.Time
 	lastHolderCheck      time.Time
+	publicAppURL         string
 }
 
 func New(dependencies Dependencies, settings Settings) *Service {
@@ -149,6 +163,10 @@ func New(dependencies Dependencies, settings Settings) *Service {
 		tryLock:       dependencies.TryLock,
 		settings:      settings,
 		now:           func() time.Time { return time.Now().UTC() },
+		publicAppURL: strings.TrimRight(
+			strings.TrimSpace(dependencies.PublicAppURL),
+			"/",
+		),
 	}
 }
 
@@ -725,11 +743,13 @@ func (service *Service) deliver(
 		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, err.Error())
 		return false, err
 	}
-	messageID, sendErr := service.notifications.SendNotification(
-		delivery.NotificationChatID,
-		delivery.NotificationChatType,
-		MarketNotificationText(delivery),
-	)
+	text := MarketNotificationText(delivery)
+	snapshot, err := service.createMarketNotificationSnapshot(ctx, delivery, text)
+	if err != nil {
+		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, err.Error())
+		return false, err
+	}
+	messageID, sendErr := service.sendMarketNotification(delivery, text, snapshot.PublicID)
 	if sendErr != nil {
 		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, sendErr.Error())
 		return false, sendErr
@@ -743,6 +763,45 @@ func (service *Service) deliver(
 		return false, err
 	}
 	return true, nil
+}
+
+func (service *Service) sendMarketNotification(
+	delivery store.MarketNotificationDelivery,
+	text string,
+	notificationID string,
+) (string, error) {
+	actionSender, supportsAction := service.notifications.(ActionNotificationService)
+	actionURL := notificationdetail.NotificationURL(service.publicAppURL, notificationID)
+	if (delivery.Kind != "realtime" && delivery.Kind != "stage" && delivery.Kind != "combination") ||
+		!supportsAction || actionURL == "" {
+		return service.notifications.SendNotification(
+			delivery.NotificationChatID,
+			delivery.NotificationChatType,
+			text,
+		)
+	}
+	actionText := "查看详情"
+	if notificationLanguage(delivery.NotificationLanguage) == "en" {
+		actionText = "View details"
+	}
+	if delivery.Kind == "stage" {
+		actionText = "查看全部事件"
+		if notificationLanguage(delivery.NotificationLanguage) == "en" {
+			actionText = "View all events"
+		}
+	} else if delivery.Kind == "combination" {
+		actionText = "查看完整分析"
+		if notificationLanguage(delivery.NotificationLanguage) == "en" {
+			actionText = "View full analysis"
+		}
+	}
+	return actionSender.SendNotificationWithAction(
+		delivery.NotificationChatID,
+		delivery.NotificationChatType,
+		text,
+		actionText,
+		actionURL,
+	)
 }
 
 type Runner struct {

@@ -114,9 +114,19 @@ type StageTriggerResult struct {
 	TriggerCountThreshold int64                  `json:"trigger_count_threshold"`
 	WindowStartsAt        time.Time              `json:"window_starts_at"`
 	WindowEndsAt          time.Time              `json:"window_ends_at"`
+	Timezone              string                 `json:"timezone"`
 	NotificationDue       bool                   `json:"notification_due"`
 	RecentNotes           []string               `json:"recent_notes"`
+	Events                []StageTriggerEvent    `json:"events"`
 	Notification          *AggregateNotification `json:"notification,omitempty"`
+}
+
+type StageTriggerEvent struct {
+	PreviousValue *string   `json:"previous_value,omitempty"`
+	CurrentValue  *string   `json:"current_value,omitempty"`
+	TokenSymbol   string    `json:"token_symbol,omitempty"`
+	Note          string    `json:"note,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
 }
 
 type CombinationRule struct {
@@ -147,11 +157,14 @@ type CombinationRuleMember struct {
 }
 
 type CombinationMemberProgress struct {
-	WatchRuleID          int64    `db:"watch_rule_id" json:"watch_rule_id"`
-	RuleType             string   `db:"rule_type" json:"rule_type"`
-	RequiredTriggerCount int64    `db:"required_trigger_count" json:"required_trigger_count"`
-	TriggerCount         int64    `db:"trigger_count" json:"trigger_count"`
-	RecentNotes          []string `db:"-" json:"recent_notes"`
+	WatchRuleID          int64               `db:"watch_rule_id" json:"watch_rule_id"`
+	RuleType             string              `db:"rule_type" json:"rule_type"`
+	RequiredTriggerCount int64               `db:"required_trigger_count" json:"required_trigger_count"`
+	TriggerCount         int64               `db:"trigger_count" json:"trigger_count"`
+	ReachedAt            *time.Time          `db:"reached_at" json:"reached_at,omitempty"`
+	RecentNotes          []string            `db:"-" json:"recent_notes"`
+	Events               []StageTriggerEvent `db:"-" json:"events"`
+	Rule                 *WatchRule          `db:"-" json:"rule,omitempty"`
 }
 
 type CombinationTriggerResult struct {
@@ -160,6 +173,7 @@ type CombinationTriggerResult struct {
 	TriggerEventID    int64                       `json:"trigger_event_id"`
 	WindowStartsAt    time.Time                   `json:"window_starts_at"`
 	WindowEndsAt      time.Time                   `json:"window_ends_at"`
+	Timezone          string                      `json:"timezone"`
 	NotificationDue   bool                        `json:"notification_due"`
 	MemberProgress    []CombinationMemberProgress `json:"member_progress"`
 	Notification      *AggregateNotification      `json:"notification,omitempty"`
@@ -303,9 +317,13 @@ type SummaryStatistics struct {
 	AssetEventCount               int64  `db:"asset_event_count" json:"asset_event_count"`
 	ApprovalEventCount            int64  `db:"approval_event_count" json:"approval_event_count"`
 	InteractionEventCount         int64  `db:"interaction_event_count" json:"interaction_event_count"`
+	AddressRiskEventCount         int64  `db:"address_risk_event_count" json:"address_risk_event_count"`
+	AddressIncomingCount          int64  `db:"address_incoming_count" json:"address_incoming_count"`
+	AddressOutgoingCount          int64  `db:"address_outgoing_count" json:"address_outgoing_count"`
 	FailedNotificationCount       int64  `db:"failed_notification_count" json:"failed_notification_count"`
 	MarketProjectCount            int64  `db:"market_project_count" json:"market_project_count"`
 	MarketRuleCount               int64  `db:"market_rule_count" json:"market_rule_count"`
+	MarketAnomalyCount            int64  `db:"market_anomaly_count" json:"market_anomaly_count"`
 	MarketEventCount              int64  `db:"market_event_count" json:"market_event_count"`
 	MarketBuyCount                int64  `db:"market_buy_count" json:"market_buy_count"`
 	MarketSellCount               int64  `db:"market_sell_count" json:"market_sell_count"`
@@ -344,6 +362,10 @@ type MarketProjectChainSummary struct {
 	TokenAddress         string  `db:"token_address" json:"token_address"`
 	StartPriceUSD        *string `db:"start_price_usd" json:"start_price_usd"`
 	EndPriceUSD          *string `db:"end_price_usd" json:"end_price_usd"`
+	SnapshotCount        int64   `db:"snapshot_count" json:"snapshot_count"`
+	PriceSampleCount     int64   `db:"price_sample_count" json:"price_sample_count"`
+	LiquiditySampleCount int64   `db:"liquidity_sample_count" json:"liquidity_sample_count"`
+	VolumeSampleCount    int64   `db:"volume_sample_count" json:"volume_sample_count"`
 	TradeVolumeUSD       string  `db:"trade_volume_usd" json:"trade_volume_usd"`
 	BuyCount             int64   `db:"buy_count" json:"buy_count"`
 	BuyUSD               string  `db:"buy_usd" json:"buy_usd"`

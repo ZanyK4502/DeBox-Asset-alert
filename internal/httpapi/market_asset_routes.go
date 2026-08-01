@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 )
 
 func (h handler) getMarketAssetSearch(w http.ResponseWriter, r *http.Request) {
@@ -76,7 +77,23 @@ func (h handler) postMarketAssetVerifyCrossChain(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	if !h.requireAssetSession(w, r) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+	if h.deps.Assets == nil || h.deps.Subscriptions == nil {
+		serviceUnavailable(w)
+		return
+	}
+	entitlement, err := h.deps.Subscriptions.Entitlement(
+		r.Context(), session.DeBoxUserID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !entitlement.Plan.MarketQuery {
+		writeMarketError(w, marketview.ErrPaidMarketAccessRequired)
 		return
 	}
 	var input assetcatalog.CrossChainVerifyInput

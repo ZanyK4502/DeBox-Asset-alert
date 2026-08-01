@@ -422,30 +422,43 @@ type MarketNotificationDelivery struct {
 	Event                   *MarketEvent                `db:"-" json:"event,omitempty"`
 	Pool                    *MarketPool                 `db:"-" json:"pool,omitempty"`
 	Snapshot                *MarketSnapshot             `db:"-" json:"snapshot,omitempty"`
+	PreviousValue           *string                     `db:"-" json:"previous_value,omitempty"`
+	CurrentValue            *string                     `db:"-" json:"current_value,omitempty"`
 	TriggerCount            int64                       `db:"trigger_count" json:"trigger_count"`
 	StartsAt                time.Time                   `db:"starts_at" json:"starts_at"`
 	EndsAt                  time.Time                   `db:"ends_at" json:"ends_at"`
 	Note                    string                      `db:"note" json:"note"`
 	RecentNotes             []string                    `db:"-" json:"recent_notes"`
 	RecentEvents            []MarketNotificationEvent   `db:"-" json:"recent_events"`
+	StageEvents             []MarketNotificationEvent   `db:"-" json:"stage_events"`
 	CombinationMembers      []MarketCombinationProgress `db:"-" json:"combination_members"`
 	AddressLabel            string                      `db:"-" json:"address_label,omitempty"`
 }
 
 type MarketNotificationEvent struct {
-	Project      MarketProject `db:"-" json:"project"`
-	Event        MarketEvent   `db:"-" json:"event"`
-	Pool         *MarketPool   `db:"-" json:"pool,omitempty"`
-	Note         string        `db:"note" json:"note"`
-	AddressLabel string        `db:"-" json:"address_label,omitempty"`
+	Project       MarketProject   `db:"-" json:"project"`
+	Event         MarketEvent     `db:"-" json:"event"`
+	Pool          *MarketPool     `db:"-" json:"pool,omitempty"`
+	Snapshot      *MarketSnapshot `db:"-" json:"snapshot,omitempty"`
+	PreviousValue *string         `db:"-" json:"previous_value,omitempty"`
+	CurrentValue  *string         `db:"-" json:"current_value,omitempty"`
+	Note          string          `db:"note" json:"note"`
+	AddressLabel  string          `db:"-" json:"address_label,omitempty"`
 }
 
 type MarketCombinationProgress struct {
 	MemberID             int64                     `db:"member_id" json:"member_id"`
 	SourceType           string                    `db:"source_type" json:"source_type"`
+	WatchRuleID          *int64                    `db:"watch_rule_id" json:"watch_rule_id,omitempty"`
+	MarketRuleID         *int64                    `db:"market_rule_id" json:"market_rule_id,omitempty"`
 	RuleType             string                    `db:"rule_type" json:"rule_type"`
 	RequiredTriggerCount int64                     `db:"required_trigger_count" json:"required_trigger_count"`
 	TriggerCount         int64                     `db:"trigger_count" json:"trigger_count"`
+	ReachedAt            *time.Time                `db:"reached_at" json:"reached_at,omitempty"`
+	MarketRule           *MarketRule               `db:"-" json:"market_rule,omitempty"`
+	WatchRule            *WatchRule                `db:"-" json:"watch_rule,omitempty"`
+	WatchEvents          []StageTriggerEvent       `db:"-" json:"watch_events"`
+	MarketEvents         []MarketNotificationEvent `db:"-" json:"market_events"`
 	RecentNotes          []string                  `db:"-" json:"recent_notes"`
 	RecentEvents         []MarketNotificationEvent `db:"-" json:"recent_events"`
 }

@@ -160,3 +160,33 @@ func TestAttachRecentCombinationEventsGroupsAndLimitsEachMember(t *testing.T) {
 		t.Fatalf("member 8 recent notes = %v", got[1].RecentNotes)
 	}
 }
+
+func TestAttachCombinationEventsKeepsStructuredValuesByMember(t *testing.T) {
+	t.Parallel()
+
+	previous, current := "10", "7"
+	occurredAt := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	progress := []CombinationMemberProgress{
+		{WatchRuleID: 7},
+		{WatchRuleID: 8},
+	}
+	got := attachCombinationEvents(progress, []combinationEventValue{
+		{
+			WatchRuleID: 7, PreviousValue: &previous, CurrentValue: &current,
+			TokenSymbol: "BNB", Note: "structured", OccurredAt: occurredAt,
+		},
+		{WatchRuleID: 99, Note: "unknown", OccurredAt: occurredAt},
+	})
+	if len(got[0].Events) != 1 ||
+		got[0].Events[0].PreviousValue == nil ||
+		*got[0].Events[0].PreviousValue != previous ||
+		got[0].Events[0].CurrentValue == nil ||
+		*got[0].Events[0].CurrentValue != current ||
+		got[0].Events[0].TokenSymbol != "BNB" ||
+		!got[0].Events[0].OccurredAt.Equal(occurredAt) {
+		t.Fatalf("member 7 events = %#v", got[0].Events)
+	}
+	if len(got[1].Events) != 0 {
+		t.Fatalf("member 8 events = %#v", got[1].Events)
+	}
+}

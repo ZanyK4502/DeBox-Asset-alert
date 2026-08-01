@@ -188,9 +188,9 @@ func TestQueryTokenSortsSupportedPancakePoolsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	free, _ := catalog.Get(plans.Free)
+	standard, _ := catalog.Get(plans.Standard)
 	service := New(Dependencies{
-		Entitlements: fakeEntitlements{plan: free},
+		Entitlements: fakeEntitlements{plan: standard},
 		Chain: fakeChain{
 			metadata: chain.TokenMetadata{
 				Address: testToken, Name: "Project", Symbol: "PRJ", Decimals: 18,
@@ -228,6 +228,32 @@ func TestQueryTokenRejectsChainOutsideSupportedSix(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("QueryToken() accepted unsupported chain")
+	}
+}
+
+func TestFreePlanCannotVerifyOrQueryMarketPools(t *testing.T) {
+	service := New(Dependencies{
+		Entitlements: fakeEntitlements{plan: plans.Plan{
+			Code: plans.Free, MarketQuery: false,
+		}},
+	})
+	_, tokenErr := service.QueryToken(
+		context.Background(),
+		"free-user",
+		TokenQueryInput{ChainKey: "bsc", TokenAddress: testToken},
+	)
+	if !errors.Is(tokenErr, ErrPaidMarketAccessRequired) {
+		t.Fatalf("free token query error = %v", tokenErr)
+	}
+	_, poolsErr := service.QueryTokens(
+		context.Background(),
+		"free-user",
+		MultiTokenQueryInput{Deployments: []TokenQueryInput{{
+			ChainKey: "bsc", TokenAddress: testToken,
+		}}},
+	)
+	if !errors.Is(poolsErr, ErrPaidMarketAccessRequired) {
+		t.Fatalf("free pool query error = %v", poolsErr)
 	}
 }
 

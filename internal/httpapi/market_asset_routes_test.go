@@ -12,7 +12,9 @@ import (
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/auth"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
 
 type fakeAssetCatalog struct {
@@ -143,6 +145,43 @@ func TestMarketAssetResolveAndErrorMapping(t *testing.T) {
 	}
 }
 
+func TestMarketAssetVerifyCrossChainRejectsFreePlan(t *testing.T) {
+	assets := &fakeAssetCatalog{}
+	handler := New(testConfig(t), Dependencies{
+		Auth: &fakeAuthService{session: &store.AuthSession{
+			DeBoxUserID: "user-1",
+		}},
+		Assets: assets,
+		Subscriptions: &fakeSubscriptionService{entitlement: subscription.Entitlement{
+			Plan: plans.Plan{Code: plans.Free, MarketQuery: false},
+		}},
+	})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/market/assets/verify-cross-chain",
+		strings.NewReader(`{
+			"canonical_asset_id":"project-token",
+			"contracts":[
+				{"chain_key":"bsc","contract_address":"0x0000000000000000000000000000000000000001"},
+				{"chain_key":"base","contract_address":"0x0000000000000000000000000000000000000002"}
+			]
+		}`),
+	)
+	request.AddCookie(&http.Cookie{Name: auth.CookieName, Value: "session-token"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("free verify status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+	if assets.verifyInput.CanonicalAssetID != "" {
+		t.Fatal("free verification request reached the asset catalog")
+	}
+	if !strings.Contains(recorder.Body.String(), "标准版和专业版") {
+		t.Fatalf("free verify response = %s", recorder.Body.String())
+	}
+}
+
 func TestMarketAssetLogoSetsSafeHeadersAndSupportsETag(t *testing.T) {
 	assets := &fakeAssetCatalog{logo: assetcatalog.Logo{
 		ContentType: "image/png", Body: []byte("png"), ETag: `"hash"`,
@@ -259,6 +298,9 @@ func TestMarketAssetVerifyCrossChainRouteAndErrorMapping(t *testing.T) {
 			DeBoxUserID: "user-1",
 		}},
 		Assets: assets,
+		Subscriptions: &fakeSubscriptionService{entitlement: subscription.Entitlement{
+			Plan: plans.Plan{Code: plans.Standard, MarketQuery: true},
+		}},
 	})
 	request := func() *http.Request {
 		value := httptest.NewRequest(

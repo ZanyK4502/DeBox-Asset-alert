@@ -43,10 +43,10 @@ func TestCatalogMatchesProductPlans(t *testing.T) {
 		!free.AllowsRuleType(HighBalanceThreshold) {
 		t.Fatal("free plan capabilities do not match the product contract")
 	}
-	if !free.MarketQuery || free.MarketProjectLimit != 0 ||
+	if free.MarketQuery || free.MarketProjectLimit != 0 ||
 		len(free.AllowedMarketRules) != 0 ||
-		free.MarketPoolMode != "query" ||
-		free.FourMemeMode != "query" ||
+		free.MarketPoolMode != "none" ||
+		free.FourMemeMode != "none" ||
 		free.MarketCombination {
 		t.Fatal("free market capabilities do not match the product contract")
 	}

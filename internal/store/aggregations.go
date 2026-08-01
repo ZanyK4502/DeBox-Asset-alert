@@ -15,6 +15,7 @@ type RecordStageTriggerParams struct {
 	PreviousValue *string
 	CurrentValue  *string
 	Note          string
+	TokenSymbol   string
 	EventKey      string
 	OccurredAt    *time.Time
 }
@@ -36,15 +37,19 @@ type stageRuleConfiguration struct {
 	RunStatus             string    `db:"run_status"`
 }
 
-type stageEventNote struct {
-	Note string `db:"note"`
+type stageEventValue struct {
+	PreviousValue *string   `db:"previous_value"`
+	CurrentValue  *string   `db:"current_value"`
+	TokenSymbol   string    `db:"token_symbol"`
+	Note          string    `db:"note"`
+	OccurredAt    time.Time `db:"occurred_at"`
 }
 
 func (s *Store) RecordStageTrigger(
 	ctx context.Context,
 	params RecordStageTriggerParams,
 ) (StageTriggerResult, error) {
-	return withTxValue(ctx, s.db, func(tx DBTX) (StageTriggerResult, error) {
+	result, err := withTxValue(ctx, s.db, func(tx DBTX) (StageTriggerResult, error) {
 		config, err := collectOne[stageRuleConfiguration](ctx, tx, `
 			SELECT id, debox_user_id, rule_type, delivery_mode, cycle_type,
 			       cycle_minutes, trigger_count_threshold,
@@ -77,7 +82,10 @@ func (s *Store) RecordStageTrigger(
 			return StageTriggerResult{}, err
 		}
 
-		details, err := json.Marshal(map[string]string{"note": truncate(params.Note, 1000)})
+		details, err := json.Marshal(map[string]string{
+			"note":         truncate(params.Note, 1000),
+			"token_symbol": truncate(params.TokenSymbol, 32),
+		})
 		if err != nil {
 			return StageTriggerResult{}, fmt.Errorf("encode stage trigger details: %w", err)
 		}
@@ -162,25 +170,41 @@ func (s *Store) RecordStageTrigger(
 		if err != nil {
 			return StageTriggerResult{}, fmt.Errorf("create stage notification: %w", err)
 		}
-		recentEvents, err := collectMany[stageEventNote](ctx, tx, `
-			SELECT COALESCE(details->>'note', '') AS note
+		stageEvents, err := collectMany[stageEventValue](ctx, tx, `
+			SELECT
+				previous_value,
+				current_value,
+				COALESCE(details->>'token_symbol', '') AS token_symbol,
+				COALESCE(details->>'note', '') AS note,
+				COALESCE(occurred_at, detected_at, created_at) AS occurred_at
 			FROM rule_trigger_events
 			WHERE aggregation_window_id = $1
-			ORDER BY created_at DESC, id DESC
-			LIMIT $2
-		`, window.ID, stageRecentEventLimit)
+			ORDER BY COALESCE(occurred_at, detected_at, created_at), id
+		`, window.ID)
 		if err != nil {
-			return StageTriggerResult{}, fmt.Errorf("list recent stage events: %w", err)
+			return StageTriggerResult{}, fmt.Errorf("list stage events: %w", err)
 		}
-		notes := make([]string, 0, len(recentEvents))
-		for _, event := range recentEvents {
-			notes = append(notes, event.Note)
+		result.Events = make([]StageTriggerEvent, 0, len(stageEvents))
+		for _, event := range stageEvents {
+			result.Events = append(result.Events, StageTriggerEvent{
+				PreviousValue: event.PreviousValue,
+				CurrentValue:  event.CurrentValue,
+				TokenSymbol:   event.TokenSymbol,
+				Note:          event.Note,
+				OccurredAt:    event.OccurredAt,
+			})
+		}
+		for index := len(stageEvents) - 1; index >= 0 && len(result.RecentNotes) < stageRecentEventLimit; index-- {
+			result.RecentNotes = append(result.RecentNotes, stageEvents[index].Note)
 		}
 		result.NotificationDue = true
-		result.RecentNotes = notes
 		result.Notification = &notification
 		return result, nil
 	})
+	if err == nil {
+		result.Timezone = s.notificationTimezone(ctx, params.DeBoxUserID)
+	}
+	return result, err
 }
 
 func currentStageWindow(

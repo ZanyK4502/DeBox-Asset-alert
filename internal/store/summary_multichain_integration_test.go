@@ -151,13 +151,21 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 		summaries[0].TradeVolumeUSD != "100" ||
 		summaries[0].BuyCount != 1 ||
 		summaries[0].HolderIncreaseCount != 1 ||
+		summaries[0].SnapshotCount != 2 ||
+		summaries[0].PriceSampleCount != 2 ||
+		summaries[0].LiquiditySampleCount != 0 ||
+		summaries[0].VolumeSampleCount != 0 ||
 		summaries[0].StartPriceUSD == nil || *summaries[0].StartPriceUSD != "1" ||
 		summaries[0].EndPriceUSD == nil || *summaries[0].EndPriceUSD != "1.2" {
 		t.Fatalf("unexpected BSC summary: %#v", summaries[0])
 	}
 	if summaries[1].ChainKey != "base" ||
 		summaries[1].TradeVolumeUSD != "75" ||
-		summaries[1].SellCount != 1 {
+		summaries[1].SellCount != 1 ||
+		summaries[1].SnapshotCount != 0 ||
+		summaries[1].PriceSampleCount != 0 ||
+		summaries[1].LiquiditySampleCount != 0 ||
+		summaries[1].VolumeSampleCount != 0 {
 		t.Fatalf("unexpected Base summary: %#v", summaries[1])
 	}
 
@@ -210,9 +218,9 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO market_rule_events (
 			market_rule_id, market_event_id, trigger_key,
-			notification_status, note
+			previous_value, current_value, notification_status, note
 		)
-		VALUES ($1, $2, 'base-delivery', 'sending', 'Base sell')
+		VALUES ($1, $2, 'base-delivery', '50', '75', 'sending', 'Base sell')
 		RETURNING id
 	`, ruleID, recent[0].ID).Scan(&ruleEventID); err != nil {
 		t.Fatalf("create delivery rule event: %v", err)
@@ -258,7 +266,13 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 		t.Fatalf("LoadMarketDelivery(stage) error = %v", err)
 	}
 	if len(stageDelivery.RecentEvents) != 1 ||
+		len(stageDelivery.StageEvents) != 1 ||
 		stageDelivery.RecentEvents[0].Event.ChainKey != "base" ||
+		stageDelivery.StageEvents[0].Event.ChainKey != "base" ||
+		stageDelivery.StageEvents[0].PreviousValue == nil ||
+		*stageDelivery.StageEvents[0].PreviousValue != "50" ||
+		stageDelivery.StageEvents[0].CurrentValue == nil ||
+		*stageDelivery.StageEvents[0].CurrentValue != "75" ||
 		stageDelivery.RecentEvents[0].Pool == nil ||
 		stageDelivery.RecentEvents[0].Pool.ID != basePool.ID ||
 		stageDelivery.Timezone != "America/New_York" {
@@ -323,6 +337,12 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	}
 	if len(combinationDelivery.CombinationMembers) != 1 ||
 		combinationDelivery.CombinationMembers[0].TriggerCount != 1 ||
+		combinationDelivery.CombinationMembers[0].ReachedAt == nil ||
+		combinationDelivery.CombinationMembers[0].MarketRule == nil ||
+		combinationDelivery.CombinationMembers[0].MarketRule.RuleType !=
+			"market_large_sell" ||
+		len(combinationDelivery.CombinationMembers[0].MarketEvents) != 1 ||
+		combinationDelivery.CombinationMembers[0].MarketEvents[0].Event.ChainKey != "base" ||
 		len(combinationDelivery.CombinationMembers[0].RecentEvents) != 1 ||
 		combinationDelivery.CombinationMembers[0].RecentEvents[0].Event.ChainKey != "base" ||
 		combinationDelivery.Timezone != "America/New_York" {

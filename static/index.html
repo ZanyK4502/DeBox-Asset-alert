@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>DeBox Asset Alert</title>
     <link rel="icon" href="/static/jiankong2.png" type="image/png" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260731-wide-mobile-market-panels" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260802-monitoring-dashboard" />
   </head>
   <body>
     <header class="app-header">
@@ -20,7 +20,28 @@
         <button id="languageToggleBtn" class="secondary language-toggle" type="button" aria-label="切换为英文">EN</button>
         <button id="connectWalletBtn" class="primary" type="button">连接钱包</button>
       </div>
+      <div class="mobile-chain-pulse">
+        <span class="mobile-chain-pulse-blade" aria-hidden="true"></span>
+        <strong data-i18n="mobileChainPulse">随时获取链上动态</strong>
+        <span class="mobile-chain-pulse-blade" aria-hidden="true"></span>
+      </div>
     </header>
+
+    <section id="notificationDetailPage" class="notification-detail-page" aria-labelledby="notificationDetailPageTitle" hidden>
+      <div class="notification-detail-shell">
+        <div class="notification-detail-page-head">
+          <button id="closeNotificationDetailPageBtn" class="secondary compact" type="button" data-i18n="backToDashboard">
+            返回监控面板
+          </button>
+          <div>
+            <p class="eyebrow">Notification Detail</p>
+            <h2 id="notificationDetailPageTitle" data-i18n="notificationDetail">通知详情</h2>
+          </div>
+        </div>
+        <div id="notificationDetailStatus" class="notification-detail-status" aria-live="polite"></div>
+        <div id="notificationDetailContent" class="notification-detail-content"></div>
+      </div>
+    </section>
 
     <main class="layout">
       <section class="overview" data-mobile-screen="account" aria-label="账户概览" data-i18n-aria-label="accountOverview">
@@ -211,7 +232,7 @@
                     <button id="marketWizardRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
                   </div>
                   <small class="field-note market-recommendation-explanation">
-                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="marketRecommendationExplanationCooldown">冷却</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="marketRecommendationExplanationWindow">窗口</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。</span>
+                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="marketRecommendationExplanationCooldown">冷却</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="marketRecommendationExplanationWindow">窗口</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。也可在候选框选择自定义。</span>
                   </small>
                   <small id="marketWizardRecommendationStatus" class="field-note"></small>
                 </label>
@@ -279,7 +300,7 @@
         </div>
       </section>
 
-      <section id="marketProjectsSection" class="section" data-mobile-screen="market">
+      <section id="marketProjectsSection" class="section" data-mobile-screen="monitoring">
         <div class="section-head">
           <div>
             <p class="eyebrow">Projects</p>
@@ -299,9 +320,9 @@
           <div class="persistent-horizontal-scroll">
             <nav class="market-detail-tabs" role="tablist" aria-label="项目详情" data-i18n-aria-label="marketProjectDetails" data-persistent-horizontal-scroll>
               <button class="market-detail-tab active" type="button" role="tab" aria-selected="true" data-market-detail-tab="overview" data-i18n="marketOverviewTab">概览</button>
-              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="rules" data-i18n="marketRulesTab">提醒规则</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="rules" data-i18n="marketRulesTab">创建新规则&已归档规则查看</button>
               <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="pools" data-i18n="marketPoolsTab">交易池</button>
-              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="holders" data-i18n="marketHoldersTab">大户</button>
+              <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="holders" data-i18n="marketHoldersTab">大户排行榜</button>
               <button class="market-detail-tab" type="button" role="tab" aria-selected="false" data-market-detail-tab="events" data-i18n="marketEventsTab">事件历史</button>
             </nav>
             <div class="persistent-horizontal-scrollbar" aria-hidden="true"><span></span></div>
@@ -392,7 +413,7 @@
                     <button id="marketRecommendationRefreshBtn" class="secondary compact market-recommendation-refresh" type="button" data-i18n="refreshRecommendation">刷新</button>
                   </div>
                   <small class="field-note market-recommendation-explanation">
-                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="marketRecommendationExplanationCooldown">冷却</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="marketRecommendationExplanationWindow">窗口</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。</span>
+                    <span data-i18n="marketRecommendationExplanationPrefix">系统会根据当前行情推荐合适的</span><strong data-i18n="marketRecommendationExplanationCooldown">冷却</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="marketRecommendationExplanationWindow">窗口</strong><span data-i18n="marketRecommendationExplanationSeparator">、</span><strong data-i18n="threshold">阈值</strong><span data-i18n="marketRecommendationExplanationJoin">及其</span><strong data-i18n="unitLabel">单位</strong><span data-i18n="marketRecommendationExplanationSuffix">。也可在候选框选择自定义。</span>
                   </small>
                   <small id="marketRecommendationStatus" class="field-note"></small>
                 </label>
@@ -540,7 +561,7 @@
               <div class="subsection-head">
                 <div>
                   <p class="eyebrow">Holders</p>
-                  <h3 data-i18n="marketHolders">大户与地址标签</h3>
+                  <h3 data-i18n="marketHolders">大户排行榜与地址标签</h3>
                 </div>
               </div>
               <p class="field-note" data-i18n="marketHolderChangeHint">按链查看当前大户及其最近一次增持、减持、进榜或退榜变化。</p>
@@ -623,7 +644,7 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Rules</p>
-            <h2 data-i18n="createRulesTitle">地址监控</h2>
+            <h2 data-i18n="createRulesTitle">创建地址监控</h2>
           </div>
         </div>
 
@@ -832,7 +853,7 @@
         </div>
       </section>
 
-      <section id="activeRulesSection" class="section" data-mobile-screen="address">
+      <section id="activeRulesSection" class="section" data-mobile-screen="monitoring">
         <div class="section-head">
           <div>
             <p class="eyebrow">Active</p>
@@ -843,7 +864,7 @@
         <div id="rulesList" class="list list-flush"></div>
       </section>
 
-      <section id="pausedRulesWrap" class="section" data-mobile-screen="address">
+      <section id="pausedRulesWrap" class="section" data-mobile-screen="monitoring">
         <div class="section-head">
           <div>
             <p class="eyebrow">Paused</p>
@@ -854,11 +875,12 @@
         <div id="pausedRulesList" class="list list-flush"></div>
       </section>
 
-      <section id="aggregateEventsSection" class="section" data-mobile-screen="address">
+      <section id="aggregateEventsSection" class="section" data-mobile-screen="monitoring">
         <div class="section-head">
           <div>
             <p class="eyebrow">Activity</p>
-            <h2 data-i18n="aggregateEventsTitle">阶段提醒与组合规则事件查看-地址监控</h2>
+            <h2 data-i18n="aggregateEventsTitle">地址监控汇总</h2>
+            <p class="section-description" data-i18n="aggregateEventsDescription">先看阶段统计，再按时间查看每一次触发及通知结果。</p>
           </div>
           <div class="section-head-actions">
             <span id="aggregateEventsRange" class="badge muted" data-i18n="notConnected">未连接</span>
@@ -871,9 +893,6 @@
         <div class="aggregate-viewer">
           <div class="aggregate-viewer-head">
             <span id="aggregateLoadedCount" class="muted"></span>
-            <button id="aggregateScrollToggleBtn" class="aggregate-scroll-status" type="button" data-i18n="autoScrolling" hidden>
-              自动滚动
-            </button>
           </div>
           <div
             id="aggregateEventViewport"
@@ -897,7 +916,7 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Digest</p>
-            <h2 data-i18n="summaryTitle">每日摘要</h2>
+            <h2 data-i18n="summaryTitle">每日摘要创建</h2>
           </div>
           <span id="summaryCapability" class="badge muted" data-i18n="notConnected">未连接</span>
         </div>
@@ -926,7 +945,8 @@
         <div class="section-head">
           <div>
             <p class="eyebrow">Groups</p>
-            <h2 data-i18n="groupsTitle">群通知</h2>
+            <h2 data-i18n="groupsTitle">群绑定</h2>
+            <p class="section-description" data-i18n="groupsSubtitle">用于群通知绑定群</p>
           </div>
           <span class="badge" data-i18n="professional">专业版</span>
         </div>
@@ -947,7 +967,7 @@
       </section>
     </main>
 
-    <a class="usage-help-fab" href="https://m.debox.pro/card?id=trxuvgm9&invite_code=trxuvgm9" data-i18n="usageQuestions">使用疑问</a>
+    <a class="usage-help-fab" href="https://m.debox.pro/card?id=trxuvgm9&invite_code=trxuvgm9" data-i18n="usageQuestions">问题反馈与帮助</a>
 
     <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="移动端导航" data-i18n-aria-label="mobileNavigation">
       <button class="mobile-nav-item active" type="button" data-mobile-tab="account" aria-current="page">
@@ -968,15 +988,33 @@
         </svg>
         <span data-i18n="mobileNavAddress">地址</span>
       </button>
+      <button class="mobile-nav-item" type="button" data-mobile-tab="monitoring">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 5h16v12H4V5Zm3 8 3-3 2 2 4-4 2 2M8 21h8m-4-4v4" />
+        </svg>
+        <span data-i18n="mobileNavMonitoring">监控面板</span>
+      </button>
       <button class="mobile-nav-item" type="button" data-mobile-tab="overview">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z" />
         </svg>
-        <span data-i18n="mobileNavOverview">概览</span>
+        <span data-i18n="mobileNavOverview">每日摘要与群绑定</span>
       </button>
     </nav>
 
     <div id="tapShield" class="tap-shield" hidden></div>
+    <div id="eventDetailBackdrop" class="detail-drawer-backdrop" hidden>
+      <aside id="eventDetailDrawer" class="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="eventDetailDrawerTitle">
+        <div class="detail-drawer-head">
+          <div>
+            <p id="eventDetailDrawerEyebrow" class="eyebrow">Event Detail</p>
+            <h2 id="eventDetailDrawerTitle" data-i18n="eventDetails">事件详情</h2>
+          </div>
+          <button id="closeEventDetailDrawerBtn" class="secondary compact" type="button" data-i18n="close">关闭</button>
+        </div>
+        <div id="eventDetailDrawerContent" class="detail-drawer-content"></div>
+      </aside>
+    </div>
     <div id="identityModal" class="modal-backdrop" hidden>
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="identityModalTitle">
         <h3 id="identityModalTitle" data-i18n="identityTitle">未识别到 DeBox 账号</h3>
@@ -985,8 +1023,9 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260731-compact-pool-cards"></script>
-    <script src="/static/time.js"></script>
-    <script src="/static/app.js?v=20260731-persistent-scrollbars"></script>
+    <script src="/static/i18n.js?v=20260802-monitoring-dashboard"></script>
+    <script src="/static/time.js?v=20260801-force-refresh-v1"></script>
+    <script src="/static/notification-detail.js?v=20260801-force-refresh-v2"></script>
+    <script src="/static/app.js?v=20260802-monitoring-dashboard"></script>
   </body>
 </html>
