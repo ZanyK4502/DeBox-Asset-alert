@@ -782,6 +782,8 @@ button.danger {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 1fr;
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
 }
 
@@ -801,6 +803,8 @@ button.danger {
 .summary-target-card-head,
 .summary-schedule-status-card {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -822,16 +826,37 @@ button.danger {
 
 .summary-target-switch {
   display: flex;
-  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  overflow-wrap: anywhere;
 }
 
 .summary-target-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  max-width: 100%;
   gap: 12px;
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.summary-target-fields > label,
+.summary-target-fields input,
+.summary-target-fields select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.summary-target-fields input,
+.summary-target-fields select {
+  display: block;
+}
+
+.summary-target-timezone {
+  text-overflow: ellipsis;
 }
 
 .summary-schedule-list {
