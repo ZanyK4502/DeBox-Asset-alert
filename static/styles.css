@@ -4054,6 +4054,12 @@ label.market-pool-card {
     min-height: 48px;
   }
 
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
   button.compact {
     min-height: 44px;
   }
