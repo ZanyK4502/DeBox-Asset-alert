@@ -231,33 +231,20 @@ function isIOSDeBoxWebView() {
   const platform = navigator.platform || "";
   const isIOS = /iPad|iPhone|iPod/i.test(userAgent) ||
     (platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  return isIOS && (/DeBox/i.test(userAgent) || Boolean(window.deboxWallet));
-}
-
-function isTextEntryControl(element) {
-  if (!(element instanceof HTMLElement)) return false;
-  if (element.matches("textarea, select")) return !element.hasAttribute("disabled");
-  if (!(element instanceof HTMLInputElement)) return false;
-  return !element.disabled && !element.readOnly && ![
-    "button",
-    "checkbox",
-    "color",
-    "file",
-    "hidden",
-    "image",
-    "radio",
-    "range",
-    "reset",
-    "submit",
-  ].includes(element.type);
+  const isEmbeddedWebView = /AppleWebKit/i.test(userAgent) && !/Safari/i.test(userAgent);
+  return isIOS && (
+    /DeBox/i.test(userAgent) ||
+    Boolean(window.deboxWallet) ||
+    isEmbeddedWebView
+  );
 }
 
 function viewportWithMaximumScale(content) {
   const directives = String(content || "")
     .split(",")
     .map((directive) => directive.trim())
-    .filter((directive) => directive && !/^maximum-scale\s*=/i.test(directive));
-  directives.push("maximum-scale=1");
+    .filter((directive) => directive && !/^(maximum-scale|user-scalable)\s*=/i.test(directive));
+  directives.push("maximum-scale=1", "user-scalable=no");
   return directives.join(", ");
 }
 
@@ -268,26 +255,18 @@ function initIOSDeBoxInputZoomGuard() {
 
   document.documentElement.classList.add("ios-debox-webview");
   const defaultViewport = viewportMeta.getAttribute("content") || "width=device-width, initial-scale=1";
-  const focusedViewport = viewportWithMaximumScale(defaultViewport);
-  let restoreTimer = 0;
+  const lockedViewport = viewportWithMaximumScale(defaultViewport);
 
-  const lockViewport = (event) => {
-    if (!isTextEntryControl(event.target)) return;
-    window.clearTimeout(restoreTimer);
-    viewportMeta.setAttribute("content", focusedViewport);
-  };
-  const restoreViewport = () => {
-    window.clearTimeout(restoreTimer);
-    restoreTimer = window.setTimeout(() => {
-      if (isTextEntryControl(document.activeElement)) return;
-      viewportMeta.setAttribute("content", defaultViewport);
-    }, 250);
+  const lockViewport = () => {
+    if (viewportMeta.getAttribute("content") !== lockedViewport) {
+      viewportMeta.setAttribute("content", lockedViewport);
+    }
   };
 
+  lockViewport();
   document.addEventListener("touchstart", lockViewport, { capture: true, passive: true });
-  document.addEventListener("pointerdown", lockViewport, true);
   document.addEventListener("focusin", lockViewport, true);
-  document.addEventListener("focusout", restoreViewport, true);
+  window.addEventListener("pageshow", lockViewport);
 }
 
 function updateMobileActionBar() {

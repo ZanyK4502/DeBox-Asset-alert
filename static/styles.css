@@ -859,6 +859,21 @@ button.danger {
   text-overflow: ellipsis;
 }
 
+html.ios-debox-webview .summary-target-fields > label {
+  overflow: hidden;
+}
+
+html.ios-debox-webview .summary-target-time {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  inline-size: 100% !important;
+  min-inline-size: 0 !important;
+  max-inline-size: 100% !important;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .summary-schedule-list {
   display: grid;
   gap: 8px;
