@@ -1827,6 +1827,19 @@ select:focus {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  #renew .purchase-action-line.payment-status-message,
+  #renew .purchase-action-line.payment-status-empty {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #renew .purchase-action-line.payment-status-message #paymentStatus {
+    grid-column: 1 / -1;
+  }
+
+  #renew .purchase-action-line.payment-status-empty #paymentStatus {
+    display: none;
+  }
+
   #renew .purchase-action-line #payBtn {
     width: 100%;
     min-width: 0;

@@ -2258,17 +2258,20 @@ function addCombinationMember() {
 function renderPaymentStatus() {
   const status = $("paymentStatus");
   const config = state.paymentConfig;
+  let layout = "message";
   if (state.entitlement?.permanent) {
     status.textContent = t("permanentPlanActive");
   } else if (state.paymentError) {
     status.textContent = localizedApiError(state.paymentError);
   } else if (!config) {
     status.textContent = "";
+    layout = "empty";
   } else if (config.mode !== "live") {
     status.textContent = t("previewMode");
   } else if (!config.ready) {
     status.textContent = t("paymentMissing", { items: config.missing.join(", ") });
   } else {
+    layout = "asset";
     status.innerHTML = `
       <span class="payment-detail">
         <span class="payment-asset">
@@ -2278,6 +2281,10 @@ function renderPaymentStatus() {
       </span>
     `;
   }
+  const actionLine = status.closest(".purchase-action-line");
+  actionLine?.classList.toggle("payment-status-asset", layout === "asset");
+  actionLine?.classList.toggle("payment-status-message", layout === "message");
+  actionLine?.classList.toggle("payment-status-empty", layout === "empty");
 }
 
 function renderTokenInfo() {
