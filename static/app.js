@@ -226,6 +226,70 @@ function updateMobileKeyboardState() {
   scheduleMobileActionBarUpdate();
 }
 
+function isIOSDeBoxWebView() {
+  const userAgent = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const isIOS = /iPad|iPhone|iPod/i.test(userAgent) ||
+    (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return isIOS && (/DeBox/i.test(userAgent) || Boolean(window.deboxWallet));
+}
+
+function isTextEntryControl(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.matches("textarea, select")) return !element.hasAttribute("disabled");
+  if (!(element instanceof HTMLInputElement)) return false;
+  return !element.disabled && !element.readOnly && ![
+    "button",
+    "checkbox",
+    "color",
+    "file",
+    "hidden",
+    "image",
+    "radio",
+    "range",
+    "reset",
+    "submit",
+  ].includes(element.type);
+}
+
+function viewportWithMaximumScale(content) {
+  const directives = String(content || "")
+    .split(",")
+    .map((directive) => directive.trim())
+    .filter((directive) => directive && !/^maximum-scale\s*=/i.test(directive));
+  directives.push("maximum-scale=1");
+  return directives.join(", ");
+}
+
+function initIOSDeBoxInputZoomGuard() {
+  if (!isIOSDeBoxWebView()) return;
+  const viewportMeta = document.querySelector('meta[name="viewport"]');
+  if (!viewportMeta) return;
+
+  document.documentElement.classList.add("ios-debox-webview");
+  const defaultViewport = viewportMeta.getAttribute("content") || "width=device-width, initial-scale=1";
+  const focusedViewport = viewportWithMaximumScale(defaultViewport);
+  let restoreTimer = 0;
+
+  const lockViewport = (event) => {
+    if (!isTextEntryControl(event.target)) return;
+    window.clearTimeout(restoreTimer);
+    viewportMeta.setAttribute("content", focusedViewport);
+  };
+  const restoreViewport = () => {
+    window.clearTimeout(restoreTimer);
+    restoreTimer = window.setTimeout(() => {
+      if (isTextEntryControl(document.activeElement)) return;
+      viewportMeta.setAttribute("content", defaultViewport);
+    }, 250);
+  };
+
+  document.addEventListener("touchstart", lockViewport, { capture: true, passive: true });
+  document.addEventListener("pointerdown", lockViewport, true);
+  document.addEventListener("focusin", lockViewport, true);
+  document.addEventListener("focusout", restoreViewport, true);
+}
+
 function updateMobileActionBar() {
   mobileActionFrame = 0;
   const scopes = [...document.querySelectorAll("[data-mobile-action-scope]")];
@@ -5622,6 +5686,7 @@ function bindEvents() {
 async function boot() {
   applyStaticTranslations();
   renderNotificationDetailPage();
+  initIOSDeBoxInputZoomGuard();
   initMobileShell();
   initPersistentHorizontalScrollbars();
   bindEvents();
