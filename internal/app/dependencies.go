@@ -259,6 +259,7 @@ func buildDependencies(
 			BotUserID:                cfg.DeBoxBotUserID,
 			DefaultChainKey:          cfg.ChainKey,
 			SubscriptionTokenAddress: cfg.SubscriptionTokenAddress,
+			PrivateStartMaintenance:  true, // Temporary notice; disable to restore the original /start menu.
 		},
 	})
 	tryBotLock := func(ctx context.Context) (bot.Lock, bool, error) {

@@ -46,6 +46,7 @@ type Settings struct {
 	BotUserID                string
 	DefaultChainKey          string
 	SubscriptionTokenAddress string
+	PrivateStartMaintenance  bool
 }
 
 type Dependencies struct {
@@ -126,6 +127,12 @@ func (s *Service) handleMessage(ctx context.Context, message *boxbotapi.Message)
 	}
 	if message.Chat.Type == "group" {
 		return s.sendGroupEntry(ctx, message)
+	}
+	if s.deps.Settings.PrivateStartMaintenance && text == "/start" &&
+		strings.EqualFold(strings.TrimSpace(message.Chat.Type), "private") {
+		response := boxbotapi.NewMessage(message.Chat.ID, message.Chat.Type, "服务升级中 2026.11.16 恢复")
+		_, err := s.deps.Client.Send(response)
+		return err
 	}
 	language, err := s.languageForUser(ctx, userIDFromMessage(message))
 	if err != nil {
