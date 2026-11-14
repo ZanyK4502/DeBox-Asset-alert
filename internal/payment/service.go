@@ -359,15 +359,20 @@ func (s *Service) Verify(
 	if err != nil {
 		return VerifyResult{}, err
 	}
+	deboxUserID = strings.TrimSpace(deboxUserID)
 	order, err := s.repository.ClaimOrderTransaction(
 		ctx,
 		orderID,
-		strings.TrimSpace(deboxUserID),
+		deboxUserID,
 		payer,
 		hash,
 	)
 	if err != nil {
 		return VerifyResult{}, err
+	}
+	if order.ID != orderID || order.DeBoxUserID != deboxUserID ||
+		!strings.EqualFold(order.PayerAddress, payer) {
+		return VerifyResult{}, store.ErrOrderInvalid
 	}
 	if order.Status == "paid" {
 		confirmations := int(order.TxConfirmations)

@@ -48,6 +48,7 @@ type Repository interface {
 	DeleteNotificationGroup(context.Context, int64, string) (store.GroupDeletion, error)
 	DisableDailySummaries(context.Context, []int64, string) (int64, error)
 	UpdateDailySummarySettings(context.Context, string, store.DailySummarySettings) (store.Subscription, error)
+	DisableDailySummarySettings(context.Context, string, int64) (store.Subscription, error)
 }
 
 type EntitlementService interface {

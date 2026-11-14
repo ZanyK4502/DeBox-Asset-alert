@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
@@ -309,6 +310,77 @@ func TestVerifyFinalizesOnlyAfterThreeConfirmations(t *testing.T) {
 		result.Subscription != subscription ||
 		repository.finalizeArgs.confirmations != RequiredConfirmations {
 		t.Fatalf("unexpected paid result: %#v / %#v", result, repository.finalizeArgs)
+	}
+}
+
+func TestVerifyRejectsOrderOutsideAuthenticatedIdentity(t *testing.T) {
+	for _, status := range []string{"paid", "confirming"} {
+		for _, mismatch := range []string{"owner", "payer", "order ID"} {
+			t.Run(status+"/"+mismatch, func(t *testing.T) {
+				order := testOrder()
+				order.Status = status
+				switch mismatch {
+				case "owner":
+					order.DeBoxUserID = "another-user"
+				case "payer":
+					order.PayerAddress = testOther
+				case "order ID":
+					order.ID++
+				}
+				repository := &fakeRepository{claimedOrder: order}
+				service := testService(t, repository, &fakeBlockchain{
+					transactionErr: errors.New("unexpected blockchain access"),
+				}, liveSettings())
+
+				result, err := service.Verify(context.Background(), 7, testHash, "user-1", testPayer)
+				if !errors.Is(err, store.ErrOrderInvalid) {
+					t.Fatalf("Verify() error = %v, want ErrOrderInvalid", err)
+				}
+				if result.Order.ID != 0 || result.PaymentStatus != "" || result.Subscription != nil {
+					t.Fatalf("Verify() disclosed an unrelated order: %#v", result)
+				}
+				if repository.updated.Status != "" || repository.finalizeArgs.orderID != 0 {
+					t.Fatalf("Verify() changed an unrelated order: %#v", repository)
+				}
+			})
+		}
+	}
+}
+
+func TestVerifyPaidOrderRemainsIdempotentForAuthenticatedOwner(t *testing.T) {
+	for _, confirmations := range []int32{0, 5} {
+		t.Run(big.NewInt(int64(confirmations)).String()+" confirmations", func(t *testing.T) {
+			order := testOrder()
+			order.Status = "paid"
+			order.TxConfirmations = confirmations
+			payer := "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+			order.PayerAddress = "0x" + strings.ToUpper(payer[2:])
+			repository := &fakeRepository{claimedOrder: order}
+			service := testService(t, repository, &fakeBlockchain{
+				transactionErr: errors.New("paid verification must not access blockchain"),
+			}, liveSettings())
+
+			for range 2 {
+				result, err := service.Verify(context.Background(), order.ID, testHash, " user-1 ", payer)
+				if err != nil {
+					t.Fatalf("Verify() error = %v", err)
+				}
+				wantConfirmations := int(confirmations)
+				if wantConfirmations == 0 {
+					wantConfirmations = RequiredConfirmations
+				}
+				if result.PaymentStatus != "paid" || result.Order.ID != order.ID ||
+					result.Confirmations != wantConfirmations ||
+					result.RequiredConfirmations != RequiredConfirmations {
+					t.Fatalf("unexpected paid result: %#v", result)
+				}
+			}
+			if repository.claimedInput.deboxUserID != "user-1" ||
+				repository.claimedInput.payerAddress != payer ||
+				repository.updated.Status != "" || repository.finalizeArgs.orderID != 0 {
+				t.Fatalf("paid verification changed existing behavior: %#v", repository)
+			}
+		})
 	}
 }
 

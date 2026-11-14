@@ -165,14 +165,19 @@ func (s *Store) ClaimOrderTransaction(
 		return Order{}, fmt.Errorf("claim order transaction: %w", err)
 	}
 
-	existing, err := s.GetOrder(ctx, orderID)
+	existing, err := collectOptional[Order](ctx, s.db, `
+		SELECT `+orderColumns+`
+		FROM orders
+		WHERE id = $1
+		  AND debox_user_id = $2
+		  AND LOWER(payer_address) = LOWER($3)
+		  AND status = 'paid'
+		  AND LOWER(tx_hash) = LOWER($4)
+	`, orderID, deboxUserID, payerAddress, txHash)
 	if err != nil {
-		return Order{}, err
+		return Order{}, fmt.Errorf("get paid order for transaction claim: %w", err)
 	}
-	if existing != nil &&
-		existing.Status == "paid" &&
-		existing.TxHash != nil &&
-		strings.EqualFold(*existing.TxHash, txHash) {
+	if existing != nil {
 		return *existing, nil
 	}
 	return Order{}, ErrOrderInvalid

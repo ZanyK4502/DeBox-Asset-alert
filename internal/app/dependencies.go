@@ -26,6 +26,10 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/summary"
 )
 
+// Temporary maintenance gate; disable after business acceptance to restore both
+// user configuration writes and the original private /start menu.
+const userWriteMaintenance = true
+
 type dependencies struct {
 	httpapi httpapi.Dependencies
 	bot     *bot.Runner
@@ -259,7 +263,7 @@ func buildDependencies(
 			BotUserID:                cfg.DeBoxBotUserID,
 			DefaultChainKey:          cfg.ChainKey,
 			SubscriptionTokenAddress: cfg.SubscriptionTokenAddress,
-			PrivateStartMaintenance:  true, // Temporary notice; disable to restore the original /start menu.
+			PrivateStartMaintenance:  userWriteMaintenance,
 		},
 	})
 	tryBotLock := func(ctx context.Context) (bot.Lock, bool, error) {
@@ -290,19 +294,20 @@ func buildDependencies(
 	})
 	return dependencies{
 		httpapi: httpapi.Dependencies{
-			Auth:                auth.New(repository, deboxClient),
-			Subscriptions:       subscriptions,
-			Chain:               chainClient,
-			DeBox:               deboxClient,
-			Management:          managementService,
-			Payments:            paymentService,
-			Bot:                 botService,
-			MarketWebhook:       marketCluster,
-			Market:              marketViewService,
-			Assets:              assetCatalog,
-			NotificationDetails: notificationDetails,
-			Catalog:             catalog,
-			ReadyCheck:          repository.Ping,
+			Auth:                 auth.New(repository, deboxClient),
+			Subscriptions:        subscriptions,
+			Chain:                chainClient,
+			DeBox:                deboxClient,
+			Management:           managementService,
+			Payments:             paymentService,
+			Bot:                  botService,
+			MarketWebhook:        marketCluster,
+			Market:               marketViewService,
+			Assets:               assetCatalog,
+			NotificationDetails:  notificationDetails,
+			Catalog:              catalog,
+			ReadyCheck:           repository.Ping,
+			UserWriteMaintenance: userWriteMaintenance,
 		},
 		bot:     botRunner,
 		monitor: monitorRunner,

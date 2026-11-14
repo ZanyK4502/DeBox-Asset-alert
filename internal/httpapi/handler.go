@@ -66,6 +66,7 @@ type ManagementService interface {
 	UpdateCombinationRuleLanguage(context.Context, string, int64, string) (management.CombinationRuleUpdate, error)
 	ListAggregationEventHistory(context.Context, string, int64, int) (store.AggregationHistoryPage, error)
 	SaveSummarySettings(context.Context, string, management.SummarySettingsInput) (management.SummarySettingsResult, error)
+	DisableSummarySettings(context.Context, string, management.SummarySettingsInput) (management.SummarySettingsResult, error)
 	ListNotificationGroups(context.Context, string) ([]store.NotificationGroup, error)
 	CreateNotificationGroup(
 		context.Context,
@@ -150,19 +151,20 @@ type NotificationDetailService interface {
 }
 
 type Dependencies struct {
-	Auth                AuthService
-	Subscriptions       SubscriptionService
-	Chain               ChainService
-	DeBox               DeBoxService
-	Management          ManagementService
-	Payments            PaymentService
-	Bot                 BotService
-	MarketWebhook       MarketWebhookService
-	Market              MarketManagementService
-	Assets              AssetCatalogService
-	NotificationDetails NotificationDetailService
-	Catalog             *plans.Catalog
-	ReadyCheck          func(context.Context) error
+	Auth                 AuthService
+	Subscriptions        SubscriptionService
+	Chain                ChainService
+	DeBox                DeBoxService
+	Management           ManagementService
+	Payments             PaymentService
+	Bot                  BotService
+	MarketWebhook        MarketWebhookService
+	Market               MarketManagementService
+	Assets               AssetCatalogService
+	NotificationDetails  NotificationDetailService
+	Catalog              *plans.Catalog
+	ReadyCheck           func(context.Context) error
+	UserWriteMaintenance bool
 }
 
 func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
@@ -191,23 +193,23 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/subscription/free-trial", h.postFreePlan)
 	mux.HandleFunc("POST /api/subscription/summary-settings", h.postSummarySettings)
 	mux.HandleFunc("GET /api/watch-rules", h.getWatchRules)
-	mux.HandleFunc("POST /api/watch-rules", h.postWatchRule)
+	mux.HandleFunc("POST /api/watch-rules", h.userWrite(h.postWatchRule))
 	mux.HandleFunc("DELETE /api/watch-rules/paused", h.deletePausedWatchRules)
 	mux.HandleFunc("DELETE /api/watch-rules/{rule_id}", h.deleteWatchRule)
-	mux.HandleFunc("POST /api/watch-rules/{rule_id}/free-monitor", h.postFreeMonitorRule)
-	mux.HandleFunc("POST /api/watch-rules/{rule_id}/restore", h.postRestoreWatchRule)
+	mux.HandleFunc("POST /api/watch-rules/{rule_id}/free-monitor", h.userWrite(h.postFreeMonitorRule))
+	mux.HandleFunc("POST /api/watch-rules/{rule_id}/restore", h.userWrite(h.postRestoreWatchRule))
 	mux.HandleFunc("PATCH /api/watch-rules/{rule_id}/notification-language", h.patchWatchRuleLanguage)
 	mux.HandleFunc("GET /api/combination-rules", h.getCombinationRules)
-	mux.HandleFunc("POST /api/combination-rules", h.postCombinationRule)
+	mux.HandleFunc("POST /api/combination-rules", h.userWrite(h.postCombinationRule))
 	mux.HandleFunc("DELETE /api/combination-rules/{combination_id}", h.deleteCombinationRule)
-	mux.HandleFunc("POST /api/combination-rules/{combination_id}/restore", h.postRestoreCombinationRule)
+	mux.HandleFunc("POST /api/combination-rules/{combination_id}/restore", h.userWrite(h.postRestoreCombinationRule))
 	mux.HandleFunc("PATCH /api/combination-rules/{combination_id}/notification-language", h.patchCombinationRuleLanguage)
 	mux.HandleFunc("GET /api/aggregate-events", h.getAggregateEvents)
 	mux.HandleFunc("GET /api/chain/balance", h.getBalance)
 	mux.HandleFunc("GET /api/debox/user", h.getDeBoxUser)
 	mux.HandleFunc("GET /api/debox/token", h.getDeBoxToken)
 	mux.HandleFunc("GET /api/payment/config", h.getPaymentConfig)
-	mux.HandleFunc("POST /api/payment/prepare", h.postPreparePayment)
+	mux.HandleFunc("POST /api/payment/prepare", h.userWrite(h.postPreparePayment))
 	mux.HandleFunc("POST /api/payment/verify", h.postVerifyPayment)
 	mux.HandleFunc("GET /api/bot/webhook-status", h.getBotWebhookStatus)
 	mux.HandleFunc("POST /bot/webhook", h.postBotWebhook)
@@ -223,26 +225,26 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/market/pools/discover", h.postMarketPoolsDiscover)
 	mux.HandleFunc("POST /api/market/recommendations/preview", h.postMarketRecommendationPreview)
 	mux.HandleFunc("GET /api/market/projects", h.getMarketProjects)
-	mux.HandleFunc("POST /api/market/projects", h.postMarketProject)
+	mux.HandleFunc("POST /api/market/projects", h.userWrite(h.postMarketProject))
 	mux.HandleFunc("GET /api/market/projects/{project_id}", h.getMarketProject)
 	mux.HandleFunc("DELETE /api/market/projects/{project_id}", h.deleteMarketProject)
 	mux.HandleFunc("DELETE /api/market/projects/{project_id}/permanent", h.deleteArchivedMarketProject)
-	mux.HandleFunc("POST /api/market/projects/{project_id}/restore", h.postRestoreMarketProject)
-	mux.HandleFunc("PATCH /api/market/projects/{project_id}/pool", h.patchMarketProjectPool)
+	mux.HandleFunc("POST /api/market/projects/{project_id}/restore", h.userWrite(h.postRestoreMarketProject))
+	mux.HandleFunc("PATCH /api/market/projects/{project_id}/pool", h.userWrite(h.patchMarketProjectPool))
 	mux.HandleFunc("GET /api/market/projects/{project_id}/recommendations", h.getMarketRecommendations)
 	mux.HandleFunc("GET /api/market/projects/{project_id}/events", h.getMarketEvents)
-	mux.HandleFunc("POST /api/market/projects/{project_id}/rules", h.postMarketRule)
+	mux.HandleFunc("POST /api/market/projects/{project_id}/rules", h.userWrite(h.postMarketRule))
 	mux.HandleFunc("DELETE /api/market/rules/{rule_id}", h.deleteMarketRule)
-	mux.HandleFunc("POST /api/market/rules/{rule_id}/restore", h.postRestoreMarketRule)
+	mux.HandleFunc("POST /api/market/rules/{rule_id}/restore", h.userWrite(h.postRestoreMarketRule))
 	mux.HandleFunc("GET /api/market/combinations", h.getMarketCombinations)
-	mux.HandleFunc("POST /api/market/combinations", h.postMarketCombination)
+	mux.HandleFunc("POST /api/market/combinations", h.userWrite(h.postMarketCombination))
 	mux.HandleFunc("DELETE /api/market/combinations/{combination_id}", h.deleteMarketCombination)
 	mux.HandleFunc("DELETE /api/market/combinations/{combination_id}/permanent", h.deletePausedMarketCombination)
-	mux.HandleFunc("POST /api/market/combinations/{combination_id}/restore", h.postRestoreMarketCombination)
-	mux.HandleFunc("POST /api/market/projects/{project_id}/labels", h.postMarketAddressLabel)
-	mux.HandleFunc("DELETE /api/market/labels/{label_id}", h.deleteMarketAddressLabel)
+	mux.HandleFunc("POST /api/market/combinations/{combination_id}/restore", h.userWrite(h.postRestoreMarketCombination))
+	mux.HandleFunc("POST /api/market/projects/{project_id}/labels", h.userWrite(h.postMarketAddressLabel))
+	mux.HandleFunc("DELETE /api/market/labels/{label_id}", h.userWrite(h.deleteMarketAddressLabel))
 	mux.HandleFunc("GET /api/notification-groups", h.getNotificationGroups)
-	mux.HandleFunc("POST /api/notification-groups", h.postNotificationGroup)
+	mux.HandleFunc("POST /api/notification-groups", h.userWrite(h.postNotificationGroup))
 	mux.HandleFunc("DELETE /api/notification-groups/{group_id}", h.deleteNotificationGroup)
 	mux.HandleFunc("GET /api/notification-details/{notification_id}", h.getNotificationDetail)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))

@@ -18,6 +18,10 @@ func (h handler) postSummarySettings(w http.ResponseWriter, r *http.Request) {
 		serviceUnavailable(w)
 		return
 	}
+	if h.deps.UserWriteMaintenance {
+		h.disableSummaryDuringMaintenance(w, r, session.DeBoxUserID)
+		return
+	}
 	input := management.DefaultSummarySettingsInput()
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)

@@ -544,9 +544,14 @@ async function api(path, options = {}) {
   if (!response.ok) {
     const message = response.status === 401
       ? t("sessionExpired")
-      : localizedApiError(data.detail || data.message || t("requestFailed"));
+      : data.code === "maintenance"
+        ? t("maintenanceNotice")
+        : localizedApiError(data.detail || data.message || t("requestFailed"));
     const error = new Error(message);
     error.status = response.status;
+    if (response.status !== 401 && data.code === "maintenance") {
+      error.code = "maintenance";
+    }
     if (response.status === 401 && path !== "/api/auth/session") {
       resetConnectionState();
     }
@@ -2826,19 +2831,31 @@ async function persistSummarySettings() {
     return false;
   }
   const legacyTarget = targets.find((target) => target.enabled) || targets[0];
-  await api("/api/subscription/summary-settings", {
-    method: "POST",
-    body: JSON.stringify({
-      enabled: targets.some((target) => target.enabled),
-      push_time: legacyTarget.push_time,
-      timezone: legacyTarget.timezone,
-      targets,
-      label: legacyTarget.label,
-      language: legacyTarget.language,
-    }),
-  });
+  let stoppedDuringMaintenance = false;
+  try {
+    await api("/api/subscription/summary-settings", {
+      method: "POST",
+      body: JSON.stringify({
+        enabled: targets.some((target) => target.enabled),
+        push_time: legacyTarget.push_time,
+        timezone: legacyTarget.timezone,
+        targets,
+        label: legacyTarget.label,
+        language: legacyTarget.language,
+      }),
+    });
+  } catch (error) {
+    if (error?.code !== "maintenance" || !targets.every((target) => target.enabled === false)) {
+      throw error;
+    }
+    await api("/api/subscription/summary-settings", {
+      method: "POST",
+      body: JSON.stringify({ enabled: false }),
+    });
+    stoppedDuringMaintenance = true;
+  }
   await refreshAccount();
-  toast(t("summarySaved"));
+  toast(t(stoppedDuringMaintenance ? "summaryStoppedDuringMaintenance" : "summarySaved"));
   return true;
 }
 
