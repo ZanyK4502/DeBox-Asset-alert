@@ -21,9 +21,10 @@ const (
 	minimumInteractionRuleMonthlyCU int64 = 6_696_000
 )
 
-// ResourceCapacitySettings is a conservative admission model, not a billing
-// forecast. An unverified model allows startup but cannot open new sales.
+// ResourceCapacitySettings configures sales seats and the optional monthly CU
+// admission model. When enforced, that model must be verified to allow sales.
 type ResourceCapacitySettings struct {
+	SeatOnly                 bool
 	Verified                 bool
 	AccountMonthlyCU         int64
 	OtherMonthlyCU           int64
@@ -44,7 +45,7 @@ type ResourceCapacitySettings struct {
 }
 
 func defaultResourceCapacitySettings() ResourceCapacitySettings {
-	return ResourceCapacitySettings{AccountMonthlyCU: defaultResourceAccountMonthlyCU,
+	return ResourceCapacitySettings{SeatOnly: true, AccountMonthlyCU: defaultResourceAccountMonthlyCU,
 		OtherMonthlyCU: defaultResourceOtherMonthlyCU, SafetyMonthlyCU: defaultResourceSafetyMonthlyCU,
 		OrdinaryRuleMonthlyCU: minimumOrdinaryRuleMonthlyCU, InteractionRuleMonthlyCU: minimumInteractionRuleMonthlyCU,
 		MarketProjectMonthlyCU: defaultResourceAccountMonthlyCU,
@@ -53,7 +54,22 @@ func defaultResourceCapacitySettings() ResourceCapacitySettings {
 
 func loadResourceCapacitySettings() (ResourceCapacitySettings, error) {
 	result := defaultResourceCapacitySettings()
-	var err error
+	enforceMonthlyCU, err := parseBoolEnv("RESOURCE_ENFORCE_MONTHLY_CU", false)
+	if err != nil {
+		return result, err
+	}
+	result.SeatOnly = !enforceMonthlyCU
+	result.StandardSalesSeatLimit, err = parseIntEnv("RESOURCE_STANDARD_SALES_SEAT_LIMIT", defaultStandardSalesSeatLimit)
+	if err != nil {
+		return result, err
+	}
+	result.ProfessionalSalesSeatLimit, err = parseIntEnv("RESOURCE_PROFESSIONAL_SALES_SEAT_LIMIT", defaultProfessionalSalesSeatLimit)
+	if err != nil {
+		return result, err
+	}
+	if result.SeatOnly {
+		return result, result.validate()
+	}
 	result.Verified, err = parseBoolEnv("RESOURCE_CAPACITY_VERIFIED", false)
 	if err != nil {
 		return result, err
@@ -115,14 +131,6 @@ func loadResourceCapacitySettings() (ResourceCapacitySettings, error) {
 		return result, err
 	}
 	result.MarketProjectCostChainKeys = strings.TrimSpace(os.Getenv("RESOURCE_MARKET_PROJECT_COST_CHAIN_KEYS"))
-	result.StandardSalesSeatLimit, err = parseIntEnv("RESOURCE_STANDARD_SALES_SEAT_LIMIT", defaultStandardSalesSeatLimit)
-	if err != nil {
-		return result, err
-	}
-	result.ProfessionalSalesSeatLimit, err = parseIntEnv("RESOURCE_PROFESSIONAL_SALES_SEAT_LIMIT", defaultProfessionalSalesSeatLimit)
-	if err != nil {
-		return result, err
-	}
 	return result, result.validate()
 }
 
@@ -155,14 +163,17 @@ func (s ResourceCapacitySettings) MarketChainCosts() (map[string]plans.MarketCha
 }
 
 func (s ResourceCapacitySettings) validate() error {
-	if s.AccountMonthlyCU <= 0 {
-		return fmt.Errorf("RESOURCE_ACCOUNT_MONTHLY_CU must be greater than zero")
-	}
 	if s.StandardSalesSeatLimit < 1 {
 		return fmt.Errorf("RESOURCE_STANDARD_SALES_SEAT_LIMIT must be positive")
 	}
 	if s.ProfessionalSalesSeatLimit < 1 {
 		return fmt.Errorf("RESOURCE_PROFESSIONAL_SALES_SEAT_LIMIT must be positive")
+	}
+	if s.SeatOnly {
+		return nil
+	}
+	if s.AccountMonthlyCU <= 0 {
+		return fmt.Errorf("RESOURCE_ACCOUNT_MONTHLY_CU must be greater than zero")
 	}
 	if s.OrdinaryRuleMonthlyCU < minimumOrdinaryRuleMonthlyCU {
 		return fmt.Errorf("RESOURCE_ORDINARY_RULE_MONTHLY_CU must not be below the known per-rule baseline %d", minimumOrdinaryRuleMonthlyCU)

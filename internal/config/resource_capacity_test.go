@@ -8,6 +8,7 @@ import (
 )
 
 var resourceCapacityEnvNames = []string{
+	"RESOURCE_ENFORCE_MONTHLY_CU",
 	"RESOURCE_CAPACITY_VERIFIED", "RESOURCE_ACCOUNT_MONTHLY_CU", "RESOURCE_OTHER_MONTHLY_CU",
 	"RESOURCE_BACKGROUND_MONTHLY_CU", "RESOURCE_SAFETY_MONTHLY_CU", "RESOURCE_ORDINARY_RULE_MONTHLY_CU",
 	"RESOURCE_INTERACTION_RULE_MONTHLY_CU", "RESOURCE_MARKET_PROJECT_MONTHLY_CU",
@@ -42,6 +43,7 @@ func clearResourceCapacityEnvironment(t *testing.T) {
 	for _, name := range resourceCapacityEnvNames {
 		t.Setenv(name, "")
 	}
+	t.Setenv("RESOURCE_ENFORCE_MONTHLY_CU", "true")
 }
 
 func verifiedResourceCapacityEnvironment(t *testing.T) {
@@ -66,10 +68,6 @@ func TestResourceCapacityDefaultsStayUnverified(t *testing.T) {
 	if loaded.Verified || loaded.AccountMonthlyCU != 450_000_000 || loaded.MarketProjectMonthlyCU != loaded.AccountMonthlyCU || loaded.OrdinaryRuleMonthlyCU != 1_437_408 || loaded.InteractionRuleMonthlyCU != 6_696_000 || loaded.OtherMonthlyCU != 150_000_000 || loaded.BackgroundMonthlyCU != 0 || loaded.SafetyMonthlyCU != 60_000_000 || loaded.MarketProjectCostMaxPools != 0 || loaded.MarketProjectCostChainKeys != "" {
 		t.Fatalf("unexpected default policy: %+v", loaded)
 	}
-	direct, err := (Config{}).EffectiveResourceCapacitySettings()
-	if err != nil || direct != loaded {
-		t.Fatalf("omitted direct config bypassed conservative defaults: %+v, %v", direct, err)
-	}
 	if net := loaded.AccountMonthlyCU - loaded.OtherMonthlyCU - loaded.SafetyMonthlyCU; net != 240_000_000 {
 		t.Fatalf("agreed full-month budget before unknown background=%d", net)
 	}
@@ -84,6 +82,7 @@ func TestResourceCapacityDefaultsStayUnverified(t *testing.T) {
 
 func TestSalesSeatLimitsDefaultIndependentlyAndValidateOverrides(t *testing.T) {
 	clearResourceCapacityEnvironment(t)
+	t.Setenv("RESOURCE_ENFORCE_MONTHLY_CU", "")
 	t.Setenv("RESOURCE_STANDARD_SALES_SEAT_LIMIT", "4")
 	settings, err := loadResourceCapacitySettings()
 	if err != nil || settings.StandardSalesSeatLimit != 4 || settings.ProfessionalSalesSeatLimit != 2 {
@@ -101,6 +100,25 @@ func TestSalesSeatLimitsDefaultIndependentlyAndValidateOverrides(t *testing.T) {
 				t.Fatalf("unsafe zero seat override: %v", err)
 			}
 		})
+	}
+}
+
+func TestSeatOnlyDefaultsIgnoreUnusedMonthlyCUSettings(t *testing.T) {
+	clearResourceCapacityEnvironment(t)
+	t.Setenv("RESOURCE_ENFORCE_MONTHLY_CU", "")
+	t.Setenv("RESOURCE_CAPACITY_VERIFIED", "true")
+	t.Setenv("RESOURCE_ACCOUNT_MONTHLY_CU", "0")
+	t.Setenv("RESOURCE_MARKET_CHAIN_MONTHLY_CU", "{old-invalid-model")
+	t.Setenv("STATIC_DIR", testStaticDir(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []Config{cfg, {}} {
+		got, err := candidate.EffectiveResourceCapacitySettings()
+		if err != nil || !got.SeatOnly || got.Verified || got.StandardSalesSeatLimit != 3 || got.ProfessionalSalesSeatLimit != 2 {
+			t.Fatalf("expected seat-only defaults, got %+v, %v", got, err)
+		}
 	}
 }
 

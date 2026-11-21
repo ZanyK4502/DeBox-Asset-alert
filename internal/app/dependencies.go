@@ -28,8 +28,8 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/summary"
 )
 
-// User configuration writes stay closed during maintenance acceptance.
-const userWriteMaintenance = true
+// Enable only when maintenance requires suspending purchases and user configuration writes.
+const userWriteMaintenance = false
 
 // Menu availability is independent from the write gate. Opening the existing
 // menu after acceptance must not reopen purchases or monitoring expansion.

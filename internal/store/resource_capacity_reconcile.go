@@ -9,7 +9,7 @@ import (
 // available. A rejected candidate is rolled back, retaining its old baseline
 // and windows; a paid confirmation or permanent login still succeeds.
 func (s *Store) tryResourceCapacityCandidate(ctx context.Context, tx DBTX, action func(DBTX) error) (bool, error) {
-	if s.resourceCapacity == nil {
+	if !s.resourceCapacity.enforcesMonthlyCU() {
 		return true, action(tx)
 	}
 	_, err := withTxValue(ctx, tx, func(candidate DBTX) (struct{}, error) {

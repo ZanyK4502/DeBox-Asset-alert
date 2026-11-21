@@ -19,6 +19,13 @@ func resourceCapacityPolicy(cfg config.Config, catalog *plans.Catalog) (store.Re
 	if catalog == nil {
 		return store.ResourceCapacityPolicy{}, fmt.Errorf("resource capacity requires the application plan catalog")
 	}
+	if settings.SeatOnly {
+		return store.ResourceCapacityPolicy{
+			SeatOnly:                   true,
+			StandardSalesSeatLimit:     settings.StandardSalesSeatLimit,
+			ProfessionalSalesSeatLimit: settings.ProfessionalSalesSeatLimit,
+		}, nil
+	}
 	costChains, err := settings.MarketProjectCostChains()
 	if err != nil {
 		return store.ResourceCapacityPolicy{}, err

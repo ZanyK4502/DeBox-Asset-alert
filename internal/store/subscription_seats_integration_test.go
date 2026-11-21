@@ -59,11 +59,23 @@ func TestPostgresSubscriptionSeatLimitsHoldEachTierUnderConcurrentOrders(t *test
 }
 
 func TestPostgresSubscriptionSeatReleaseAndRenewalPreserveInFlightOrders(t *testing.T) {
-	db, pool := openIntegrationStore(t)
-	ctx := context.Background()
 	policy := resourceAdmissionBudget(10_000)
 	policy.StandardSalesSeatLimit = 1
 	policy.ProfessionalSalesSeatLimit = 1
+	t.Run("monthly_cu", func(t *testing.T) {
+		testSubscriptionSeatReleaseAndRenewal(t, policy)
+	})
+	t.Run("seats_only", func(t *testing.T) {
+		testSubscriptionSeatReleaseAndRenewal(t, ResourceCapacityPolicy{
+			SeatOnly: true, StandardSalesSeatLimit: 1, ProfessionalSalesSeatLimit: 1,
+		})
+	})
+}
+
+func testSubscriptionSeatReleaseAndRenewal(t *testing.T, policy ResourceCapacityPolicy) {
+	t.Helper()
+	db, pool := openIntegrationStore(t)
+	ctx := context.Background()
 	db.resourceCapacity = &policy
 
 	place := func(owner, plan string) Order {
@@ -134,11 +146,99 @@ func TestPostgresSubscriptionSeatReleaseAndRenewalPreserveInFlightOrders(t *test
 		t.Fatalf("pending order expiry: %d, %v", n, err)
 	}
 	inFlight := place("seat-new-professional", "professional")
+	stale, err := db.UpdateOrderVerification(ctx, professional.ID, UpdateOrderVerificationParams{Status: "confirming"})
+	if err != nil || stale.Status != "expired" {
+		t.Fatalf("expired order reclaimed a released seat: %+v, %v", stale, err)
+	}
 	inFlightHash := claim(inFlight, 3)
 	forceOrderPastExpiry(inFlight)
 	assertBlocked("seat-later-professional", "professional")
 	settled, err := db.FinalizePaidOrder(ctx, inFlight.ID, inFlightHash, 102, 3)
 	if err != nil || settled.Order.Status != "paid" || settled.Subscription == nil {
 		t.Fatalf("confirming past original order expiry failed to settle: %+v, %v", settled, err)
+	}
+}
+
+func TestPostgresSeatOnlySalesAdmitThreeStandardAndTwoProfessional(t *testing.T) {
+	db, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	policy := ResourceCapacityPolicy{SeatOnly: true, StandardSalesSeatLimit: 3, ProfessionalSalesSeatLimit: 2}
+	db.resourceCapacity = &policy
+	other := &Store{db: pool, resourceCapacity: &policy}
+	if _, err := db.CreateOrder(ctx, resourceAdmissionOrderParams("unknown-plan-buyer", "free")); !errors.Is(err, ErrOrderInvalid) {
+		t.Fatalf("unknown sales tier bypassed seat admission: %v", err)
+	}
+
+	type outcome struct {
+		plan string
+		err  error
+	}
+	tiers := []string{"standard", "professional", "standard", "professional", "standard", "professional", "standard"}
+	start := make(chan struct{})
+	results := make(chan outcome, len(tiers))
+	stores := []*Store{db, other}
+	for i, plan := range tiers {
+		go func() {
+			<-start
+			_, err := stores[i%len(stores)].CreateOrder(ctx, resourceAdmissionOrderParams(fmt.Sprintf("seat-only-buyer-%d", i), plan))
+			results <- outcome{plan: plan, err: err}
+		}()
+	}
+	close(start)
+	sold, refused := map[string]int{}, map[string]int{}
+	for range tiers {
+		result := <-results
+		switch {
+		case result.err == nil:
+			sold[result.plan]++
+		case errors.Is(result.err, ErrSubscriptionSeatsReached):
+			refused[result.plan]++
+		default:
+			t.Fatal(result.err)
+		}
+	}
+	if sold["standard"] != 3 || sold["professional"] != 2 || refused["standard"] != 1 || refused["professional"] != 1 {
+		t.Fatalf("wrong mixed sale limits: sold=%v refused=%v", sold, refused)
+	}
+	var pending, holds int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM orders WHERE status='pending'), (SELECT count(*) FROM resource_capacity_holds)`).Scan(&pending, &holds); err != nil || pending != 5 || holds != 0 {
+		t.Fatalf("expected five pending orders and no CU holds: %d/%d, %v", pending, holds, err)
+	}
+}
+
+func TestPostgresSeatOnlySettlesOldHoldAndPreservesPaidMonitoring(t *testing.T) {
+	db, pool := openIntegrationStore(t)
+	ctx := context.Background()
+	legacy := resourceAdmissionBudget(10_000)
+	db.resourceCapacity = &legacy
+	const owner = "seat-only-existing-order"
+	order, err := db.CreateOrder(ctx, resourceAdmissionOrderParams(owner, "professional"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db.resourceCapacity = &ResourceCapacityPolicy{SeatOnly: true, StandardSalesSeatLimit: 3, ProfessionalSalesSeatLimit: 2}
+	hash := fmt.Sprintf("0x%064x", 130)
+	if _, err := db.ClaimOrderTransaction(ctx, order.ID, owner, order.PayerAddress, hash); err != nil {
+		t.Fatal(err)
+	}
+	paid, err := db.FinalizePaidOrder(ctx, order.ID, hash, 120, 3)
+	if err != nil || paid.Subscription == nil || paid.Order.Status != "paid" {
+		t.Fatalf("existing order did not settle: %+v, %v", paid, err)
+	}
+	var linked int64
+	if err := pool.QueryRow(ctx, `SELECT subscription_id FROM resource_capacity_holds WHERE order_id=$1`, order.ID).Scan(&linked); err != nil || linked != paid.Subscription.ID {
+		t.Fatalf("old hold did not follow the paid subscription: %d, %v", linked, err)
+	}
+
+	quota := resourceActivationQuota()
+	interactionQuotaCreateRule(t, ctx, db, owner, 820, "balance_change", quota)
+	if _, err := db.CreateMarketProjectWithinQuota(ctx, resourceActivationProject(owner), quota); err != nil {
+		t.Fatalf("paid monitoring required a monthly budget: %v", err)
+	}
+	second := resourceActivationProject(owner)
+	second.TokenAddress = "0x5555555555555555555555555555555555555555"
+	if _, err := db.CreateMarketProjectWithinQuota(ctx, second, quota); !errors.Is(err, ErrMarketProjectLimitReached) {
+		t.Fatalf("monthly budget removal bypassed the plan project cap: %v", err)
 	}
 }

@@ -27,11 +27,11 @@ const (
 	resourceCapacityMonthDays = 31 // Full cost envelope, not subscription duration or first-month proration.
 )
 
-// Costs are admission commitments, not measured provider bills or latency
-// promises. Verification requires a complete monthly envelope covering the
-// declared pool and chain scope. Unverified costs may remain placeholders or
-// known floors and never authorize a new sale.
+// ResourceCapacityPolicy guards sales seats in either mode. When monthly CU
+// admission is enabled, costs are commitments rather than provider bills and
+// verification requires complete pool and chain coverage.
 type ResourceCapacityPolicy struct {
+	SeatOnly                 bool
 	Verified                 bool
 	AccountMonthlyCU         int64
 	OtherMonthlyCU           int64
@@ -84,8 +84,8 @@ type resourcePlanSnapshot struct {
 	MarketChainMonthlyCU        map[string]plans.MarketChainCUCost `json:"market_chain_monthly_cu,omitempty"`
 }
 
-// An absent option preserves legacy Store adapters. Production explicitly
-// supplies the option even when Verified=false, so new capacity fails closed.
+// An absent option preserves legacy Store adapters. The application supplies a
+// policy so sales and order transitions always share the admission lock.
 func WithResourceCapacityPolicy(policy ResourceCapacityPolicy) OpenOption {
 	return func(settings *openSettings) {
 		copy := policy
@@ -135,6 +135,12 @@ func resourceCapacityChainKeys(keys []string) ([]string, error) {
 func validateResourceCapacityPolicy(policy ResourceCapacityPolicy) error {
 	if policy.StandardSalesSeatLimit < 0 || policy.ProfessionalSalesSeatLimit < 0 {
 		return fmt.Errorf("%w: sales seat limits must not be negative", ErrResourceCapacityState)
+	}
+	if policy.SeatOnly {
+		if policy.StandardSalesSeatLimit == 0 || policy.ProfessionalSalesSeatLimit == 0 {
+			return fmt.Errorf("%w: seat-only admission requires positive sales seat limits", ErrResourceCapacityState)
+		}
+		return nil
 	}
 	for _, value := range []int64{policy.AccountMonthlyCU, policy.OtherMonthlyCU, policy.BackgroundMonthlyCU, policy.SafetyMonthlyCU, policy.OrdinaryRuleMonthlyCU, policy.InteractionRuleMonthlyCU, policy.MarketProjectMonthlyCU} {
 		if value < 0 {
@@ -331,17 +337,24 @@ func (s *Store) beginResourceCapacityCheck(ctx context.Context, tx DBTX, owners 
 		cancel()
 		return ctx, func() {}, fmt.Errorf("%w: lock resource capacity: %w", ErrResourceCapacityState, err)
 	}
-	before, err := s.resourceCapacityStatus(bounded, tx, owner)
-	if err != nil {
-		cancel()
-		return ctx, func() {}, err
+	admission := resourceCapacityAdmission{policy: s.resourceCapacity, owner: owner}
+	if admission.policy.enforcesMonthlyCU() {
+		before, err := s.resourceCapacityStatus(bounded, tx, owner)
+		if err != nil {
+			cancel()
+			return ctx, func() {}, err
+		}
+		admission.beforeMonthlyCU = before.ownerMonthlyCU
 	}
-	admission := resourceCapacityAdmission{policy: s.resourceCapacity, owner: owner, beforeMonthlyCU: before.ownerMonthlyCU}
 	return context.WithValue(bounded, resourceCapacityLockKey{}, admission), cancel, nil
 }
 
+func (p *ResourceCapacityPolicy) enforcesMonthlyCU() bool {
+	return p != nil && !p.SeatOnly
+}
+
 func (s *Store) checkResourceCapacity(ctx context.Context, tx DBTX) error {
-	if s.resourceCapacity == nil {
+	if !s.resourceCapacity.enforcesMonthlyCU() {
 		return nil
 	}
 	admission, ok := ctx.Value(resourceCapacityLockKey{}).(resourceCapacityAdmission)
@@ -383,7 +396,7 @@ func (s *Store) ReadResourceCapacityStatus(ctx context.Context) (ResourceCapacit
 }
 
 func (s *Store) resourceCapacityStatus(ctx context.Context, db DBTX, owner string) (ResourceCapacityStatus, error) {
-	if s.resourceCapacity == nil {
+	if !s.resourceCapacity.enforcesMonthlyCU() {
 		return ResourceCapacityStatus{}, nil
 	}
 	policy := *s.resourceCapacity
@@ -485,7 +498,7 @@ const resourceCapacityAggregateSQL = `WITH
 // Call after inserting the candidate order, before committing its existing
 // transaction. A failed check rolls back both this hold and pending replacement.
 func (s *Store) reserveResourceCapacityOrder(ctx context.Context, tx DBTX, order Order) error {
-	if s.resourceCapacity == nil {
+	if !s.resourceCapacity.enforcesMonthlyCU() {
 		return nil
 	}
 	admission, ok := ctx.Value(resourceCapacityLockKey{}).(resourceCapacityAdmission)

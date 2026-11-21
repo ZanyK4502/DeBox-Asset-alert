@@ -18,7 +18,14 @@ func TestResourceCapacityPolicyUsesActualCatalogQuotas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := resourceCapacityPolicy(config.Config{}, catalog)
+	t.Setenv("RESOURCE_ENFORCE_MONTHLY_CU", "true")
+	t.Setenv("RESOURCE_CAPACITY_VERIFIED", "")
+	t.Setenv("STATIC_DIR", "../../static")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := resourceCapacityPolicy(cfg, catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +43,17 @@ func TestResourceCapacityPolicyUsesActualCatalogQuotas(t *testing.T) {
 	}
 	if policy.Plans[plans.Professional].RuleLimit != 14 || policy.Plans[plans.Professional].InteractionRuleLimit != 2 || policy.Plans[plans.Professional].MarketProjectLimit != 3 || len(policy.Plans) != 3 {
 		t.Fatalf("independent defaults replaced configured quotas: %+v", policy.Plans)
+	}
+}
+
+func TestResourceCapacityPolicyDefaultsToSeatOnly(t *testing.T) {
+	catalog, err := plans.NewCatalog("10", 30, "USDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := resourceCapacityPolicy(config.Config{}, catalog)
+	if err != nil || !policy.SeatOnly || policy.Verified || policy.StandardSalesSeatLimit != 3 || policy.ProfessionalSalesSeatLimit != 2 {
+		t.Fatalf("expected seat-only policy, got %+v, %v", policy, err)
 	}
 }
 

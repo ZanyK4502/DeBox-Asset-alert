@@ -14,7 +14,7 @@ var ErrSubscriptionSeatsReached = errors.New("subscription plan seats are fully 
 // it terminal; a confirming order retains its seat through settlement.
 func (s *Store) checkSubscriptionSeat(ctx context.Context, tx DBTX, owner, planCode string) error {
 	policy := s.resourceCapacity
-	if policy == nil || !policy.Verified || resourceNetMonthlyCU(*policy) == 0 {
+	if policy == nil || !policy.SeatOnly && (!policy.Verified || resourceNetMonthlyCU(*policy) == 0) {
 		return nil
 	}
 	var limit int
@@ -23,6 +23,10 @@ func (s *Store) checkSubscriptionSeat(ctx context.Context, tx DBTX, owner, planC
 		limit = policy.StandardSalesSeatLimit
 	case "professional":
 		limit = policy.ProfessionalSalesSeatLimit
+	default:
+		if policy.SeatOnly {
+			return ErrOrderInvalid
+		}
 	}
 	if limit == 0 {
 		return nil

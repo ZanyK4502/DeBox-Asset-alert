@@ -34,8 +34,8 @@ func TestMarketScopeAppUsesOneCatalogForAdmissionAndCollectorIntersection(t *tes
 		t.Fatal(policies)
 	}
 	capacity, err := resourceCapacityPolicy(cfg, catalog)
-	if err != nil || capacity.Verified || capacity.Plans[plans.Professional].MarketProjectLimit != 5 {
-		t.Fatalf("market expansion lost resource reservation scope or opened unverified capacity: %+v %v", capacity, err)
+	if err != nil || !capacity.SeatOnly || capacity.StandardSalesSeatLimit != 3 || capacity.ProfessionalSalesSeatLimit != 2 {
+		t.Fatalf("market scope changed the independent sales seat limits: %+v %v", capacity, err)
 	}
 	// An explicit subset remains configurable independently of the six-chain default.
 	cfg.MarketChainKeys = []string{"bsc", "base"}
