@@ -51,6 +51,7 @@ func TestPostgresMembershipLifecycleRestoresCompatibleMarketResources(t *testing
 	volumeRule, err := database.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{
 		DeBoxUserID: userID, MarketProjectID: project.ID,
 		RuleType: "market_volume_above", ThresholdValue: "1000",
+		WindowMinutes: pointerOf(int32(60)),
 		ThresholdUnit: "usd", NotificationChatID: userID,
 	}, professional)
 	if err != nil {

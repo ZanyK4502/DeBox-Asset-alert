@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
@@ -351,6 +352,7 @@ func (s *Service) RestoreMarketCombination(
 }
 
 func validateMarketRule(params store.CreateMarketRuleParams) error {
+	params.RuleType = strings.ToLower(strings.TrimSpace(params.RuleType))
 	if strings.TrimSpace(params.DeBoxUserID) == "" || params.MarketProjectID <= 0 {
 		return errors.New("市场规则缺少用户或代币。")
 	}
@@ -394,19 +396,13 @@ func validateMarketRule(params store.CreateMarketRuleParams) error {
 	if units, exists := allowedRuleUnits[params.RuleType]; exists && !units[unit] {
 		return errors.New("该市场规则不支持所选阈值单位。")
 	}
-	windowRequired := map[string]bool{
-		plans.MarketPriceIncrease:        true,
-		plans.MarketPriceDecrease:        true,
-		plans.MarketLiquidityDecrease:    true,
-		plans.MarketVolumeAbove:          true,
-		plans.MarketVolumeSpike:          true,
-		plans.MarketTradeImbalance:       true,
-		plans.MarketConsecutiveLargeBuy:  true,
-		plans.MarketConsecutiveLargeSell: true,
+	if err := marketwindow.Validate(params.RuleType, params.WindowMinutes); err != nil {
+		return fmt.Errorf("该市场规则的统计窗口不受支持：%w", err)
 	}
-	if windowRequired[params.RuleType] &&
-		(params.WindowMinutes == nil || *params.WindowMinutes <= 0) {
-		return errors.New("该市场规则必须设置大于 0 的统计窗口。")
+	if params.RuleType == plans.MarketHolderRankEntered || params.RuleType == plans.MarketHolderRankExited {
+		if _, valid := marketwindow.HolderRank(params.ThresholdValue); !valid {
+			return fmt.Errorf("%w：大户排名必须为 1 到 %d 的整数。", marketwindow.ErrUnsupported, marketwindow.MaxHolderRank)
+		}
 	}
 	if params.DeliveryMode == "stage" {
 		if params.CycleMinutes <= 0 || params.TriggerCountThreshold <= 0 {

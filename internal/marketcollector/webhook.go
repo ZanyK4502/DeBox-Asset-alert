@@ -46,7 +46,16 @@ func (service *Service) AcceptWebhook(
 	now := service.now().UTC()
 	normalizedHeaders := normalizeHeaders(headers)
 	signature := firstHeader(normalizedHeaders, chain.NoditWebhookSignatureHeader)
-	signingKey := service.settings.webhookSigningKey(category)
+	subscription, err := service.repository.GetNoditWebhookSubscriptionByCategory(ctx, "nodit", service.settings.ChainID, category)
+	if err != nil {
+		return WebhookAcceptance{}, err
+	}
+	signingKey, err := service.subscriptionSigningKey(subscription, category)
+	if err != nil {
+		// The provider may deliver before its creation response has been committed.
+		// Leave the delivery retryable without consuming its deduplication key.
+		return WebhookAcceptance{}, err
+	}
 	signatureValid := chain.VerifyWebhookSignature(
 		rawBody,
 		signature,
@@ -85,20 +94,44 @@ func (service *Service) AcceptWebhook(
 		"x-request-id",
 		"x-event-id",
 	)
+	if subscription != nil && subscription.ExternalID != nil && (strings.HasPrefix(subscription.SecretReference, webhookSealedKey) || subscription.SecretReference == webhookRecoveredKey) {
+		if subscription.Status == "error" {
+			return WebhookAcceptance{}, ErrWebhookUnavailable
+		}
+		if acceptanceError == nil {
+			var envelope struct {
+				ID       string      `json:"subscriptionId"`
+				Sequence json.Number `json:"sequenceNumber"`
+				Event    struct {
+					Removed bool `json:"reorgRemoved"`
+				} `json:"event"`
+			}
+			if err := json.Unmarshal(rawBody, &envelope); err != nil || envelope.ID != *subscription.ExternalID {
+				return WebhookAcceptance{}, ErrInvalidWebhook
+			}
+			// Older networks may omit a sequence number. The authenticated
+			// payload stays the same on resend, even if the HTTP ID changes.
+			deliveryID = ""
+			if envelope.Sequence != "" {
+				// Per-attempt HTTP request IDs may change on redelivery. Nodit's
+				// durable identity is the subscription + sequence number.
+				deliveryID = envelope.ID + ":" + envelope.Sequence.String()
+				if envelope.Event.Removed {
+					deliveryID += ":removed"
+				}
+			}
+		}
+	}
 	dedupe := webhookDedupeKey(
 		service.settings.ChainKey,
 		category,
 		deliveryID,
 		rawBody,
 	)
-	subscription, err := service.repository.GetNoditWebhookSubscriptionByCategory(
-		ctx,
-		"nodit",
-		service.settings.ChainID,
-		category,
-	)
-	if err != nil {
-		return WebhookAcceptance{}, err
+	// An unverified request may choose a transport ID equal to a future
+	// genuine delivery. Keep rejected managed receipts outside that namespace.
+	if acceptanceError != nil && subscription != nil && strings.HasPrefix(subscription.SecretReference, "nodit:") {
+		dedupe = "unverified:" + dedupe
 	}
 	var subscriptionID *int64
 	if subscription != nil {

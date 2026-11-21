@@ -8,13 +8,14 @@ import (
 )
 
 type marketRuleDeploymentTarget struct {
-	ID            int64  `db:"id"`
-	ChainKey      string `db:"chain_key"`
-	ChainID       int64  `db:"chain_id"`
-	TokenAddress  string `db:"token_address"`
-	TokenName     string `db:"token_name"`
-	TokenSymbol   string `db:"token_symbol"`
-	TokenDecimals int32  `db:"token_decimals"`
+	ID             int64   `db:"id"`
+	ChainKey       string  `db:"chain_key"`
+	ChainID        int64   `db:"chain_id"`
+	TokenAddress   string  `db:"token_address"`
+	TokenName      string  `db:"token_name"`
+	TokenSymbol    string  `db:"token_symbol"`
+	TokenDecimals  int32   `db:"token_decimals"`
+	TotalSupplyRaw *string `db:"total_supply_raw"`
 }
 
 type marketRulePoolTarget struct {
@@ -38,7 +39,8 @@ func (s *Store) ListMarketRuleTargets(
 			mad.token_address,
 			mad.token_name,
 			mad.token_symbol,
-			mad.token_decimals
+			mad.token_decimals,
+			mad.total_supply_raw::text AS total_supply_raw
 		FROM market_project_deployments mpd
 		JOIN market_asset_deployments mad
 		  ON mad.id = mpd.market_asset_deployment_id
@@ -132,6 +134,7 @@ func deploymentTarget(
 		TokenName:                 deployment.TokenName,
 		TokenSymbol:               deployment.TokenSymbol,
 		TokenDecimals:             deployment.TokenDecimals,
+		TotalSupplyRaw:            deployment.TotalSupplyRaw,
 		State:                     json.RawMessage(`{}`),
 	}
 	if pool != nil {
@@ -184,6 +187,7 @@ func (s *Store) legacyMarketRuleTargets(
 		TokenName:       project.TokenName,
 		TokenSymbol:     project.TokenSymbol,
 		TokenDecimals:   project.TokenDecimals,
+		TotalSupplyRaw:  project.TotalSupplyRaw,
 		State:           rule.State,
 		LastEvaluatedAt: rule.LastEvaluatedAt,
 		LastTriggeredAt: rule.LastTriggeredAt,

@@ -114,7 +114,8 @@ func (service *Service) checkWebhookStatus(ctx context.Context) error {
 	for _, subscription := range subscriptions {
 		status := "pending"
 		checkError := ""
-		if service.settings.webhookSigningKey(subscription.EventCategory) == "" {
+		signingKey, keyErr := service.subscriptionSigningKey(&subscription, subscription.EventCategory)
+		if keyErr != nil || signingKey == "" {
 			status = "error"
 			checkError = "chain-scoped webhook signing key is not configured"
 			driftCount++
@@ -133,7 +134,10 @@ func (service *Service) checkWebhookStatus(ctx context.Context) error {
 				subscription.Configuration,
 				current.Condition,
 			)
-			if (inactive || callbackDrift || conditionDrift) &&
+			// Chain transfer filters and activation are owned by webhook-sync under
+			// one shared lock. Health must not put an old filter back during a sync.
+			managedTransfer := service.settings.ChainKey != "bsc" && subscription.EventCategory == transferWebhookCategory
+			if (inactive || callbackDrift || conditionDrift) && !managedTransfer &&
 				service.settings.WebhookAutoRepair {
 				repairErr := service.repairWebhook(
 					ctx,
@@ -172,6 +176,11 @@ func (service *Service) checkWebhookStatus(ctx context.Context) error {
 			default:
 				status = "active"
 			}
+		}
+		if service.settings.ChainKey != "bsc" && subscription.EventCategory == transferWebhookCategory && service.settings.WebhookAutoRepair {
+			// The provider health row below records observations. Let only the
+			// sync worker update the managed subscription's activation state.
+			continue
 		}
 		if _, err := service.repository.UpdateNoditWebhookSubscriptionCheck(
 			ctx,

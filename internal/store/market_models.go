@@ -3,6 +3,9 @@ package store
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 )
 
 type MarketAsset struct {
@@ -103,6 +106,8 @@ type MarketRuleTarget struct {
 	TokenName                 string          `db:"token_name" json:"token_name"`
 	TokenSymbol               string          `db:"token_symbol" json:"token_symbol"`
 	TokenDecimals             int32           `db:"token_decimals" json:"token_decimals"`
+	TotalSupplyRaw            *string         `db:"total_supply_raw" json:"total_supply_raw,omitempty"`
+	TradePoolIDs              []int64         `db:"trade_pool_ids" json:"trade_pool_ids,omitempty"`
 	State                     json.RawMessage `db:"state" json:"state"`
 	LastEvaluatedAt           *time.Time      `db:"last_evaluated_at" json:"last_evaluated_at,omitempty"`
 	LastTriggeredAt           *time.Time      `db:"last_triggered_at" json:"last_triggered_at,omitempty"`
@@ -141,30 +146,32 @@ type MarketProject struct {
 }
 
 type MarketPool struct {
-	ID                   int64           `db:"id" json:"id"`
-	ChainKey             string          `db:"chain_key" json:"chain_key"`
-	ChainID              int64           `db:"chain_id" json:"chain_id"`
-	Protocol             string          `db:"protocol" json:"protocol"`
-	ProtocolVersion      string          `db:"protocol_version" json:"protocol_version"`
-	PoolKey              string          `db:"pool_key" json:"pool_key"`
-	PoolAddress          *string         `db:"pool_address" json:"pool_address"`
-	FactoryAddress       *string         `db:"factory_address" json:"factory_address"`
-	FactoryVerified      int32           `db:"factory_verified" json:"factory_verified"`
-	Token0Address        string          `db:"token0_address" json:"token0_address"`
-	Token0Symbol         string          `db:"token0_symbol" json:"token0_symbol"`
-	Token0Decimals       int32           `db:"token0_decimals" json:"token0_decimals"`
-	Token1Address        string          `db:"token1_address" json:"token1_address"`
-	Token1Symbol         string          `db:"token1_symbol" json:"token1_symbol"`
-	Token1Decimals       int32           `db:"token1_decimals" json:"token1_decimals"`
-	LiquidityUSD         string          `db:"liquidity_usd" json:"liquidity_usd"`
-	SupportsEventParsing int32           `db:"supports_event_parsing" json:"supports_event_parsing"`
-	ParserAdapter        string          `db:"parser_adapter" json:"parser_adapter"`
-	VerificationStatus   string          `db:"verification_status" json:"verification_status"`
-	Metadata             json.RawMessage `db:"metadata" json:"metadata"`
-	FirstSeenAt          time.Time       `db:"first_seen_at" json:"first_seen_at"`
-	LastSeenAt           time.Time       `db:"last_seen_at" json:"last_seen_at"`
-	CreatedAt            time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt            time.Time       `db:"updated_at" json:"updated_at"`
+	QuoteQuality         marketquality.Quote `db:"quote_quality" json:"quote_quality"`
+	QuoteSnapshotID      *int64              `db:"quote_snapshot_id" json:"quote_snapshot_id,omitempty"`
+	ID                   int64               `db:"id" json:"id"`
+	ChainKey             string              `db:"chain_key" json:"chain_key"`
+	ChainID              int64               `db:"chain_id" json:"chain_id"`
+	Protocol             string              `db:"protocol" json:"protocol"`
+	ProtocolVersion      string              `db:"protocol_version" json:"protocol_version"`
+	PoolKey              string              `db:"pool_key" json:"pool_key"`
+	PoolAddress          *string             `db:"pool_address" json:"pool_address"`
+	FactoryAddress       *string             `db:"factory_address" json:"factory_address"`
+	FactoryVerified      int32               `db:"factory_verified" json:"factory_verified"`
+	Token0Address        string              `db:"token0_address" json:"token0_address"`
+	Token0Symbol         string              `db:"token0_symbol" json:"token0_symbol"`
+	Token0Decimals       int32               `db:"token0_decimals" json:"token0_decimals"`
+	Token1Address        string              `db:"token1_address" json:"token1_address"`
+	Token1Symbol         string              `db:"token1_symbol" json:"token1_symbol"`
+	Token1Decimals       int32               `db:"token1_decimals" json:"token1_decimals"`
+	LiquidityUSD         string              `db:"liquidity_usd" json:"liquidity_usd"`
+	SupportsEventParsing int32               `db:"supports_event_parsing" json:"supports_event_parsing"`
+	ParserAdapter        string              `db:"parser_adapter" json:"parser_adapter"`
+	VerificationStatus   string              `db:"verification_status" json:"verification_status"`
+	Metadata             json.RawMessage     `db:"metadata" json:"metadata"`
+	FirstSeenAt          time.Time           `db:"first_seen_at" json:"first_seen_at"`
+	LastSeenAt           time.Time           `db:"last_seen_at" json:"last_seen_at"`
+	CreatedAt            time.Time           `db:"created_at" json:"created_at"`
+	UpdatedAt            time.Time           `db:"updated_at" json:"updated_at"`
 }
 
 type MarketProjectPool struct {
@@ -187,69 +194,73 @@ type MarketPoolView struct {
 }
 
 type MarketSnapshot struct {
-	ID                      int64           `db:"id" json:"id"`
-	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
-	ChainKey                string          `db:"chain_key" json:"chain_key"`
-	ChainID                 int64           `db:"chain_id" json:"chain_id"`
-	TokenAddress            string          `db:"token_address" json:"token_address"`
-	MarketPoolID            int64           `db:"market_pool_id" json:"market_pool_id"`
-	PriceUSD                *string         `db:"price_usd" json:"price_usd"`
-	LiquidityUSD            *string         `db:"liquidity_usd" json:"liquidity_usd"`
-	FDVUSD                  *string         `db:"fdv_usd" json:"fdv_usd"`
-	MarketCapUSD            *string         `db:"market_cap_usd" json:"market_cap_usd"`
-	Volume5mUSD             *string         `db:"volume_5m_usd" json:"volume_5m_usd"`
-	Volume15mUSD            *string         `db:"volume_15m_usd" json:"volume_15m_usd"`
-	Volume1hUSD             *string         `db:"volume_1h_usd" json:"volume_1h_usd"`
-	Volume6hUSD             *string         `db:"volume_6h_usd" json:"volume_6h_usd"`
-	Volume24hUSD            *string         `db:"volume_24h_usd" json:"volume_24h_usd"`
-	Buys5m                  *int64          `db:"buys_5m" json:"buys_5m"`
-	Sells5m                 *int64          `db:"sells_5m" json:"sells_5m"`
-	Buys1h                  *int64          `db:"buys_1h" json:"buys_1h"`
-	Sells1h                 *int64          `db:"sells_1h" json:"sells_1h"`
-	Buys24h                 *int64          `db:"buys_24h" json:"buys_24h"`
-	Sells24h                *int64          `db:"sells_24h" json:"sells_24h"`
-	Source                  string          `db:"source" json:"source"`
-	SourceTimestamp         *time.Time      `db:"source_timestamp" json:"source_timestamp"`
-	CapturedAt              time.Time       `db:"captured_at" json:"captured_at"`
-	RawPayload              json.RawMessage `db:"raw_payload" json:"raw_payload"`
+	ID                      int64               `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64              `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string              `db:"chain_key" json:"chain_key"`
+	ChainID                 int64               `db:"chain_id" json:"chain_id"`
+	TokenAddress            string              `db:"token_address" json:"token_address"`
+	MarketPoolID            int64               `db:"market_pool_id" json:"market_pool_id"`
+	PriceUSD                *string             `db:"price_usd" json:"price_usd"`
+	LiquidityUSD            *string             `db:"liquidity_usd" json:"liquidity_usd"`
+	FDVUSD                  *string             `db:"fdv_usd" json:"fdv_usd"`
+	MarketCapUSD            *string             `db:"market_cap_usd" json:"market_cap_usd"`
+	Volume5mUSD             *string             `db:"volume_5m_usd" json:"volume_5m_usd"`
+	Volume15mUSD            *string             `db:"volume_15m_usd" json:"volume_15m_usd"`
+	Volume1hUSD             *string             `db:"volume_1h_usd" json:"volume_1h_usd"`
+	Volume6hUSD             *string             `db:"volume_6h_usd" json:"volume_6h_usd"`
+	Volume24hUSD            *string             `db:"volume_24h_usd" json:"volume_24h_usd"`
+	Buys5m                  *int64              `db:"buys_5m" json:"buys_5m"`
+	Sells5m                 *int64              `db:"sells_5m" json:"sells_5m"`
+	Buys1h                  *int64              `db:"buys_1h" json:"buys_1h"`
+	Sells1h                 *int64              `db:"sells_1h" json:"sells_1h"`
+	Buys24h                 *int64              `db:"buys_24h" json:"buys_24h"`
+	Sells24h                *int64              `db:"sells_24h" json:"sells_24h"`
+	Source                  string              `db:"source" json:"source"`
+	SourceTimestamp         *time.Time          `db:"source_timestamp" json:"source_timestamp"`
+	QuoteQuality            marketquality.Quote `db:"quote_quality" json:"quote_quality"`
+	CapturedAt              time.Time           `db:"captured_at" json:"captured_at"`
+	RawPayload              json.RawMessage     `db:"raw_payload" json:"raw_payload"`
 }
 
 type MarketRule struct {
-	ID                    int64           `db:"id" json:"id"`
-	DeBoxUserID           string          `db:"debox_user_id" json:"debox_user_id"`
-	MarketProjectID       int64           `db:"market_project_id" json:"market_project_id"`
-	MarketPoolID          *int64          `db:"market_pool_id" json:"market_pool_id"`
-	RuleType              string          `db:"rule_type" json:"rule_type"`
-	ThresholdValue        string          `db:"threshold_value" json:"threshold_value"`
-	ThresholdUnit         string          `db:"threshold_unit" json:"threshold_unit"`
-	WindowMinutes         *int32          `db:"window_minutes" json:"window_minutes"`
-	Sensitivity           string          `db:"sensitivity" json:"sensitivity"`
-	CooldownSeconds       int32           `db:"cooldown_seconds" json:"cooldown_seconds"`
-	RepeatWhileActive     bool            `db:"repeat_while_active" json:"repeat_while_active"`
-	RuleScope             string          `db:"rule_scope" json:"rule_scope"`
-	DeploymentScope       string          `db:"deployment_scope" json:"deployment_scope"`
-	PoolScope             string          `db:"pool_scope" json:"pool_scope"`
-	CooldownScope         string          `db:"cooldown_scope" json:"cooldown_scope"`
-	DeliveryMode          string          `db:"delivery_mode" json:"delivery_mode"`
-	CycleType             string          `db:"cycle_type" json:"cycle_type"`
-	CycleMinutes          int32           `db:"cycle_minutes" json:"cycle_minutes"`
-	TriggerCountThreshold int64           `db:"trigger_count_threshold" json:"trigger_count_threshold"`
-	NotificationChatID    string          `db:"notification_chat_id" json:"notification_chat_id"`
-	NotificationChatType  string          `db:"notification_chat_type" json:"notification_chat_type"`
-	NotificationLabel     string          `db:"notification_label" json:"notification_label"`
-	NotificationLanguage  string          `db:"notification_language" json:"notification_language"`
-	Enabled               int32           `db:"enabled" json:"enabled"`
-	RunStatus             string          `db:"run_status" json:"run_status"`
-	PauseReason           string          `db:"pause_reason" json:"pause_reason"`
-	AggregationAnchorAt   *time.Time      `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
-	State                 json.RawMessage `db:"state" json:"state"`
-	LastEvaluatedAt       *time.Time      `db:"last_evaluated_at" json:"last_evaluated_at"`
-	LastTriggeredAt       *time.Time      `db:"last_triggered_at" json:"last_triggered_at"`
-	CreatedAt             time.Time       `db:"created_at" json:"created_at"`
-	UpdatedAt             time.Time       `db:"updated_at" json:"updated_at"`
+	RuntimeIssues         []marketwindow.Issue `db:"-" json:"runtime_issues,omitempty"`
+	ID                    int64                `db:"id" json:"id"`
+	DeBoxUserID           string               `db:"debox_user_id" json:"debox_user_id"`
+	MarketProjectID       int64                `db:"market_project_id" json:"market_project_id"`
+	MarketPoolID          *int64               `db:"market_pool_id" json:"market_pool_id"`
+	RuleType              string               `db:"rule_type" json:"rule_type"`
+	ThresholdValue        string               `db:"threshold_value" json:"threshold_value"`
+	ThresholdUnit         string               `db:"threshold_unit" json:"threshold_unit"`
+	WindowMinutes         *int32               `db:"window_minutes" json:"window_minutes"`
+	Sensitivity           string               `db:"sensitivity" json:"sensitivity"`
+	CooldownSeconds       int32                `db:"cooldown_seconds" json:"cooldown_seconds"`
+	RepeatWhileActive     bool                 `db:"repeat_while_active" json:"repeat_while_active"`
+	RuleScope             string               `db:"rule_scope" json:"rule_scope"`
+	DeploymentScope       string               `db:"deployment_scope" json:"deployment_scope"`
+	PoolScope             string               `db:"pool_scope" json:"pool_scope"`
+	CooldownScope         string               `db:"cooldown_scope" json:"cooldown_scope"`
+	DeliveryMode          string               `db:"delivery_mode" json:"delivery_mode"`
+	CycleType             string               `db:"cycle_type" json:"cycle_type"`
+	CycleMinutes          int32                `db:"cycle_minutes" json:"cycle_minutes"`
+	TriggerCountThreshold int64                `db:"trigger_count_threshold" json:"trigger_count_threshold"`
+	NotificationChatID    string               `db:"notification_chat_id" json:"notification_chat_id"`
+	NotificationChatType  string               `db:"notification_chat_type" json:"notification_chat_type"`
+	NotificationLabel     string               `db:"notification_label" json:"notification_label"`
+	NotificationLanguage  string               `db:"notification_language" json:"notification_language"`
+	Enabled               int32                `db:"enabled" json:"enabled"`
+	RunStatus             string               `db:"run_status" json:"run_status"`
+	PauseReason           string               `db:"pause_reason" json:"pause_reason"`
+	AggregationAnchorAt   *time.Time           `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
+	State                 json.RawMessage      `db:"state" json:"state"`
+	LastEvaluatedAt       *time.Time           `db:"last_evaluated_at" json:"last_evaluated_at"`
+	LastTriggeredAt       *time.Time           `db:"last_triggered_at" json:"last_triggered_at"`
+	CreatedAt             time.Time            `db:"created_at" json:"created_at"`
+	UpdatedAt             time.Time            `db:"updated_at" json:"updated_at"`
 }
 
 type MarketEvent struct {
+	TradeReadyID            int64           `db:"trade_ready_id" json:"trade_ready_id,omitempty"`
+	TradePoolIDs            []int64         `db:"trade_pool_ids" json:"trade_pool_ids,omitempty"`
 	ID                      int64           `db:"id" json:"id"`
 	MarketPoolID            *int64          `db:"market_pool_id" json:"market_pool_id"`
 	MarketAssetDeploymentID *int64          `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
@@ -291,6 +302,7 @@ type MarketEventFilter struct {
 }
 
 type MarketRuleEventHistory struct {
+	TradePoolIDs           []int64    `db:"trade_pool_ids" json:"trade_pool_ids,omitempty"`
 	ID                     int64      `db:"id" json:"id"`
 	MarketRuleID           int64      `db:"market_rule_id" json:"market_rule_id"`
 	MarketEventID          int64      `db:"market_event_id" json:"market_event_id"`
@@ -301,6 +313,7 @@ type MarketRuleEventHistory struct {
 	CurrentValue           *string    `db:"current_value" json:"current_value"`
 	Note                   string     `db:"note" json:"note"`
 	NotificationStatus     string     `db:"notification_status" json:"notification_status"`
+	DeliveryOutcome        string     `db:"delivery_outcome" json:"delivery_outcome"`
 	NotificationError      string     `db:"notification_error" json:"notification_error"`
 	NotificationSentAt     *time.Time `db:"notification_sent_at" json:"notification_sent_at"`
 	CreatedAt              time.Time  `db:"created_at" json:"created_at"`
@@ -330,6 +343,7 @@ type MarketRuleEvent struct {
 	Details                 json.RawMessage `db:"details" json:"details"`
 	NotificationMessageID   *string         `db:"notification_message_id" json:"notification_message_id"`
 	NotificationStatus      string          `db:"notification_status" json:"notification_status"`
+	DeliveryOutcome         string          `db:"delivery_outcome" json:"delivery_outcome"`
 	NotificationError       string          `db:"notification_error" json:"notification_error"`
 	NotificationAttempts    int32           `db:"notification_attempts" json:"notification_attempts"`
 	NotificationAttemptedAt *time.Time      `db:"notification_attempted_at" json:"notification_attempted_at"`
@@ -346,6 +360,7 @@ type MarketStageWindow struct {
 	EndsAt                  time.Time  `db:"ends_at" json:"ends_at"`
 	TriggerCount            int64      `db:"trigger_count" json:"trigger_count"`
 	NotificationStatus      string     `db:"notification_status" json:"notification_status"`
+	DeliveryOutcome         string     `db:"delivery_outcome" json:"delivery_outcome"`
 	NotificationMessageID   *string    `db:"notification_message_id" json:"notification_message_id"`
 	NotificationError       string     `db:"notification_error" json:"notification_error"`
 	NotificationAttempts    int32      `db:"notification_attempts" json:"notification_attempts"`
@@ -394,6 +409,7 @@ type MarketCombinationWindow struct {
 	EndsAt                  time.Time  `db:"ends_at" json:"ends_at"`
 	TotalTriggerCount       int64      `db:"total_trigger_count" json:"total_trigger_count"`
 	NotificationStatus      string     `db:"notification_status" json:"notification_status"`
+	DeliveryOutcome         string     `db:"delivery_outcome" json:"delivery_outcome"`
 	NotificationMessageID   *string    `db:"notification_message_id" json:"notification_message_id"`
 	NotificationError       string     `db:"notification_error" json:"notification_error"`
 	NotificationAttempts    int32      `db:"notification_attempts" json:"notification_attempts"`
@@ -485,24 +501,50 @@ type MarketHolder struct {
 
 type MarketHolderView struct {
 	MarketHolder
-	PreviousBalance *string `db:"previous_balance" json:"previous_balance,omitempty"`
-	PreviousRank    *int32  `db:"previous_rank" json:"previous_rank,omitempty"`
-	ChangeType      string  `db:"change_type" json:"change_type"`
+	BalanceObserved   *bool      `db:"balance_observed" json:"balance_observed,omitempty"`
+	BalanceObservedAt *time.Time `db:"balance_observed_at" json:"balance_observed_at,omitempty"`
+	PreviousBalance   *string    `db:"previous_balance" json:"previous_balance,omitempty"`
+	PreviousRank      *int32     `db:"previous_rank" json:"previous_rank,omitempty"`
+	ChangeType        string     `db:"change_type" json:"change_type"`
+}
+
+// MarketHolderRank is one member of a complete sampled ranking. It does not
+// opt an address into the independent legacy Top20 balance-change tracker.
+type MarketHolderRank struct {
+	HolderAddress string `json:"holder_address"`
+	BalanceRaw    string `json:"balance_raw"`
+	Rank          int32  `json:"rank"`
+}
+
+type MarketHolderRefreshState struct {
+	ChainID         int64              `db:"chain_id" json:"chain_id"`
+	ChainKey        string             `db:"chain_key" json:"chain_key"`
+	TokenAddress    string             `db:"token_address" json:"token_address"`
+	LastSuccessAt   *time.Time         `db:"last_success_at" json:"last_success_at"`
+	LastAttemptAt   time.Time          `db:"last_attempt_at" json:"last_attempt_at"`
+	CoveredTopN     int32              `db:"covered_top_n" json:"covered_top_n"`
+	SourceItemCount int32              `db:"source_item_count" json:"source_item_count"`
+	RankBaseline    []MarketHolderRank `db:"rank_baseline" json:"rank_baseline"`
+	ExclusionHash   string             `db:"exclusion_hash" json:"exclusion_hash"`
+	Status          string             `db:"status" json:"status"`
 }
 
 type MarketHolderSnapshot struct {
-	ID                      int64     `db:"id" json:"id"`
-	MarketAssetDeploymentID *int64    `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
-	ChainKey                string    `db:"chain_key" json:"chain_key"`
-	ChainID                 int64     `db:"chain_id" json:"chain_id"`
-	TokenAddress            string    `db:"token_address" json:"token_address"`
-	HolderAddress           string    `db:"holder_address" json:"holder_address"`
-	BalanceRaw              string    `db:"balance_raw" json:"balance_raw"`
-	Balance                 string    `db:"balance" json:"balance"`
-	SupplyPercent           *string   `db:"supply_percent" json:"supply_percent"`
-	Rank                    *int32    `db:"rank" json:"rank"`
-	Source                  string    `db:"source" json:"source"`
-	CapturedAt              time.Time `db:"captured_at" json:"captured_at"`
+	ManagedObservation      bool       `db:"managed_observation" json:"managed_observation"`
+	BalanceObserved         bool       `db:"balance_observed" json:"balance_observed"`
+	BalanceObservedAt       *time.Time `db:"balance_observed_at" json:"balance_observed_at,omitempty"`
+	ID                      int64      `db:"id" json:"id"`
+	MarketAssetDeploymentID *int64     `db:"market_asset_deployment_id" json:"market_asset_deployment_id,omitempty"`
+	ChainKey                string     `db:"chain_key" json:"chain_key"`
+	ChainID                 int64      `db:"chain_id" json:"chain_id"`
+	TokenAddress            string     `db:"token_address" json:"token_address"`
+	HolderAddress           string     `db:"holder_address" json:"holder_address"`
+	BalanceRaw              string     `db:"balance_raw" json:"balance_raw"`
+	Balance                 string     `db:"balance" json:"balance"`
+	SupplyPercent           *string    `db:"supply_percent" json:"supply_percent"`
+	Rank                    *int32     `db:"rank" json:"rank"`
+	Source                  string     `db:"source" json:"source"`
+	CapturedAt              time.Time  `db:"captured_at" json:"captured_at"`
 }
 
 type MarketAddressLabel struct {

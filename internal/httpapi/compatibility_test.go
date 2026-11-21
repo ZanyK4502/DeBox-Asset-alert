@@ -79,7 +79,7 @@ func TestRemovedComplimentaryRouteIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestPythonBaselinePublicCatalogContract(t *testing.T) {
+func TestPublicCatalogPreservesCapabilitiesWithApprovedQuota(t *testing.T) {
 	handler := New(testConfig(t))
 
 	var planPayload struct {
@@ -102,8 +102,8 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				"balance_threshold", "balance_threshold_high",
 			},
 			AllowedRules: ruleTypes[:5], PrivateNotification: true,
-			MarketQuery: false, MarketPoolMode: "none", FourMemeMode: "none",
-			Description: "1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。",
+			MarketQuery: false, MarketPoolMode: "none", FourMemeMode: "none", AllowedMarketChainKeys: []string{},
+			Description: "1 个钱包、1 条共享规则，每日最多 5 次提醒，仅支持私聊通知。",
 		},
 		{
 			Code: "standard", Name: "标准版", Price: "10", Asset: "USDT", Days: 30,
@@ -112,17 +112,17 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				{Code: "quarterly", Price: "14", Days: 90},
 				{Code: "annual", Price: "50", Days: 365},
 			},
-			WalletLimit: 3, RuleLimit: 10, GroupLimit: 0,
+			WalletLimit: 3, RuleLimit: 3, GroupLimit: 0,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",
 				"balance_threshold", "balance_threshold_high", "approval_change",
 			},
-			MarketProjectLimit: 1,
+			MarketProjectLimit: 1, MarketPoolLimit: 1, AllowedMarketChainKeys: []string{"bsc", "ethereum", "base", "polygon", "arbitrum", "optimism"},
 			AllowedMarketRules: expectedStandardMarketRuleTypes(),
 			AllowedRules:       ruleTypes[:6], PrivateNotification: true, DailySummary: true,
 			SummaryTargets: []string{"private"},
 			MarketQuery:    true, MarketPoolMode: "main", FourMemeMode: "market",
-			Description: "适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
+			Description: "适合个人监控：3 个钱包、3 条共享规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
 		},
 		{
 			Code: "professional", Name: "专业版", Price: "15", Asset: "USDT", Days: 30,
@@ -131,19 +131,19 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 				{Code: "quarterly", Price: "42", Days: 90},
 				{Code: "annual", Price: "150", Days: 365},
 			},
-			WalletLimit: 20, RuleLimit: 100, GroupLimit: 5,
+			WalletLimit: 20, RuleLimit: 10, InteractionRuleLimit: 1, GroupLimit: 5,
 			AllowedRuleTypes: []string{
 				"balance_change", "incoming", "outgoing",
 				"balance_threshold", "balance_threshold_high",
 				"approval_change", "address_interaction",
 			},
-			MarketProjectLimit: 5,
+			MarketProjectLimit: 5, MarketPoolLimit: 5, AllowedMarketChainKeys: []string{"bsc", "ethereum", "base", "polygon", "arbitrum", "optimism"},
 			AllowedMarketRules: expectedProfessionalMarketRuleTypes(),
 			AllowedRules:       ruleTypes, PrivateNotification: true, GroupNotification: true,
 			DailySummary: true, SummaryTargets: []string{"private", "group"},
 			MarketQuery: true, MarketPoolMode: "multiple", FourMemeMode: "full",
 			MarketCombination: true,
-			Description:       "适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
+			Description:       "适合项目方和社群：20 个地址、10 条共享规则，其中指定地址交互最多 1 条，支持 5 个群通知，以及本人私聊与多群每日摘要。",
 		},
 	}
 	if !reflect.DeepEqual(planPayload.RuleTypes, ruleTypes) {
@@ -165,6 +165,22 @@ func TestPythonBaselinePublicCatalogContract(t *testing.T) {
 	}
 	if !reflect.DeepEqual(chains, expectedChains) {
 		t.Fatalf("chain contract changed:\ngot:  %#v\nwant: %#v", chains, expectedChains)
+	}
+}
+
+func TestPublicCatalogUsesConfiguredQuotaWhenConstructedWithoutDependencies(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.QuotaLimits = plans.QuotaLimits{
+		FreeRuleLimit: 1, StandardRuleLimit: 4, ProfessionalRuleLimit: 14,
+		ProfessionalInteractionRuleLimit: 2, ProfessionalMarketProjectLimit: 3,
+	}
+	var payload struct {
+		Plans []plans.Plan `json:"plans"`
+	}
+	getJSON(t, New(cfg), "/api/plans", &payload)
+	if len(payload.Plans) != 3 || payload.Plans[1].RuleLimit != 4 || payload.Plans[2].RuleLimit != 14 ||
+		payload.Plans[2].InteractionRuleLimit != 2 || payload.Plans[2].MarketProjectLimit != 3 {
+		t.Fatalf("configured quotas were lost in the API catalog: %+v", payload.Plans)
 	}
 }
 

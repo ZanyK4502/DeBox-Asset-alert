@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
@@ -211,6 +212,9 @@ func (s *Service) CreateWatchRule(
 	targetAddress := optionalString(input.TargetAddress)
 	var lastValue *string
 	var baseline any
+	var balanceReadSource string
+	var balanceReadDecimals *int
+	var balanceReadObservedAt *time.Time
 
 	switch input.RuleType {
 	case plans.ApprovalChange:
@@ -246,6 +250,7 @@ func (s *Service) CreateWatchRule(
 		lastValue = stringPointer(value.Cursor)
 		baseline = value
 	default:
+		readAt := time.Now().UTC()
 		value, err := s.deps.Chain.Balance(
 			ctx,
 			walletAddress,
@@ -253,6 +258,10 @@ func (s *Service) CreateWatchRule(
 			profile.Key,
 			s.deps.DefaultChainKey,
 		)
+		if err != nil {
+			return WatchRuleCreation{}, err
+		}
+		balanceReadSource, balanceReadDecimals, balanceReadObservedAt, err = walletBalanceCreationEvidence(value, walletAddress, input.TokenAddress, profile.Key, readAt)
 		if err != nil {
 			return WatchRuleCreation{}, err
 		}
@@ -284,6 +293,9 @@ func (s *Service) CreateWatchRule(
 		CycleMinutes:          input.CycleMinutes,
 		TriggerCountThreshold: input.TriggerCountThreshold,
 		LastValue:             lastValue,
+		BalanceReadSource:     balanceReadSource,
+		BalanceReadDecimals:   balanceReadDecimals,
+		BalanceReadObservedAt: balanceReadObservedAt,
 	})
 	if err != nil {
 		return WatchRuleCreation{}, err

@@ -25,12 +25,16 @@ type HTTPDoer interface {
 }
 
 type Client struct {
-	apiKey     string
-	baseURL    string
-	rpcBaseURL string
-	httpClient HTTPDoer
-	usage      func(NoditUsage)
-	cuLimiter  *cuRateLimiter
+	apiKey            string
+	baseURL           string
+	rpcBaseURL        string
+	httpClient        HTTPDoer
+	usage             func(NoditUsage)
+	cuLimiter         *cuRateLimiter
+	holderCUPerSecond int64
+	// Only collector read clones set a bound; payment/data clients retain their
+	// existing transport contract.
+	maxResponseBytes int64
 }
 
 type ClientOption func(*Client)
@@ -67,6 +71,13 @@ func WithCURateLimit(unitsPerSecond int64) ClientOption {
 	}
 }
 
+// WithHolderCURateLimit spaces holder requests within the shared Nodit limit.
+func WithHolderCURateLimit(unitsPerSecond int64) ClientOption {
+	return func(target *Client) {
+		target.holderCUPerSecond = unitsPerSecond
+	}
+}
+
 func NewClient(apiKey, baseURL string, options ...ClientOption) (*Client, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("NODIT_API_KEY is required")
@@ -93,31 +104,13 @@ func (c *Client) post(ctx context.Context, profile Profile, path string, payload
 		profile.Network,
 		strings.TrimLeft(path, "/"),
 	)
-	units := web3DataCU(path)
-	if err := c.waitForCU(ctx, units); err != nil {
-		return nil, err
-	}
-	c.observeUsage("web3_data", path, units)
-	return c.postObject(ctx, endpoint, payload, "Nodit API")
+	return c.postObjectWithUsage(ctx, endpoint, payload, "Nodit API", NoditUsage{
+		Product: "web3_data", Operation: path, CU: web3DataCU(path),
+	})
 }
 
 func (c *Client) rpc(ctx context.Context, profile Profile, method string, params []any) (any, error) {
-	endpoint := c.rpcBaseURL
-	if endpoint == "" {
-		endpoint = fmt.Sprintf("https://%s-%s.nodit.io", profile.Chain, profile.Network)
-	}
-	payload := map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  method,
-		"params":  params,
-	}
-	units := evmNodeCU(method)
-	if err := c.waitForCU(ctx, units); err != nil {
-		return nil, err
-	}
-	c.observeUsage("evm_node", method, units)
-	data, err := c.postObject(ctx, endpoint, payload, "Nodit Node API")
+	data, err := c.rpcResponse(ctx, profile, method, params)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +123,22 @@ func (c *Client) rpc(ctx context.Context, profile Profile, method string, params
 		return nil, fmt.Errorf("%v", rpcError)
 	}
 	return data["result"], nil
+}
+
+func (c *Client) rpcResponse(ctx context.Context, profile Profile, method string, params []any) (map[string]any, error) {
+	endpoint := c.rpcBaseURL
+	if endpoint == "" {
+		endpoint = fmt.Sprintf("https://%s-%s.nodit.io", profile.Chain, profile.Network)
+	}
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+		"params":  params,
+	}
+	return c.postObjectWithUsage(ctx, endpoint, payload, "Nodit Node API", NoditUsage{
+		Product: "evm_node", Operation: method, CU: evmNodeCU(method),
+	})
 }
 
 func (c *Client) observeUsage(product, operation string, units int64) {
@@ -154,6 +163,8 @@ func evmNodeCU(method string) int64 {
 		return 32
 	case "eth_getBlockByNumber":
 		return 31
+	case "eth_getBlockReceipts":
+		return 28
 	case "eth_getLogs":
 		return 66
 	case "eth_getTransactionByHash":
@@ -191,6 +202,19 @@ func (c *Client) postObject(
 	payload any,
 	serviceName string,
 ) (map[string]any, error) {
+	return c.postObjectWithUsage(ctx, endpoint, payload, serviceName, NoditUsage{})
+}
+
+// Reserve and record each physical attempt, including retries. A logical call
+// can make several HTTP requests; recording only once understates its budget.
+// This estimates attempts, not a provider billing acknowledgement.
+func (c *Client) postObjectWithUsage(
+	ctx context.Context,
+	endpoint string,
+	payload any,
+	serviceName string,
+	usage NoditUsage,
+) (map[string]any, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("encode %s request: %w", serviceName, err)
@@ -208,11 +232,18 @@ func (c *Client) postObject(
 		request.Header.Set("X-API-KEY", c.apiKey)
 		request.Header.Set("Content-Type", "application/json")
 
+		if err := c.waitForCU(ctx, usage); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		c.observeUsage(usage.Product, usage.Operation, usage.CU)
 		response, requestErr := c.httpClient.Do(request)
 		if requestErr != nil {
 			return nil, fmt.Errorf("%s request: %w", serviceName, requestErr)
 		}
-		if response.StatusCode >= http.StatusBadRequest {
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 			detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyLength))
 			_ = response.Body.Close()
 			responseErr := fmt.Errorf(
@@ -221,6 +252,9 @@ func (c *Client) postObject(
 				response.StatusCode,
 				string(detail),
 			)
+			if response.StatusCode == http.StatusTooManyRequests && c.cuLimiter != nil {
+				c.cuLimiter.deferFor(retryDelay(response.Header.Get("Retry-After"), attempt, time.Now()))
+			}
 			if attempt+1 >= maxHTTPAttempts || !retryableHTTPStatus(response.StatusCode) {
 				return nil, responseErr
 			}
@@ -230,9 +264,14 @@ func (c *Client) postObject(
 			continue
 		}
 		var data map[string]any
-		decoder := json.NewDecoder(response.Body)
-		decoder.UseNumber()
-		decodeErr := decoder.Decode(&data)
+		var decodeErr error
+		if c.maxResponseBytes > 0 {
+			data, decodeErr = decodeBoundedRPCObject(response.Body, c.maxResponseBytes)
+		} else {
+			decoder := json.NewDecoder(response.Body)
+			decoder.UseNumber()
+			decodeErr = decoder.Decode(&data)
+		}
 		_ = response.Body.Close()
 		if decodeErr != nil {
 			return nil, fmt.Errorf("unexpected %s response: %w", serviceName, decodeErr)
@@ -253,10 +292,7 @@ func retryableHTTPStatus(status int) bool {
 }
 
 func waitRetry(ctx context.Context, retryAfter string, attempt int) error {
-	delay := initialRetryDelay << attempt
-	if seconds, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && seconds > 0 {
-		delay = time.Duration(seconds) * time.Second
-	}
+	delay := retryDelay(retryAfter, attempt, time.Now())
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -265,6 +301,22 @@ func waitRetry(ctx context.Context, retryAfter string, attempt int) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func retryDelay(retryAfter string, attempt int, now time.Time) time.Duration {
+	delay := initialRetryDelay << attempt
+	value := strings.TrimSpace(retryAfter)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
+		const maxSeconds = int64((1<<63 - 1) / int64(time.Second))
+		if seconds > maxSeconds {
+			return time.Duration(1<<63 - 1)
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return delay
 }
 
 type BalanceResult struct {
@@ -276,6 +328,8 @@ type BalanceResult struct {
 	ChainName     string  `json:"chain_name"`
 	WalletAddress string  `json:"wallet_address"`
 	TokenAddress  *string `json:"token_address"`
+	ReadSource    string  `json:"read_source,omitempty"`
+	ReadDecimals  *int    `json:"read_decimals,omitempty"`
 }
 
 func (c *Client) NativeBalance(ctx context.Context, address, chainKey, fallback string) (BalanceResult, error) {
@@ -541,13 +595,15 @@ func (c *Client) TransactionsByAccount(
 }
 
 type InteractionResult struct {
-	Cursor        string         `json:"cursor"`
-	Matched       bool           `json:"matched"`
-	Transaction   map[string]any `json:"transaction"`
-	ChainKey      string         `json:"chain_key"`
-	ChainID       int64          `json:"chain_id"`
-	WalletAddress string         `json:"wallet_address"`
-	TargetAddress string         `json:"target_address"`
+	SourceOccurredAt *time.Time     `json:"source_occurred_at,omitempty"`
+	SourceTimeBasis  string         `json:"source_time_basis,omitempty"`
+	Cursor           string         `json:"cursor"`
+	Matched          bool           `json:"matched"`
+	Transaction      map[string]any `json:"transaction"`
+	ChainKey         string         `json:"chain_key"`
+	ChainID          int64          `json:"chain_id"`
+	WalletAddress    string         `json:"wallet_address"`
+	TargetAddress    string         `json:"target_address"`
 }
 
 func (c *Client) LatestInteraction(
@@ -570,24 +626,7 @@ func (c *Client) LatestInteraction(
 	if err != nil {
 		return InteractionResult{}, err
 	}
-	for _, transaction := range transactions {
-		if containsAddress(transaction, target) {
-			cursor := firstString(transaction, "transactionHash", "hash", "txHash", "id")
-			if cursor == "" {
-				cursor = "matched"
-			}
-			return InteractionResult{
-				Cursor: cursor, Matched: true, Transaction: transaction,
-				ChainKey: profile.Key, ChainID: profile.ChainID,
-				WalletAddress: wallet, TargetAddress: target,
-			}, nil
-		}
-	}
-	return InteractionResult{
-		Cursor: "none", Matched: false, Transaction: nil,
-		ChainKey: profile.Key, ChainID: profile.ChainID,
-		WalletAddress: wallet, TargetAddress: target,
-	}, nil
+	return MatchInteractionTransactions(transactions, wallet, target, profile.Key, fallback)
 }
 
 func firstTokenItem(data map[string]any, tokenAddress string) (map[string]any, error) {

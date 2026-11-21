@@ -382,6 +382,7 @@ func createWizardIntegrationPool(
 	value, err := database.UpsertMarketPool(
 		context.Background(),
 		UpsertMarketPoolParams{
+			Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 			ChainKey: chainKey, ChainID: chainID,
 			Protocol: "integration", ProtocolVersion: "v2",
 			PoolKey: poolAddress, PoolAddress: &poolAddress,

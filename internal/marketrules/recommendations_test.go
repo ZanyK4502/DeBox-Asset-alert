@@ -2,17 +2,20 @@ package marketrules
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
 func TestRecommendThresholdsUsesMarketDepthAndPresetOrder(t *testing.T) {
-	liquidity, volume := "100000", "200000"
+	liquidity, volume, price := "100000", "200000", "1"
 	trade100, trade1000 := "100", "1000"
-	values := RecommendThresholds(
-		store.MarketSnapshot{LiquidityUSD: &liquidity, Volume24hUSD: &volume},
-		[]store.MarketEvent{{USDValue: &trade100}, {USDValue: &trade1000}},
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	values := RecommendThresholdsAt(
+		store.MarketSnapshot{PriceUSD: &price, LiquidityUSD: &liquidity, Volume24hUSD: &volume, CapturedAt: now, QuoteQuality: liveQuoteFixture(now)},
+		[]store.MarketEvent{withValuationProofFixture(store.MarketEvent{USDValue: &trade100, Confirmed: 1}, now),
+			withValuationProofFixture(store.MarketEvent{USDValue: &trade1000, Confirmed: 1}, now)}, now,
 	)
 	if len(values) != 63 {
 		t.Fatalf("recommendations = %d, want 63", len(values))

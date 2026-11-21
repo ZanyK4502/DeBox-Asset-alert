@@ -30,6 +30,9 @@ func TestCleanupAggregationHistoryDeletesExpiredRecordsInTransaction(t *testing.
 	mock.ExpectExec("DELETE FROM notification_detail_snapshots").
 		WithArgs(NotificationDetailCleanupGraceDays).
 		WillReturnResult(pgxmock.NewResult("DELETE", 4))
+	for _, table := range []string{"wallet_notification_outbox", "wallet_notification_unknown_resolutions", "wallet_trigger_recovery_decisions", "daily_summary_dispatches", "daily_summary_deliveries", "daily_summary_legacy_reviews"} {
+		mock.ExpectExec("DELETE FROM " + table).WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	}
 	mock.ExpectCommit()
 
 	result, err := newWithDB(mock).CleanupAggregationHistory(context.Background())

@@ -2,14 +2,12 @@ package monitor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
-	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -39,6 +37,12 @@ var ruleTypeLabels = map[string]map[string]string{
 }
 
 type Repository interface {
+	DeferWalletObservation(context.Context, int64, time.Duration) error
+	RecordWalletObservation(context.Context, store.RecordWalletObservationParams) (store.WalletObservationResult, error)
+	ClaimWalletNotifications(context.Context, int64, int) ([]store.WalletNotificationOutbox, error)
+	StartWalletNotificationAttempt(context.Context, int64, string) (store.WalletNotificationOutbox, error)
+	WalletNotificationRule(context.Context, store.WalletNotificationOutbox) (store.WatchRule, bool, error)
+	FinishWalletNotification(context.Context, store.FinishWalletNotificationParams) (store.WalletNotificationOutbox, error)
 	ApplyExpiredEntitlementFallbacks(context.Context) (int64, error)
 	ListEnabledWatchRules(context.Context, int) ([]store.WatchRule, error)
 	CleanupAggregationHistory(context.Context) (store.AggregationCleanupResult, error)
@@ -120,51 +124,160 @@ func (e *Executor) ApplyExpiredEntitlementFallbacks(ctx context.Context) (int64,
 }
 
 type RuleResult struct {
-	RuleID           int64                             `json:"rule_id"`
-	Status           string                            `json:"status"`
-	Reason           string                            `json:"reason,omitempty"`
-	Plan             string                            `json:"plan,omitempty"`
-	RuleType         string                            `json:"rule_type,omitempty"`
-	Limit            int64                             `json:"limit,omitempty"`
-	Used             int64                             `json:"used,omitempty"`
-	Value            string                            `json:"value,omitempty"`
-	Event            *store.AlertEvent                 `json:"event,omitempty"`
-	Aggregate        *store.AggregateNotification      `json:"aggregate,omitempty"`
-	TriggerCount     int64                             `json:"trigger_count,omitempty"`
-	TriggerThreshold int64                             `json:"trigger_threshold,omitempty"`
-	CombinationID    int64                             `json:"combination_id,omitempty"`
-	MemberProgress   []store.CombinationMemberProgress `json:"member_progress,omitempty"`
-	Error            string                            `json:"error,omitempty"`
+	observationStarted bool
+	OutboxID           int64                             `json:"outbox_id,omitempty"`
+	RuleID             int64                             `json:"rule_id"`
+	Status             string                            `json:"status"`
+	Reason             string                            `json:"reason,omitempty"`
+	Plan               string                            `json:"plan,omitempty"`
+	RuleType           string                            `json:"rule_type,omitempty"`
+	Limit              int64                             `json:"limit,omitempty"`
+	Used               int64                             `json:"used,omitempty"`
+	Value              string                            `json:"value,omitempty"`
+	Event              *store.AlertEvent                 `json:"event,omitempty"`
+	Aggregate          *store.AggregateNotification      `json:"aggregate,omitempty"`
+	TriggerCount       int64                             `json:"trigger_count,omitempty"`
+	TriggerThreshold   int64                             `json:"trigger_threshold,omitempty"`
+	CombinationID      int64                             `json:"combination_id,omitempty"`
+	MemberProgress     []store.CombinationMemberProgress `json:"member_progress,omitempty"`
+	Error              string                            `json:"error,omitempty"`
+	ReadObservedAt     *time.Time                        `json:"read_observed_at,omitempty"`
 }
 
 type CycleResult struct {
-	Checked int          `json:"checked"`
-	Alerted int          `json:"alerted"`
-	Errors  []RuleResult `json:"errors"`
-	Results []RuleResult `json:"results"`
+	Selected            int `json:"selected"`
+	lastAttempted       *store.WalletObservationCursor
+	through             *store.WalletObservationCursor
+	Checked             int               `json:"checked"`
+	Alerted             int               `json:"alerted"`
+	Queued              int               `json:"queued"`
+	DeliveriesAttempted int               `json:"deliveries_attempted"`
+	DeliveriesSent      int               `json:"deliveries_sent"`
+	DeliveriesFailed    int               `json:"deliveries_failed"`
+	Errors              []RuleResult      `json:"errors"`
+	Results             []RuleResult      `json:"results"`
+	Reads               WalletReadMetrics `json:"reads"`
+	HasMoreDue          bool              `json:"has_more_due"`
+	NextObservationAt   *time.Time        `json:"next_observation_at,omitempty"`
+	NextDeliveryAt      *time.Time        `json:"next_delivery_at,omitempty"`
 }
 
 func (e *Executor) CheckAll(ctx context.Context, limit int) (CycleResult, error) {
+	return e.checkAllWithDeliveryBudget(ctx, limit, 5*time.Second)
+}
+
+func (e *Executor) checkAllWithDeliveryBudget(ctx context.Context, limit int, budget time.Duration) (CycleResult, error) {
 	rules, err := e.deps.Repository.ListEnabledWatchRules(ctx, limit)
 	if err != nil {
 		return CycleResult{}, err
 	}
-	result := CycleResult{
-		Checked: len(rules),
-		Errors:  make([]RuleResult, 0),
-		Results: make([]RuleResult, 0, len(rules)),
+	return e.checkWalletRules(ctx, rules, budget, walletReadMaxAge), nil
+}
+
+type dueWalletRepository interface {
+	ListDueWatchRules(context.Context, int, time.Duration) ([]store.WatchRule, error)
+	NextWalletObservationAt(context.Context, time.Duration) (*time.Time, error)
+}
+
+type pagedDueWalletRepository interface {
+	dueWalletRepository
+	WalletObservationDueFence(context.Context, time.Duration) (*store.WalletObservationCursor, error)
+	ListDueWatchRulesPage(context.Context, int, time.Duration, *store.WalletObservationCursor, *store.WalletObservationCursor) ([]store.WatchRule, error)
+}
+
+// CheckDue consumes one bounded page without forcing unrelated overdue rules
+// to wait a whole observation period after each page.
+func (e *Executor) CheckDue(ctx context.Context, limit int, interval time.Duration) (CycleResult, error) {
+	return e.checkDuePage(ctx, limit, interval, nil, nil)
+}
+
+func (e *Executor) checkDuePage(ctx context.Context, limit int, interval time.Duration, after, through *store.WalletObservationCursor) (CycleResult, error) {
+	if limit < 1 || limit > walletReadCacheKeys {
+		limit = walletReadCacheKeys
 	}
+	if interval <= 0 {
+		interval = DefaultInterval
+	}
+	repository, ok := e.deps.Repository.(dueWalletRepository)
+	if !ok {
+		// Older embedders retain their existing manually driven list contract.
+		return e.CheckAll(ctx, limit)
+	}
+	var rules []store.WatchRule
+	var err error
+	if paged, ok := repository.(pagedDueWalletRepository); ok {
+		if through == nil {
+			through, err = paged.WalletObservationDueFence(ctx, interval)
+			if err != nil {
+				return CycleResult{}, err
+			}
+		}
+		if through != nil {
+			rules, err = paged.ListDueWatchRulesPage(ctx, limit, interval, after, through)
+		}
+	} else {
+		rules, err = repository.ListDueWatchRules(ctx, limit, interval)
+	}
+	if err != nil {
+		return CycleResult{}, err
+	}
+	result := e.checkWalletRules(ctx, rules, 5*time.Second, interval)
+	result.through = through
+	result.HasMoreDue = len(rules) == limit || result.Checked < len(rules)
+	if sameWalletObservationKey(result.lastAttempted, through) {
+		result.HasMoreDue = false
+	}
+	if !result.HasMoreDue && ctx.Err() == nil {
+		result.NextObservationAt, err = repository.NextWalletObservationAt(ctx, interval)
+	}
+	return result, err
+}
+
+func (e *Executor) checkWalletRules(ctx context.Context, rules []store.WatchRule, budget, maxAge time.Duration) CycleResult {
+	result := CycleResult{
+		Selected: len(rules),
+		Errors:   make([]RuleResult, 0),
+		Results:  make([]RuleResult, 0, len(rules)),
+	}
+	if maxAge <= 0 || maxAge > walletReadMaxAge {
+		maxAge = walletReadMaxAge
+	}
+	observationContext, observationCancel := context.WithTimeout(ctx, maxAge)
+	defer observationCancel()
+	reads := newWalletCycleReads(observationContext, e.deps.Chain, maxAge)
+	observationContext = context.WithValue(observationContext, walletCycleReadsKey{}, reads)
+	observationContext = context.WithValue(observationContext, walletEnqueueOnlyContextKey{}, true)
+	stopPrefetch := reads.startBalancePrefetch(observationContext, e.walletPrefetchRequests(rules))
+	defer stopPrefetch()
 	for _, rule := range rules {
-		item := e.checkRule(ctx, rule, rule.EffectivePlanCode)
+		if observationContext.Err() != nil {
+			break
+		}
+		item := e.checkRule(observationContext, rule, rule.EffectivePlanCode)
+		result.lastAttempted = walletObservationKey(rule)
+		if !item.observationStarted && observationContext.Err() == nil &&
+			(item.Status == "invalid" || item.Status == "unsupported" || item.Status == "plan_limited" || item.Status == "error") {
+			// These paths return before attempting an observation transaction.
+			// Keep malformed/ineligible active rows from monopolizing a due page.
+			if deferErr := e.deps.Repository.DeferWalletObservation(observationContext, rule.ID, time.Minute); deferErr != nil {
+				item = errorResult(rule.ID, deferErr)
+			}
+		}
+		result.Checked++
 		result.Results = append(result.Results, item)
 		switch item.Status {
-		case "alerted":
-			result.Alerted++
+		case "queued":
+			result.Queued++
 		case "error":
 			result.Errors = append(result.Errors, item)
 		}
 	}
-	return result, nil
+	observationCancel()
+	stopPrefetch()
+	result.Reads = reads.metrics
+	reads.entries = nil
+	e.drainWalletDeliveries(ctx, &result, budget)
+	return result
 }
 
 // CheckRule implements the immediate check used after a balance-threshold rule is created.
@@ -173,6 +286,7 @@ func (e *Executor) CheckRule(
 	rule store.WatchRule,
 	effectivePlanCode string,
 ) (any, error) {
+	ctx = context.WithValue(ctx, walletCycleReadsKey{}, newWalletCycleReads(ctx, e.deps.Chain, walletReadMaxAge))
 	if e.deps.TryExecutionLock != nil {
 		lock, acquired, err := e.deps.TryExecutionLock(ctx)
 		if err != nil {
@@ -195,6 +309,9 @@ func (e *Executor) checkRule(
 	rule store.WatchRule,
 	effectivePlanCode string,
 ) (result RuleResult) {
+	phase := &walletObservationPhase{}
+	ctx = context.WithValue(ctx, walletObservationPhaseKey{}, phase)
+	ctx = context.WithValue(ctx, walletReadBaselineTimeKey{}, rule.LastCheckedAt)
 	result = RuleResult{RuleID: rule.ID}
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -204,6 +321,7 @@ func (e *Executor) checkRule(
 				Error:  fmt.Sprint(recovered),
 			}
 		}
+		result.observationStarted = phase.started
 	}()
 
 	plan, err := e.plan(effectivePlanCode)
@@ -240,7 +358,7 @@ func (e *Executor) checkAssetRule(
 	rule store.WatchRule,
 	plan plans.Plan,
 ) (RuleResult, error) {
-	current, err := e.deps.Chain.Balance(
+	current, err := e.walletChain(ctx).Balance(
 		ctx,
 		rule.WalletAddress,
 		stringValue(rule.TokenAddress),
@@ -250,20 +368,20 @@ func (e *Executor) checkAssetRule(
 	if err != nil {
 		return RuleResult{}, err
 	}
-	currentValue := current.Value
-	previousValue := rule.LastValue
-	if err := e.deps.Repository.UpdateWatchRuleValue(ctx, rule.ID, currentValue); err != nil {
+	ctx, err = walletBalanceReadContext(ctx, rule, current, e.deps.DefaultChainKey)
+	if err != nil {
 		return RuleResult{}, err
 	}
-
+	currentValue := current.Value
+	previousValue := rule.LastValue
 	initialThresholdMatch := previousValue == nil &&
 		initialBalanceThresholdMatch(rule.RuleType, currentValue, rule.Threshold)
 	if previousValue == nil && !initialThresholdMatch {
-		return RuleResult{RuleID: rule.ID, Status: "baseline", Value: currentValue}, nil
+		return e.commitWalletObservation(ctx, rule, plan, currentValue, "", current.Symbol, false, "baseline")
 	}
 	if !initialThresholdMatch &&
 		!shouldAlertAsset(rule.RuleType, stringValue(previousValue), currentValue, rule.Threshold) {
-		return RuleResult{RuleID: rule.ID, Status: "no_change", Value: currentValue}, nil
+		return e.commitWalletObservation(ctx, rule, plan, currentValue, "", current.Symbol, false, "no_change")
 	}
 
 	language := normalizeLanguage(rule.NotificationLanguage)
@@ -291,13 +409,71 @@ func (e *Executor) checkAssetRule(
 			)
 		}
 	}
-	if limited, err := e.freeDailyLimit(ctx, rule, plan); err != nil {
-		return RuleResult{}, err
-	} else if limited != nil {
-		limited.Value = currentValue
-		return *limited, nil
+	return e.commitWalletObservation(ctx, rule, plan, currentValue, note, current.Symbol, true, "")
+}
+
+type walletBalanceReadContextKey struct{}
+
+type walletBalanceReadMetadata struct {
+	source   string
+	decimals int
+}
+
+// The source and precision travel with this particular observation, including
+// memo hits. Missing or malformed ERC-20 evidence must never become a new zero
+// baseline. Native balances retain their existing source contract.
+func walletBalanceReadContext(ctx context.Context, rule store.WatchRule, current chain.BalanceResult, fallback string) (context.Context, error) {
+	if strings.TrimSpace(stringValue(rule.TokenAddress)) == "" {
+		return ctx, nil
 	}
-	return e.recordTrigger(ctx, rule, previousValue, currentValue, note, current.Symbol)
+	profile, err := chain.ChainProfile(rule.ChainKey, fallback)
+	if err != nil || int64(rule.ChainID) != profile.ChainID || current.ChainID != profile.ChainID || current.ChainKey != profile.Key {
+		return ctx, fmt.Errorf("wallet ERC-20 balance chain identity does not match its rule")
+	}
+	wallet, err := chain.ValidateAddress(rule.WalletAddress)
+	if err != nil {
+		return ctx, fmt.Errorf("wallet ERC-20 rule wallet is invalid")
+	}
+	observedWallet, err := chain.ValidateAddress(current.WalletAddress)
+	if err != nil || observedWallet != wallet {
+		return ctx, fmt.Errorf("wallet ERC-20 balance wallet does not match its rule")
+	}
+	token, err := chain.ValidateAddress(*rule.TokenAddress)
+	if err != nil || current.TokenAddress == nil {
+		return ctx, fmt.Errorf("wallet ERC-20 balance token does not match its rule")
+	}
+	observedToken, err := chain.ValidateAddress(*current.TokenAddress)
+	if err != nil || observedToken != token {
+		return ctx, fmt.Errorf("wallet ERC-20 balance token does not match its rule")
+	}
+	if current.ReadSource != chain.WalletBalanceReadSource || current.ReadDecimals == nil ||
+		*current.ReadDecimals < 0 || *current.ReadDecimals > 255 || current.Decimals != *current.ReadDecimals {
+		return ctx, fmt.Errorf("wallet ERC-20 balance source or precision is unavailable")
+	}
+	value := current.Value
+	if value == "" || len(value) > 258 || strings.TrimSpace(value) != value {
+		return ctx, fmt.Errorf("wallet ERC-20 balance value is invalid")
+	}
+	point := -1
+	for i, ch := range value {
+		if ch == '.' && point < 0 {
+			point = i
+			continue
+		}
+		if ch < '0' || ch > '9' {
+			return ctx, fmt.Errorf("wallet ERC-20 balance value is invalid")
+		}
+	}
+	if point == 0 || point == len(value)-1 {
+		return ctx, fmt.Errorf("wallet ERC-20 balance value is invalid")
+	}
+	units, err := chain.AmountToUnits(value, *current.ReadDecimals)
+	if err != nil || units.Sign() < 0 || units.BitLen() > 256 {
+		return ctx, fmt.Errorf("wallet ERC-20 balance value does not match its precision")
+	}
+	return context.WithValue(ctx, walletBalanceReadContextKey{}, walletBalanceReadMetadata{
+		source: current.ReadSource, decimals: *current.ReadDecimals,
+	}), nil
 }
 
 func (e *Executor) checkApprovalRule(
@@ -312,7 +488,7 @@ func (e *Executor) checkApprovalRule(
 			Reason: "missing token or spender",
 		}, nil
 	}
-	current, err := e.deps.Chain.TokenAllowance(
+	current, err := e.walletChain(ctx).TokenAllowance(
 		ctx,
 		rule.WalletAddress,
 		*rule.TokenAddress,
@@ -325,14 +501,11 @@ func (e *Executor) checkApprovalRule(
 	}
 	currentValue := current.Value
 	previousValue := rule.LastValue
-	if err := e.deps.Repository.UpdateWatchRuleValue(ctx, rule.ID, currentValue); err != nil {
-		return RuleResult{}, err
-	}
 	if previousValue == nil {
-		return RuleResult{RuleID: rule.ID, Status: "baseline", Value: currentValue}, nil
+		return e.commitWalletObservation(ctx, rule, plan, currentValue, "", current.Symbol, false, "baseline")
 	}
 	if decimalCompare(*previousValue, currentValue) == 0 {
-		return RuleResult{RuleID: rule.ID, Status: "no_change", Value: currentValue}, nil
+		return e.commitWalletObservation(ctx, rule, plan, currentValue, "", current.Symbol, false, "no_change")
 	}
 
 	note := targetLabelPrefix(rule, "zh") +
@@ -341,13 +514,7 @@ func (e *Executor) checkApprovalRule(
 		note = targetLabelPrefix(rule, "en") +
 			fmt.Sprintf("Approved spender: %s.", shortAddress(rule.TargetAddress))
 	}
-	if limited, err := e.freeDailyLimit(ctx, rule, plan); err != nil {
-		return RuleResult{}, err
-	} else if limited != nil {
-		limited.Value = currentValue
-		return *limited, nil
-	}
-	return e.recordTrigger(ctx, rule, previousValue, currentValue, note, current.Symbol)
+	return e.commitWalletObservation(ctx, rule, plan, currentValue, note, current.Symbol, true, "")
 }
 
 func (e *Executor) checkInteractionRule(
@@ -362,7 +529,7 @@ func (e *Executor) checkInteractionRule(
 			Reason: "missing target address",
 		}, nil
 	}
-	current, err := e.deps.Chain.LatestInteraction(
+	current, err := e.walletChain(ctx).LatestInteraction(
 		ctx,
 		rule.WalletAddress,
 		*rule.TargetAddress,
@@ -374,14 +541,11 @@ func (e *Executor) checkInteractionRule(
 	}
 	cursor := current.Cursor
 	previousCursor := rule.LastValue
-	if err := e.deps.Repository.UpdateWatchRuleValue(ctx, rule.ID, cursor); err != nil {
-		return RuleResult{}, err
-	}
 	if previousCursor == nil {
-		return RuleResult{RuleID: rule.ID, Status: "baseline", Value: cursor}, nil
+		return e.commitWalletObservation(ctx, rule, plan, cursor, "", "", false, "baseline")
 	}
 	if cursor == *previousCursor || !current.Matched {
-		return RuleResult{RuleID: rule.ID, Status: "no_change", Value: cursor}, nil
+		return e.commitWalletObservation(ctx, rule, plan, cursor, "", "", false, "no_change")
 	}
 
 	note := targetLabelPrefix(rule, "zh") +
@@ -390,404 +554,7 @@ func (e *Executor) checkInteractionRule(
 		note = targetLabelPrefix(rule, "en") +
 			fmt.Sprintf("Target address: %s.", shortAddress(rule.TargetAddress))
 	}
-	if limited, err := e.freeDailyLimit(ctx, rule, plan); err != nil {
-		return RuleResult{}, err
-	} else if limited != nil {
-		limited.Value = cursor
-		return *limited, nil
-	}
-	return e.recordTrigger(ctx, rule, previousCursor, cursor, note, "")
-}
-
-func (e *Executor) recordTrigger(
-	ctx context.Context,
-	rule store.WatchRule,
-	previousValue *string,
-	currentValue string,
-	note string,
-	tokenSymbol string,
-) (RuleResult, error) {
-	if rule.RuleScope == "combination" {
-		return e.recordCombinationTrigger(
-			ctx,
-			rule,
-			previousValue,
-			currentValue,
-			note,
-			tokenSymbol,
-		)
-	}
-	if rule.DeliveryMode != "stage" {
-		event, err := e.recordAndSend(
-			ctx,
-			rule,
-			previousValue,
-			currentValue,
-			note,
-			tokenSymbol,
-		)
-		if err != nil {
-			return RuleResult{}, err
-		}
-		return RuleResult{
-			RuleID: rule.ID,
-			Status: "alerted",
-			Value:  currentValue,
-			Event:  &event,
-		}, nil
-	}
-
-	stage, err := e.deps.Repository.RecordStageTrigger(ctx, store.RecordStageTriggerParams{
-		WatchRuleID:   rule.ID,
-		DeBoxUserID:   rule.DeBoxUserID,
-		PreviousValue: previousValue,
-		CurrentValue:  stringPointer(currentValue),
-		Note:          note,
-		TokenSymbol:   tokenSymbol,
-	})
-	if err != nil {
-		return RuleResult{}, err
-	}
-	result := RuleResult{
-		RuleID:           rule.ID,
-		Status:           "counted",
-		Value:            currentValue,
-		TriggerCount:     stage.TotalTriggerCount,
-		TriggerThreshold: stage.TriggerCountThreshold,
-	}
-	if !stage.NotificationDue {
-		return result, nil
-	}
-	if stage.Notification == nil {
-		return RuleResult{}, errors.New("stage notification was claimed without a record")
-	}
-
-	text := stageAlertText(rule, stage)
-	snapshot, err := e.createAddressStageSnapshot(ctx, rule, stage, text)
-	if err != nil {
-		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
-			ctx,
-			stage.Notification.ID,
-			"failed",
-			nil,
-			err.Error(),
-		)
-		if updateErr != nil {
-			return RuleResult{}, errors.Join(err, updateErr)
-		}
-		return RuleResult{}, err
-	}
-	messageID, sendErr := e.sendAggregateNotification(
-		stage.Notification.NotificationChatID,
-		stage.Notification.NotificationChatType,
-		text,
-		rule.NotificationLanguage,
-		snapshot.PublicID,
-	)
-	if sendErr != nil {
-		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
-			ctx,
-			stage.Notification.ID,
-			"failed",
-			nil,
-			sendErr.Error(),
-		)
-		if updateErr != nil {
-			return RuleResult{}, fmt.Errorf(
-				"send stage notification: %v; record failure: %w",
-				sendErr,
-				updateErr,
-			)
-		}
-		return RuleResult{}, sendErr
-	}
-	notification, err := e.deps.Repository.UpdateAggregateNotification(
-		ctx,
-		stage.Notification.ID,
-		"sent",
-		stringPointer(messageID),
-		"",
-	)
-	if err != nil {
-		return RuleResult{}, err
-	}
-	result.Status = "alerted"
-	result.Aggregate = &notification
-	return result, nil
-}
-
-func (e *Executor) recordCombinationTrigger(
-	ctx context.Context,
-	rule store.WatchRule,
-	previousValue *string,
-	currentValue string,
-	note string,
-	tokenSymbol string,
-) (RuleResult, error) {
-	combination, err := e.deps.Repository.RecordCombinationTrigger(
-		ctx,
-		store.RecordCombinationTriggerParams{
-			WatchRuleID:   rule.ID,
-			DeBoxUserID:   rule.DeBoxUserID,
-			PreviousValue: previousValue,
-			CurrentValue:  stringPointer(currentValue),
-			Note:          note,
-			TokenSymbol:   tokenSymbol,
-		},
-	)
-	if err != nil {
-		return RuleResult{}, err
-	}
-	result := RuleResult{
-		RuleID:         rule.ID,
-		Status:         "counted",
-		Value:          currentValue,
-		CombinationID:  combination.CombinationRuleID,
-		MemberProgress: combination.MemberProgress,
-	}
-	if !combination.NotificationDue {
-		return result, nil
-	}
-	if combination.Notification == nil {
-		return RuleResult{}, errors.New("combination notification was claimed without a record")
-	}
-	text := combinationAlertText(combination)
-	snapshot, err := e.createAddressCombinationSnapshot(
-		ctx,
-		rule,
-		combination,
-		text,
-	)
-	if err != nil {
-		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
-			ctx,
-			combination.Notification.ID,
-			"failed",
-			nil,
-			err.Error(),
-		)
-		if updateErr != nil {
-			return RuleResult{}, errors.Join(err, updateErr)
-		}
-		return RuleResult{}, err
-	}
-	messageID, sendErr := e.sendCombinationNotification(
-		combination.Notification.NotificationChatID,
-		combination.Notification.NotificationChatType,
-		text,
-		combination.Notification.NotificationLanguage,
-		snapshot.PublicID,
-	)
-	if sendErr != nil {
-		_, updateErr := e.deps.Repository.UpdateAggregateNotification(
-			ctx,
-			combination.Notification.ID,
-			"failed",
-			nil,
-			sendErr.Error(),
-		)
-		if updateErr != nil {
-			return RuleResult{}, fmt.Errorf(
-				"send combination notification: %v; record failure: %w",
-				sendErr,
-				updateErr,
-			)
-		}
-		return RuleResult{}, sendErr
-	}
-	notification, err := e.deps.Repository.UpdateAggregateNotification(
-		ctx,
-		combination.Notification.ID,
-		"sent",
-		stringPointer(messageID),
-		"",
-	)
-	if err != nil {
-		return RuleResult{}, err
-	}
-	result.Status = "alerted"
-	result.Aggregate = &notification
-	return result, nil
-}
-
-func (e *Executor) recordAndSend(
-	ctx context.Context,
-	rule store.WatchRule,
-	previousValue *string,
-	currentValue string,
-	note string,
-	tokenSymbol string,
-) (store.AlertEvent, error) {
-	event, err := e.deps.Repository.CreateAlertEvent(ctx, store.CreateAlertEventParams{
-		WatchRuleID:        rule.ID,
-		EventType:          rule.RuleType,
-		PreviousValue:      previousValue,
-		CurrentValue:       stringPointer(currentValue),
-		NotificationStatus: "pending",
-	})
-	if err != nil {
-		return store.AlertEvent{}, err
-	}
-	occurredAt := event.CreatedAt
-	if occurredAt.IsZero() {
-		occurredAt = time.Now()
-	}
-	text := alertText(
-		rule,
-		previousValue,
-		currentValue,
-		tokenSymbol,
-		note,
-		occurredAt,
-	)
-	snapshot, err := e.createAddressRealtimeSnapshot(
-		ctx,
-		rule,
-		event,
-		tokenSymbol,
-		note,
-		occurredAt,
-		text,
-	)
-	if err != nil {
-		_, updateErr := e.deps.Repository.UpdateAlertEventNotification(
-			ctx,
-			event.ID,
-			"failed",
-			nil,
-			err.Error(),
-		)
-		if updateErr != nil {
-			return store.AlertEvent{}, errors.Join(err, updateErr)
-		}
-		return store.AlertEvent{}, err
-	}
-	messageID, sendErr := e.sendRealtimeNotification(
-		rule,
-		text,
-		snapshot.PublicID,
-	)
-	if sendErr != nil {
-		_, updateErr := e.deps.Repository.UpdateAlertEventNotification(
-			ctx,
-			event.ID,
-			"failed",
-			nil,
-			sendErr.Error(),
-		)
-		if updateErr != nil {
-			return store.AlertEvent{}, fmt.Errorf(
-				"send notification: %v; record failure: %w",
-				sendErr,
-				updateErr,
-			)
-		}
-		return store.AlertEvent{}, sendErr
-	}
-	return e.deps.Repository.UpdateAlertEventNotification(
-		ctx,
-		event.ID,
-		"sent",
-		stringPointer(messageID),
-		"",
-	)
-}
-
-func (e *Executor) sendRealtimeNotification(
-	rule store.WatchRule,
-	text string,
-	notificationID string,
-) (string, error) {
-	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
-	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
-	if !supportsAction || actionURL == "" {
-		return e.deps.Notifications.SendNotification(
-			rule.NotificationChatID,
-			rule.NotificationChatType,
-			text,
-		)
-	}
-	actionText := "查看详情"
-	if normalizeLanguage(rule.NotificationLanguage) == "en" {
-		actionText = "View details"
-	}
-	return actionSender.SendNotificationWithAction(
-		rule.NotificationChatID,
-		rule.NotificationChatType,
-		text,
-		actionText,
-		actionURL,
-	)
-}
-
-func (e *Executor) sendAggregateNotification(
-	chatID, chatType, text, language, notificationID string,
-) (string, error) {
-	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
-	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
-	if !supportsAction || actionURL == "" {
-		return e.deps.Notifications.SendNotification(chatID, chatType, text)
-	}
-	actionText := "查看全部事件"
-	if normalizeLanguage(language) == "en" {
-		actionText = "View all events"
-	}
-	return actionSender.SendNotificationWithAction(
-		chatID,
-		chatType,
-		text,
-		actionText,
-		actionURL,
-	)
-}
-
-func (e *Executor) sendCombinationNotification(
-	chatID, chatType, text, language, notificationID string,
-) (string, error) {
-	actionSender, supportsAction := e.deps.Notifications.(ActionNotificationService)
-	actionURL := notificationdetail.NotificationURL(e.deps.PublicAppURL, notificationID)
-	if !supportsAction || actionURL == "" {
-		return e.deps.Notifications.SendNotification(chatID, chatType, text)
-	}
-	actionText := "查看完整分析"
-	if normalizeLanguage(language) == "en" {
-		actionText = "View full analysis"
-	}
-	return actionSender.SendNotificationWithAction(
-		chatID,
-		chatType,
-		text,
-		actionText,
-		actionURL,
-	)
-}
-
-func (e *Executor) freeDailyLimit(
-	ctx context.Context,
-	rule store.WatchRule,
-	plan plans.Plan,
-) (*RuleResult, error) {
-	if plan.Code != plans.Free || plan.DailyAlertLimit == nil || *plan.DailyAlertLimit <= 0 {
-		return nil, nil
-	}
-	used, err := e.deps.Repository.CountDailyAlertEvents(
-		ctx,
-		rule.DeBoxUserID,
-		freeAlertTimezone,
-	)
-	if err != nil {
-		return nil, err
-	}
-	limit := int64(*plan.DailyAlertLimit)
-	if used < limit {
-		return nil, nil
-	}
-	return &RuleResult{
-		RuleID: rule.ID,
-		Status: "daily_limit",
-		Limit:  limit,
-		Used:   used,
-	}, nil
+	return e.commitWalletObservation(ctx, rule, plan, cursor, note, "", true, "", walletObservationSource{SourceOccurredAt: current.SourceOccurredAt, SourceTimeBasis: current.SourceTimeBasis})
 }
 
 func (e *Executor) plan(code string) (plans.Plan, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 )
 
 func (s *Store) CountDailyAlertEvents(
@@ -101,6 +103,7 @@ func (s *Store) DailySummaryStatistics(
 	periodStart time.Time,
 	periodEnd time.Time,
 ) (SummaryStatistics, error) {
+	validValuation := marketValuationAvailableSQL("me", "$4::double precision")
 	statistics, err := collectOne[SummaryStatistics](ctx, s.db, `
 		WITH active_rules AS MATERIALIZED (
 			SELECT id, wallet_address, rule_type
@@ -217,21 +220,24 @@ func (s *Store) DailySummaryStatistics(
 		),
 		market_event_stats AS (
 			SELECT
+				2::integer AS valuation_schema_version,
+				COUNT(me.id) FILTER (WHERE me.event_type='buy' AND `+validValuation+`) AS market_buy_valued_count,
+				COUNT(me.id) FILTER (WHERE me.event_type='sell' AND `+validValuation+`) AS market_sell_valued_count,
 				COUNT(me.id) AS market_event_count,
 				COUNT(me.id) FILTER (WHERE me.event_type = 'buy') AS market_buy_count,
 				COUNT(me.id) FILTER (WHERE me.event_type = 'sell') AS market_sell_count,
 				COALESCE(SUM(me.usd_value) FILTER (
-					WHERE me.event_type = 'buy'
+					WHERE me.event_type = 'buy' AND `+validValuation+`
 				), 0)::text AS market_buy_usd,
 				COALESCE(SUM(me.usd_value) FILTER (
-					WHERE me.event_type = 'sell'
+					WHERE me.event_type = 'sell' AND `+validValuation+`
 				), 0)::text AS market_sell_usd,
 				(
 					COALESCE(SUM(me.usd_value) FILTER (
-						WHERE me.event_type = 'buy'
+						WHERE me.event_type = 'buy' AND `+validValuation+`
 					), 0) -
 					COALESCE(SUM(me.usd_value) FILTER (
-						WHERE me.event_type = 'sell'
+						WHERE me.event_type = 'sell' AND `+validValuation+`
 					), 0)
 				)::text AS market_net_buy_usd,
 				COUNT(me.id) FILTER (
@@ -288,9 +294,20 @@ func (s *Store) DailySummaryStatistics(
 		CROSS JOIN market_rule_stats
 		CROSS JOIN market_event_stats
 		CROSS JOIN market_notification_stats
-	`, deboxUserID, periodStart, periodEnd)
+	`, deboxUserID, periodStart, periodEnd, marketquality.MaxAge.Seconds())
 	if err != nil {
 		return SummaryStatistics{}, fmt.Errorf("get daily summary statistics: %w", err)
+	}
+	// A partial subtotal is retained for the digest, but an unknown side and
+	// incomplete net must not be exposed as a known zero or balanced flow.
+	if statistics.MarketBuyCount > 0 && statistics.MarketBuyValuedCount == 0 {
+		statistics.MarketBuyUSD = ""
+	}
+	if statistics.MarketSellCount > 0 && statistics.MarketSellValuedCount == 0 {
+		statistics.MarketSellUSD = ""
+	}
+	if statistics.MarketBuyValuedCount < statistics.MarketBuyCount || statistics.MarketSellValuedCount < statistics.MarketSellCount {
+		statistics.MarketNetBuyUSD = ""
 	}
 	return statistics, nil
 }
@@ -302,6 +319,7 @@ func (s *Store) ListSummaryRecentMarketEvents(
 	periodEnd time.Time,
 	limit int,
 ) ([]MarketSummaryEvent, error) {
+	validValuation := marketValuationAvailableSQL("me", "$5::double precision")
 	events, err := collectMany[MarketSummaryEvent](ctx, s.db, `
 		WITH active_market_deployments AS MATERIALIZED (
 			SELECT
@@ -347,7 +365,8 @@ func (s *Store) ListSummaryRecentMarketEvents(
 			me.event_type,
 			me.wallet_address,
 			me.token_amount::text AS token_amount,
-			me.usd_value::text AS usd_value,
+			CASE WHEN `+validValuation+` THEN me.usd_value::text END AS usd_value,
+			CASE WHEN `+validValuation+` THEN 'available' ELSE 'unknown' END AS valuation_status,
 			me.transaction_hash,
 			me.occurred_at
 		FROM market_events me
@@ -365,7 +384,7 @@ func (s *Store) ListSummaryRecentMarketEvents(
 		  AND me.occurred_at < $3
 		ORDER BY me.occurred_at DESC, me.id DESC
 		LIMIT $4
-	`, deboxUserID, periodStart, periodEnd, clamp(limit, 1, 20))
+	`, deboxUserID, periodStart, periodEnd, clamp(limit, 1, 20), marketquality.MaxAge.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("list summary recent market events: %w", err)
 	}
@@ -378,6 +397,10 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 	periodStart time.Time,
 	periodEnd time.Time,
 ) ([]MarketProjectChainSummary, error) {
+	validValuation := marketValuationAvailableSQL("me", "$4::double precision")
+	validQuote := quoteAvailableSQL("ms.quote_quality", "ms.captured_at", "$4::double precision")
+	validStart := quoteAvailableSQL("start_snapshot.quote_quality", "start_snapshot.captured_at", "$4::double precision")
+	validEnd := quoteAvailableSQL("end_snapshot.quote_quality", "end_snapshot.captured_at", "$4::double precision")
 	summaries, err := collectMany[MarketProjectChainSummary](ctx, s.db, `
 		WITH active_deployments AS MATERIALIZED (
 			SELECT
@@ -421,8 +444,12 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			ad.chain_key,
 			ad.chain_id,
 			ad.token_address,
-			start_snapshot.price_usd::text AS start_price_usd,
-			end_snapshot.price_usd::text AS end_price_usd,
+			CASE WHEN `+validStart+` THEN start_snapshot.price_usd::text END AS start_price_usd,
+			CASE WHEN `+validEnd+` THEN end_snapshot.price_usd::text END AS end_price_usd,
+			2::integer AS valuation_schema_version,
+			COALESCE(coverage.quote_unavailable_count,0) AS quote_unavailable_count,
+			COALESCE(events.buy_valued_count,0) AS buy_valued_count,
+			COALESCE(events.sell_valued_count,0) AS sell_valued_count,
 			COALESCE(coverage.snapshot_count, 0) AS snapshot_count,
 			COALESCE(coverage.price_sample_count, 0) AS price_sample_count,
 			COALESCE(coverage.liquidity_sample_count, 0) AS liquidity_sample_count,
@@ -441,15 +468,17 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 		LEFT JOIN LATERAL (
 			SELECT
 				COALESCE(SUM(me.usd_value) FILTER (
-					WHERE me.event_type IN ('buy', 'sell')
+					WHERE me.event_type IN ('buy', 'sell') AND `+validValuation+`
 				), 0) AS trade_volume_usd,
 				COUNT(*) FILTER (WHERE me.event_type = 'buy') AS buy_count,
+				COUNT(*) FILTER (WHERE me.event_type='buy' AND `+validValuation+`) AS buy_valued_count,
 				COALESCE(SUM(me.usd_value) FILTER (
-					WHERE me.event_type = 'buy'
+					WHERE me.event_type = 'buy' AND `+validValuation+`
 				), 0) AS buy_usd,
 				COUNT(*) FILTER (WHERE me.event_type = 'sell') AS sell_count,
+				COUNT(*) FILTER (WHERE me.event_type='sell' AND `+validValuation+`) AS sell_valued_count,
 				COALESCE(SUM(me.usd_value) FILTER (
-					WHERE me.event_type = 'sell'
+					WHERE me.event_type = 'sell' AND `+validValuation+`
 				), 0) AS sell_usd,
 				COUNT(*) FILTER (
 					WHERE me.event_type = 'holder_increase'
@@ -490,11 +519,10 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			  AND me.occurred_at < $3
 		) large_trades ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT ms.price_usd
+			SELECT ms.price_usd, ms.quote_quality, ms.captured_at
 			FROM market_snapshots ms
 			WHERE ms.chain_id = ad.chain_id
 			  AND ms.token_address = ad.token_address
-			  AND ms.price_usd IS NOT NULL
 			  AND (
 				ad.default_market_pool_id IS NULL
 				OR ms.market_pool_id = ad.default_market_pool_id
@@ -505,11 +533,10 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			LIMIT 1
 		) start_snapshot ON TRUE
 		LEFT JOIN LATERAL (
-			SELECT ms.price_usd
+			SELECT ms.price_usd, ms.quote_quality, ms.captured_at
 			FROM market_snapshots ms
 			WHERE ms.chain_id = ad.chain_id
 			  AND ms.token_address = ad.token_address
-			  AND ms.price_usd IS NOT NULL
 			  AND (
 				ad.default_market_pool_id IS NULL
 				OR ms.market_pool_id = ad.default_market_pool_id
@@ -522,14 +549,15 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 		LEFT JOIN LATERAL (
 			SELECT
 				COUNT(*) AS snapshot_count,
-				COUNT(ms.price_usd) AS price_sample_count,
-				COUNT(ms.liquidity_usd) AS liquidity_sample_count,
+				COUNT(*) FILTER (WHERE ms.price_usd IS NOT NULL AND `+validQuote+`) AS price_sample_count,
+				COUNT(*) FILTER (WHERE ms.liquidity_usd IS NOT NULL AND `+validQuote+`) AS liquidity_sample_count,
+				COUNT(*) FILTER (WHERE NOT (`+validQuote+`)) AS quote_unavailable_count,
 				COUNT(*) FILTER (
-					WHERE ms.volume_5m_usd IS NOT NULL
+					WHERE `+validQuote+` AND (ms.volume_5m_usd IS NOT NULL
 					   OR ms.volume_15m_usd IS NOT NULL
 					   OR ms.volume_1h_usd IS NOT NULL
 					   OR ms.volume_6h_usd IS NOT NULL
-					   OR ms.volume_24h_usd IS NOT NULL
+					   OR ms.volume_24h_usd IS NOT NULL)
 				) AS volume_sample_count
 			FROM market_snapshots ms
 			WHERE ms.chain_id = ad.chain_id
@@ -542,9 +570,21 @@ func (s *Store) ListDailyMarketProjectChainSummaries(
 			  AND ms.captured_at < $3
 		) coverage ON TRUE
 		ORDER BY ad.market_project_id, ad.chain_id
-	`, deboxUserID, periodStart, periodEnd)
+	`, deboxUserID, periodStart, periodEnd, marketquality.MaxAge.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("list daily market project chain summaries: %w", err)
+	}
+	for i := range summaries {
+		item := &summaries[i]
+		if item.BuyCount > 0 && item.BuyValuedCount == 0 {
+			item.BuyUSD = ""
+		}
+		if item.SellCount > 0 && item.SellValuedCount == 0 {
+			item.SellUSD = ""
+		}
+		if item.BuyCount+item.SellCount > 0 && item.BuyValuedCount+item.SellValuedCount == 0 {
+			item.TradeVolumeUSD = ""
+		}
 	}
 	return summaries, nil
 }

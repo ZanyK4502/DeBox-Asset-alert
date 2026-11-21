@@ -23,7 +23,7 @@ const marketHolderSnapshotColumns = `
 	balance_raw::text AS balance_raw,
 	balance::text AS balance,
 	supply_percent::text AS supply_percent,
-	rank, source, captured_at
+	rank, source, captured_at, managed_observation, balance_observed, balance_observed_at
 `
 
 const marketAddressLabelColumns = `
@@ -89,27 +89,60 @@ func (s *Store) UpsertMarketHolder(
 		seenAt = time.Now().UTC()
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketHolder, error) {
-		holder, err := collectOne[MarketHolder](ctx, tx, `
-			INSERT INTO market_holders (
+		return upsertMarketHolder(ctx, tx, params, seenAt)
+	})
+}
+
+func upsertMarketHolder(ctx context.Context, db DBTX, params UpsertMarketHolderParams, seenAt time.Time) (MarketHolder, error) {
+	holder, err := collectOne[MarketHolder](ctx, db, `
+		INSERT INTO market_holders (
+			chain_key, chain_id, token_address, holder_address, balance_raw, balance,
+			supply_percent, rank, address_kind, excluded,
+			exclusion_reason, source, first_seen_at, last_seen_at
+		)
+		VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13
+		)
+		ON CONFLICT (chain_id, token_address, holder_address) DO UPDATE
+		SET balance_raw = EXCLUDED.balance_raw,
+		    balance = EXCLUDED.balance,
+		    supply_percent = EXCLUDED.supply_percent,
+		    rank = EXCLUDED.rank,
+		    address_kind = EXCLUDED.address_kind,
+		    excluded = EXCLUDED.excluded,
+		    exclusion_reason = EXCLUDED.exclusion_reason,
+		    source = EXCLUDED.source,
+		    last_seen_at = EXCLUDED.last_seen_at,
+		    updated_at = NOW()
+		RETURNING `+marketHolderColumns,
+		params.ChainKey,
+		params.ChainID,
+		params.TokenAddress,
+		params.HolderAddress,
+		params.BalanceRaw,
+		params.Balance,
+		params.SupplyPercent,
+		params.Rank,
+		params.AddressKind,
+		boolInt(params.Excluded),
+		params.ExclusionReason,
+		params.Source,
+		seenAt,
+	)
+	if err != nil {
+		return MarketHolder{}, fmt.Errorf("upsert market holder: %w", err)
+	}
+	if params.RecordSnapshot {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO market_holder_snapshots (
 				chain_key, chain_id, token_address, holder_address, balance_raw, balance,
-				supply_percent, rank, address_kind, excluded,
-				exclusion_reason, source, first_seen_at, last_seen_at
+				supply_percent, rank, source, captured_at
 			)
-			VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13
-			)
-			ON CONFLICT (chain_id, token_address, holder_address) DO UPDATE
-			SET balance_raw = EXCLUDED.balance_raw,
-			    balance = EXCLUDED.balance,
-			    supply_percent = EXCLUDED.supply_percent,
-			    rank = EXCLUDED.rank,
-			    address_kind = EXCLUDED.address_kind,
-			    excluded = EXCLUDED.excluded,
-			    exclusion_reason = EXCLUDED.exclusion_reason,
-			    source = EXCLUDED.source,
-			    last_seen_at = EXCLUDED.last_seen_at,
-			    updated_at = NOW()
-			RETURNING `+marketHolderColumns,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			ON CONFLICT (
+				chain_id, token_address, holder_address, captured_at
+			) DO NOTHING
+		`,
 			params.ChainKey,
 			params.ChainID,
 			params.TokenAddress,
@@ -118,42 +151,13 @@ func (s *Store) UpsertMarketHolder(
 			params.Balance,
 			params.SupplyPercent,
 			params.Rank,
-			params.AddressKind,
-			boolInt(params.Excluded),
-			params.ExclusionReason,
 			params.Source,
 			seenAt,
-		)
-		if err != nil {
-			return MarketHolder{}, fmt.Errorf("upsert market holder: %w", err)
+		); err != nil {
+			return MarketHolder{}, fmt.Errorf("record market holder snapshot: %w", err)
 		}
-		if params.RecordSnapshot {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO market_holder_snapshots (
-					chain_key, chain_id, token_address, holder_address, balance_raw, balance,
-					supply_percent, rank, source, captured_at
-				)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-				ON CONFLICT (
-					chain_id, token_address, holder_address, captured_at
-				) DO NOTHING
-			`,
-				params.ChainKey,
-				params.ChainID,
-				params.TokenAddress,
-				params.HolderAddress,
-				params.BalanceRaw,
-				params.Balance,
-				params.SupplyPercent,
-				params.Rank,
-				params.Source,
-				seenAt,
-			); err != nil {
-				return MarketHolder{}, fmt.Errorf("record market holder snapshot: %w", err)
-			}
-		}
-		return holder, nil
-	})
+	}
+	return holder, nil
 }
 
 func (s *Store) ListMarketHolders(
@@ -346,7 +350,7 @@ func (s *Store) listFrozenMarketHolderViews(
 			r.captured_at AS last_seen_at,
 			r.captured_at AS updated_at,
 			r.previous_balance::text AS previous_balance,
-			r.previous_rank,
+			r.previous_rank, r.balance_observed,COALESCE(r.balance_observed_at,r.captured_at) AS balance_observed_at,
 			CASE
 				WHEN r.previous_rank IS NULL AND r.rank IS NOT NULL THEN 'entered'
 				WHEN r.previous_rank IS NOT NULL AND r.rank IS NULL THEN 'exited'
@@ -403,7 +407,8 @@ func (s *Store) ListMarketHolderSnapshots(
 			mhs.balance_raw::text AS balance_raw,
 			mhs.balance::text AS balance,
 			mhs.supply_percent::text AS supply_percent,
-			mhs.rank, mhs.source, mhs.captured_at
+			mhs.rank, mhs.source, mhs.captured_at,
+			mhs.managed_observation,mhs.balance_observed,mhs.balance_observed_at
 		FROM market_holder_snapshots mhs
 		JOIN market_projects mp ON mp.id = $1
 		WHERE mp.debox_user_id = $2

@@ -20,11 +20,20 @@ func (s *Store) ReconcileUserEntitlements(
 	policy QuotaPolicy,
 ) (EntitlementReconcileResult, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (EntitlementReconcileResult, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return EntitlementReconcileResult{}, err
+		}
+		defer cancel()
 		result := EntitlementReconcileResult{}
 		if err := lockUser(ctx, tx, deboxUserID); err != nil {
 			return result, err
 		}
 		if err := requirePolicyPlan(ctx, tx, deboxUserID, policy); err != nil {
+			return result, err
+		}
+		policy, err = s.marketScopePolicy(ctx, tx, deboxUserID, policy)
+		if err != nil {
 			return result, err
 		}
 		if policy.PlanCode == "free" {
@@ -46,6 +55,25 @@ func (s *Store) ReconcileUserEntitlements(
 		wallets := make(map[string]struct{}, len(walletRows))
 		for _, wallet := range walletRows {
 			wallets[strings.ToLower(wallet.WalletAddress)] = struct{}{}
+		}
+		// Load at most once, and only if an interaction candidate needs a slot.
+		// A normal capacity rejection skips restoration; it must not turn an
+		// already-confirmed payment into an entitlement reconciliation error.
+		activeInteractions := int64(-1)
+		canRestoreInteractions := func(additional int64) (bool, error) {
+			if additional == 0 {
+				return true, nil
+			}
+			if policy.InteractionRuleLimit < 1 || additional > int64(policy.InteractionRuleLimit) {
+				return false, nil
+			}
+			if activeInteractions < 0 {
+				activeInteractions, err = countActiveInteractionRules(ctx, tx, deboxUserID)
+				if err != nil {
+					return false, err
+				}
+			}
+			return activeInteractions+additional <= int64(policy.InteractionRuleLimit), nil
 		}
 
 		watchRules, err := collectMany[WatchRule](ctx, tx, `
@@ -72,7 +100,16 @@ func (s *Store) ReconcileUserEntitlements(
 			if _, exists := wallets[wallet]; !exists && len(wallets) >= policy.WalletLimit {
 				continue
 			}
-			if _, err := tx.Exec(ctx, `
+			interactionCost := restoredInteractionRuleCost(rule)
+			allowed, err := canRestoreInteractions(interactionCost)
+			if err != nil {
+				return result, err
+			}
+			if !allowed {
+				continue
+			}
+			restored, err := s.tryResourceCapacityCandidate(ctx, tx, func(candidate DBTX) error {
+				if _, err := candidate.Exec(ctx, `
 				UPDATE watch_rules
 				SET run_status = 'active',
 				    pause_reason = '',
@@ -82,9 +119,21 @@ func (s *Store) ReconcileUserEntitlements(
 				    END
 				WHERE id = $1
 			`, rule.ID); err != nil {
-				return result, fmt.Errorf("restore watch rule: %w", err)
+					return fmt.Errorf("restore watch rule: %w", err)
+				}
+				return nil
+			})
+			if err != nil {
+				return result, err
 			}
+			if !restored {
+				continue
+			}
+
 			wallets[wallet] = struct{}{}
+			if interactionCost > 0 {
+				activeInteractions += interactionCost
+			}
 			activeSlots++
 			result.WatchRulesRestored++
 		}
@@ -119,17 +168,27 @@ func (s *Store) ReconcileUserEntitlements(
 					candidateWallets[wallet] = struct{}{}
 				}
 				allowed := true
+				var interactionCost int64
 				for _, member := range members {
 					if !policy.allowsRuleType(member.Rule.RuleType) {
 						allowed = false
 						break
 					}
 					candidateWallets[strings.ToLower(member.Rule.WalletAddress)] = struct{}{}
+					interactionCost += restoredInteractionRuleCost(member.Rule)
 				}
 				if !allowed || len(candidateWallets) > policy.WalletLimit {
 					continue
 				}
-				if _, err := tx.Exec(ctx, `
+				allowed, err = canRestoreInteractions(interactionCost)
+				if err != nil {
+					return result, err
+				}
+				if !allowed {
+					continue
+				}
+				restored, err := s.tryResourceCapacityCandidate(ctx, tx, func(candidate DBTX) error {
+					if _, err := candidate.Exec(ctx, `
 					UPDATE combination_rules
 					SET run_status = 'active',
 					    pause_reason = '',
@@ -139,9 +198,9 @@ func (s *Store) ReconcileUserEntitlements(
 					    END
 					WHERE id = $1
 				`, combination.ID); err != nil {
-					return result, fmt.Errorf("restore combination rule: %w", err)
-				}
-				if _, err := tx.Exec(ctx, `
+						return fmt.Errorf("restore combination rule: %w", err)
+					}
+					if _, err := candidate.Exec(ctx, `
 					UPDATE watch_rules
 					SET run_status = 'active', pause_reason = ''
 					WHERE id IN (
@@ -150,15 +209,27 @@ func (s *Store) ReconcileUserEntitlements(
 						WHERE combination_rule_id = $1
 					)
 				`, combination.ID); err != nil {
-					return result, fmt.Errorf("restore combination members: %w", err)
+						return fmt.Errorf("restore combination members: %w", err)
+					}
+					return nil
+				})
+				if err != nil {
+					return result, err
 				}
+				if !restored {
+					continue
+				}
+
 				wallets = candidateWallets
+				if interactionCost > 0 {
+					activeInteractions += interactionCost
+				}
 				activeSlots += cost
 				result.CombinationRulesRestored++
 			}
 		}
 
-		if err := restoreExpiredMarketEntitlements(
+		if err := s.restoreExpiredMarketEntitlements(
 			ctx,
 			tx,
 			deboxUserID,
@@ -173,7 +244,7 @@ func (s *Store) ReconcileUserEntitlements(
 	})
 }
 
-func restoreExpiredMarketEntitlements(
+func (s *Store) restoreExpiredMarketEntitlements(
 	ctx context.Context,
 	tx DBTX,
 	deboxUserID string,
@@ -209,7 +280,21 @@ func restoreExpiredMarketEntitlements(
 		if activeProjects >= int64(policy.MarketProjectLimit) {
 			break
 		}
-		if _, err := tx.Exec(ctx, `
+		if err := validateMarketProjectScope(ctx, tx, project.ID, deboxUserID, policy); err != nil {
+			if isMarketScopeConstraint(err) {
+				continue
+			}
+			return err
+		}
+		hasHolderRules := false
+		if policy.PlanCode == "professional" {
+			hasHolderRules, err = hasActiveProjectHolderRules(ctx, tx, project.ID)
+			if err != nil {
+				return err
+			}
+		}
+		restored, err := s.tryMarketEntitlementCandidate(ctx, tx, hasHolderRules, true, func(candidate DBTX) error {
+			if _, err := candidate.Exec(ctx, `
 			UPDATE market_projects
 			SET status = 'active',
 			    pause_reason = '',
@@ -219,8 +304,17 @@ func restoreExpiredMarketEntitlements(
 			  AND status = 'paused'
 			  AND pause_reason = 'subscription_expired'
 		`, project.ID, deboxUserID); err != nil {
-			return fmt.Errorf("restore expired market project: %w", err)
+				return fmt.Errorf("restore expired market project: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
+		if !restored {
+			continue
+		}
+
 		activeProjects++
 		result.ProjectsRestored++
 	}
@@ -257,6 +351,12 @@ func restoreExpiredMarketEntitlements(
 		if !projectActive {
 			continue
 		}
+		if err := validateStoredMarketRuleScope(ctx, tx, rule, policy); err != nil {
+			if isMarketScopeConstraint(err) {
+				continue
+			}
+			return err
+		}
 		if !policy.MultiPoolMonitoring && rule.PoolScope == "selected" {
 			var nonPrimary bool
 			if err := tx.QueryRow(ctx, `
@@ -275,7 +375,11 @@ func restoreExpiredMarketEntitlements(
 				continue
 			}
 		}
-		if _, err := tx.Exec(ctx, `
+		restored, err := s.tryMarketEntitlementCandidate(ctx, tx, isMarketHolderRule(rule.RuleType), false, func(candidate DBTX) error {
+			if err := advanceMarketRuleNotificationFence(ctx, candidate, rule.ID); err != nil {
+				return err
+			}
+			if _, err := candidate.Exec(ctx, `
 			UPDATE market_rules
 			SET run_status = 'active',
 			    pause_reason = '',
@@ -287,8 +391,16 @@ func restoreExpiredMarketEntitlements(
 			WHERE id = $1 AND debox_user_id = $2
 			  AND enabled = 1 AND run_status = 'paused'
 			  AND pause_reason IN ('subscription_expired', 'free_plan')
-		`, rule.ID, deboxUserID); err != nil {
-			return fmt.Errorf("restore expired market rule: %w", err)
+			`, rule.ID, deboxUserID); err != nil {
+				return fmt.Errorf("restore expired market rule: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if !restored {
+			continue
 		}
 		(*activeSlots)++
 		result.MarketRulesRestored++
@@ -323,8 +435,9 @@ func restoreExpiredMarketEntitlements(
 			continue
 		}
 		allowed := true
+		hasHolderMembers := false
 		for _, member := range members {
-			if err := validateMarketCombinationMember(
+			isHolder, err := validateMarketCombinationMember(
 				ctx,
 				tx,
 				deboxUserID,
@@ -335,13 +448,15 @@ func restoreExpiredMarketEntitlements(
 					RequiredTriggerCount: member.RequiredTriggerCount,
 				},
 				policy,
-			); err != nil {
+			)
+			if err != nil {
 				if isEntitlementRestoreConstraint(err) {
 					allowed = false
 					break
 				}
 				return err
 			}
+			hasHolderMembers = hasHolderMembers || isHolder
 		}
 		if !allowed {
 			continue
@@ -361,7 +476,11 @@ func restoreExpiredMarketEntitlements(
 		if !projectsActive {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `
+		restored, err := s.tryMarketEntitlementCandidate(ctx, tx, hasHolderMembers, false, func(candidate DBTX) error {
+			if err := advanceMarketCombinationNotificationFence(ctx, candidate, combination.ID); err != nil {
+				return err
+			}
+			if _, err := candidate.Exec(ctx, `
 			UPDATE market_combination_rules
 			SET run_status = 'active',
 			    pause_reason = '',
@@ -373,10 +492,10 @@ func restoreExpiredMarketEntitlements(
 			WHERE id = $1 AND debox_user_id = $2
 			  AND enabled = 1 AND run_status = 'paused'
 			  AND pause_reason IN ('subscription_expired', 'free_plan')
-		`, combination.ID, deboxUserID); err != nil {
-			return fmt.Errorf("restore expired market combination: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
+			`, combination.ID, deboxUserID); err != nil {
+				return fmt.Errorf("restore expired market combination: %w", err)
+			}
+			if _, err := candidate.Exec(ctx, `
 			UPDATE market_combination_windows
 			SET closed_at = NOW(),
 			    notification_status = CASE
@@ -385,8 +504,16 @@ func restoreExpiredMarketEntitlements(
 			    END,
 			    updated_at = NOW()
 			WHERE market_combination_rule_id = $1 AND closed_at IS NULL
-		`, combination.ID); err != nil {
-			return fmt.Errorf("reset restored market combination window: %w", err)
+			`, combination.ID); err != nil {
+				return fmt.Errorf("reset restored market combination window: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if !restored {
+			continue
 		}
 		(*activeSlots)++
 		result.MarketCombinationsRestored++
@@ -402,7 +529,7 @@ func marketRuleAllowedByPolicy(rule MarketRule, policy QuotaPolicy) bool {
 }
 
 func isEntitlementRestoreConstraint(err error) bool {
-	return err == ErrInvalidCombinationRule ||
+	return isMarketScopeConstraint(err) || err == ErrInvalidCombinationRule ||
 		err == ErrRuleTypeDenied ||
 		err == ErrMarketRuleTypeDenied
 }

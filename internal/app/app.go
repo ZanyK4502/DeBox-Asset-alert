@@ -19,7 +19,7 @@ const (
 )
 
 func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
-	dependencies, closeDependencies, err := buildDependencies(ctx, cfg)
+	dependencies, closeDependencies, err := buildDependencies(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var background sync.WaitGroup
-	background.Add(6)
+	background.Add(7)
 	go func() {
 		defer background.Done()
 		dependencies.bot.Run(runContext, logger)
@@ -52,6 +52,10 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	go func() {
 		defer background.Done()
 		dependencies.rules.Run(runContext, logger)
+	}()
+	go func() {
+		defer background.Done()
+		dependencies.holders.Run(runContext, logger)
 	}()
 
 	err = runServer(runContext, cfg, httpapi.New(cfg, dependencies.httpapi), logger)

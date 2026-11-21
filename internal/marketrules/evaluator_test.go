@@ -25,7 +25,7 @@ func TestEvaluateSnapshotRuleCrossesAndRearms(t *testing.T) {
 		}},
 		Now: now,
 	}
-	first, err := Evaluate(input)
+	first, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("first evaluation: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestEvaluateSnapshotRuleCrossesAndRearms(t *testing.T) {
 	}
 
 	input.Rule.State = first.State
-	second, err := Evaluate(input)
+	second, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("second evaluation: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestEvaluateSnapshotRuleCrossesAndRearms(t *testing.T) {
 	input.Snapshots[0].ID = 2
 	input.Snapshots[0].PriceUSD = &price
 	input.Rule.State = second.State
-	rearmed, err := Evaluate(input)
+	rearmed, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("rearm evaluation: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestEvaluateSnapshotRuleCrossesAndRearms(t *testing.T) {
 	input.Snapshots[0].ID = 3
 	input.Snapshots[0].PriceUSD = &price
 	input.Rule.State = rearmed.State
-	crossedAgain, err := Evaluate(input)
+	crossedAgain, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("second crossing evaluation: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestEvaluateAbsolutePriceDoesNotRepeatAfterCooldownWhileConditionRemainsAct
 		}},
 		Now: now,
 	}
-	first, err := Evaluate(input)
+	first, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("first evaluation: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestEvaluateAbsolutePriceDoesNotRepeatAfterCooldownWhileConditionRemainsAct
 	input.Now = now.Add(61 * time.Second)
 	input.Snapshots[0].ID = 2
 	input.Snapshots[0].CapturedAt = input.Now
-	repeated, err := Evaluate(input)
+	repeated, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("post-cooldown evaluation: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *t
 				},
 				Now: now,
 			}
-			first, err := Evaluate(input)
+			first, err := evaluateFreshQuoteFixture(input)
 			if err != nil {
 				t.Fatalf("first evaluation: %v", err)
 			}
@@ -145,7 +145,7 @@ func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *t
 			input.Now = now.Add(30 * time.Second)
 			input.Snapshots[0].ID = 3
 			input.Snapshots[0].CapturedAt = input.Now
-			duringCooldown, err := Evaluate(input)
+			duringCooldown, err := evaluateFreshQuoteFixture(input)
 			if err != nil {
 				t.Fatalf("cooldown evaluation: %v", err)
 			}
@@ -157,7 +157,8 @@ func TestEvaluatePriceChangeRepeatsAfterCooldownWhileConditionRemainsActive(t *t
 			input.Now = now.Add(61 * time.Second)
 			input.Snapshots[0].ID = 4
 			input.Snapshots[0].CapturedAt = input.Now
-			afterCooldown, err := Evaluate(input)
+			input.Snapshots[1].CapturedAt = input.Now.Add(-time.Hour)
+			afterCooldown, err := evaluateFreshQuoteFixture(input)
 			if err != nil {
 				t.Fatalf("post-cooldown evaluation: %v", err)
 			}
@@ -187,7 +188,7 @@ func TestEvaluatePriceChangeDoesNotRepeatWhenOptionIsDisabled(t *testing.T) {
 		},
 		Now: now,
 	}
-	first, err := Evaluate(input)
+	first, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("first evaluation: %v", err)
 	}
@@ -200,7 +201,8 @@ func TestEvaluatePriceChangeDoesNotRepeatWhenOptionIsDisabled(t *testing.T) {
 	input.Now = now.Add(61 * time.Second)
 	input.Snapshots[0].ID = 3
 	input.Snapshots[0].CapturedAt = input.Now
-	repeated, err := Evaluate(input)
+	input.Snapshots[1].CapturedAt = input.Now.Add(-time.Hour)
+	repeated, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("post-cooldown evaluation: %v", err)
 	}
@@ -229,7 +231,7 @@ func TestEvaluateLiquidityDecreaseRepeatsAfterCooldownWhenEnabled(t *testing.T) 
 		},
 		Now: now,
 	}
-	first, err := Evaluate(input)
+	first, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("first evaluation: %v", err)
 	}
@@ -242,7 +244,8 @@ func TestEvaluateLiquidityDecreaseRepeatsAfterCooldownWhenEnabled(t *testing.T) 
 	input.Now = now.Add(61 * time.Second)
 	input.Snapshots[0].ID = 3
 	input.Snapshots[0].CapturedAt = input.Now
-	repeated, err := Evaluate(input)
+	input.Snapshots[1].CapturedAt = input.Now.Add(-time.Hour)
+	repeated, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("post-cooldown evaluation: %v", err)
 	}
@@ -301,7 +304,7 @@ func TestEvaluateVolumeAndImbalanceRulesRepeatAfterCooldownWhenEnabled(t *testin
 				Snapshots: test.snapshots,
 				Now:       now,
 			}
-			first, err := Evaluate(input)
+			first, err := evaluateFreshQuoteFixture(input)
 			if err != nil {
 				t.Fatalf("first evaluation: %v", err)
 			}
@@ -314,7 +317,7 @@ func TestEvaluateVolumeAndImbalanceRulesRepeatAfterCooldownWhenEnabled(t *testin
 			input.Now = now.Add(61 * time.Second)
 			input.Snapshots[0].ID = 3
 			input.Snapshots[0].CapturedAt = input.Now
-			repeated, err := Evaluate(input)
+			repeated, err := evaluateFreshQuoteFixture(input)
 			if err != nil {
 				t.Fatalf("post-cooldown evaluation: %v", err)
 			}
@@ -328,7 +331,7 @@ func TestEvaluateVolumeAndImbalanceRulesRepeatAfterCooldownWhenEnabled(t *testin
 func TestEvaluateEventCooldownLimitsOneTriggerPerBatch(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	firstValue, secondValue := "1000", "2000"
-	evaluation, err := Evaluate(EvaluationInput{
+	evaluation, err := evaluateFreshQuoteFixture(EvaluationInput{
 		Rule: store.MarketRule{
 			RuleType:        plans.MarketLargeBuy,
 			ThresholdValue:  "500",
@@ -387,7 +390,7 @@ func TestEvaluateFourMemeProgressOnlyOnCrossing(t *testing.T) {
 		},
 		Now: now,
 	}
-	first, err := Evaluate(input)
+	first, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("first evaluation: %v", err)
 	}
@@ -395,7 +398,7 @@ func TestEvaluateFourMemeProgressOnlyOnCrossing(t *testing.T) {
 		t.Fatalf("first triggers = %#v", first.Triggers)
 	}
 	input.Rule.State = first.State
-	second, err := Evaluate(input)
+	second, err := evaluateFreshQuoteFixture(input)
 	if err != nil {
 		t.Fatalf("second evaluation: %v", err)
 	}
@@ -406,7 +409,7 @@ func TestEvaluateFourMemeProgressOnlyOnCrossing(t *testing.T) {
 
 func TestEvaluateSkipsReorgedEvents(t *testing.T) {
 	value := "1000"
-	evaluation, err := Evaluate(EvaluationInput{
+	evaluation, err := evaluateFreshQuoteFixture(EvaluationInput{
 		Rule: store.MarketRule{
 			RuleType:       plans.MarketLargeSell,
 			ThresholdValue: "100",
@@ -429,7 +432,7 @@ func TestEvaluateSkipsReorgedEvents(t *testing.T) {
 func TestEvaluateDoesNotAdvancePastUnconfirmedEvent(t *testing.T) {
 	now := time.Now().UTC()
 	value := "1000"
-	evaluation, err := Evaluate(EvaluationInput{
+	evaluation, err := evaluateFreshQuoteFixture(EvaluationInput{
 		Rule: store.MarketRule{
 			RuleType:       plans.MarketLargeBuy,
 			ThresholdValue: "100",
@@ -477,7 +480,7 @@ func TestEvaluateHolderRuleCarriesAddressLabel(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	address := "0x1111111111111111111111111111111111111111"
 	value := "25"
-	evaluation, err := Evaluate(EvaluationInput{
+	evaluation, err := evaluateFreshQuoteFixture(EvaluationInput{
 		Rule: store.MarketRule{
 			RuleType:       plans.MarketHolderIncrease,
 			ThresholdValue: "10",
@@ -527,7 +530,7 @@ func TestEvaluateHolderRuleAuditsExcludedAddressWithoutNotification(t *testing.T
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	address := "0x2222222222222222222222222222222222222222"
 	value := "25"
-	evaluation, err := Evaluate(EvaluationInput{
+	evaluation, err := evaluateFreshQuoteFixture(EvaluationInput{
 		Rule: store.MarketRule{
 			RuleType:       plans.MarketHolderDecrease,
 			ThresholdValue: "10",

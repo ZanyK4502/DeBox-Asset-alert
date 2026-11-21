@@ -16,26 +16,32 @@ import (
 var testNow = time.Date(2026, 7, 22, 12, 5, 0, 0, time.UTC)
 
 type fakeRepository struct {
-	subscriptions   []store.Subscription
-	scheduled       map[int64]*store.Subscription
-	targets         map[int64][]store.DailySummaryTarget
-	statistics      store.SummaryStatistics
-	events          []store.SummaryEvent
-	marketEvents    []store.MarketSummaryEvent
-	marketSummaries []store.MarketProjectChainSummary
-	snapshots       []store.CreateNotificationDetailSnapshotParams
-	snapshotErr     error
-	listAfterIDs    []int64
-	marks           []summaryMark
-	targetMarks     []targetMark
-	calls           []string
-	listErr         error
-	getErr          error
-	targetErr       error
-	statisticsErr   error
-	eventsErr       error
-	markErr         error
-	targetMarkErr   error
+	subscriptions     []store.Subscription
+	scheduled         map[int64]*store.Subscription
+	targets           map[int64][]store.DailySummaryTarget
+	statistics        store.SummaryStatistics
+	events            []store.SummaryEvent
+	marketEvents      []store.MarketSummaryEvent
+	marketSummaries   []store.MarketProjectChainSummary
+	snapshots         []store.CreateNotificationDetailSnapshotParams
+	snapshotErr       error
+	listAfterIDs      []int64
+	marks             []summaryMark
+	targetMarks       []targetMark
+	calls             []string
+	listErr           error
+	getErr            error
+	targetErr         error
+	statisticsErr     error
+	eventsErr         error
+	markErr           error
+	targetMarkErr     error
+	claimErr          error
+	completeFailOnce  bool
+	dispatches        map[int64]*store.DailySummaryDispatch
+	dispatchSnapshots map[int64]store.NotificationDetailSnapshot
+	snapshotSources   map[string]store.NotificationDetailSnapshot
+	targetProgress    map[int64]store.DailySummaryTarget
 }
 
 func (f *fakeRepository) CreateNotificationDetailSnapshot(
@@ -46,14 +52,30 @@ func (f *fakeRepository) CreateNotificationDetailSnapshot(
 	if f.snapshotErr != nil {
 		return store.NotificationDetailSnapshot{}, f.snapshotErr
 	}
+	if snapshot, ok := f.snapshotSources[params.SourceKey]; ok {
+		return snapshot, nil
+	}
 	f.snapshots = append(f.snapshots, params)
-	return store.NotificationDetailSnapshot{
-		ID:               int64(len(f.snapshots)),
-		PublicID:         "nd_1123456789abcdef0123456789abcdef01234567",
-		SourceKey:        params.SourceKey,
-		NotificationKind: params.NotificationKind,
-		Details:          params.Details,
-	}, nil
+	snapshot := store.NotificationDetailSnapshot{
+		ID:                   int64(len(f.snapshots)),
+		PublicID:             "nd_1123456789abcdef0123456789abcdef01234567",
+		SourceKey:            params.SourceKey,
+		NotificationKind:     params.NotificationKind,
+		Details:              params.Details,
+		NotificationText:     params.NotificationText,
+		NotificationChatID:   params.NotificationChatID,
+		NotificationChatType: params.NotificationChatType,
+		NotificationLanguage: params.NotificationLanguage,
+		NotificationLabel:    params.NotificationLabel,
+		DeBoxUserID:          params.DeBoxUserID,
+		CreatedAt:            testNow,
+		ExpiresAt:            testNow.Add(30 * 24 * time.Hour),
+	}
+	if f.snapshotSources == nil {
+		f.snapshotSources = map[string]store.NotificationDetailSnapshot{}
+	}
+	f.snapshotSources[params.SourceKey] = snapshot
+	return snapshot, nil
 }
 
 type summaryMark struct {
@@ -1005,7 +1027,7 @@ func TestSummarySendsToAllSelectedTargets(t *testing.T) {
 			snapshot.NotificationChatType != notifier.messages[index].chatType ||
 			snapshot.NotificationText != notifier.messages[index].text ||
 			snapshot.ActualValue != "address_events=2;market_events=3;market_anomalies=1" ||
-			!strings.Contains(string(snapshot.Details), `"schema_version":1`) ||
+			!strings.Contains(string(snapshot.Details), `"schema_version":2`) ||
 			!strings.Contains(string(snapshot.Details), `"address_events":[{"id":11`) ||
 			!strings.Contains(string(snapshot.Details), `"market_events":[{"id":12`) ||
 			!strings.Contains(string(snapshot.Details), `"market_project_chain_summaries":[{"market_project_id":13`) {

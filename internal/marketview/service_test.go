@@ -5,10 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketdata"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -259,6 +261,8 @@ func TestFreePlanCannotVerifyOrQueryMarketPools(t *testing.T) {
 
 func TestPreviewRecommendationsUsesLatestSelectedPoolQuote(t *testing.T) {
 	livePair := pair(testPairA, "pancakeswap", []string{"v3"}, "100000")
+	fetchedAt := time.Now().UTC()
+	livePair.QuoteQuality = marketquality.Quote{Status: marketquality.StatusLive, FetchedAt: &fetchedAt}
 	livePair.PriceUSD = marketdata.Decimal("2")
 	livePair.Volume = map[string]marketdata.Decimal{
 		"h1": marketdata.Decimal("12000"),

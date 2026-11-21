@@ -14,23 +14,25 @@ import (
 )
 
 const (
-	DefaultChainID            int64 = 56
-	DefaultCursorKey                = "market_logs"
-	DefaultInboxInterval            = 2 * time.Second
-	DefaultScanInterval             = time.Minute
-	DefaultSnapshotInterval         = 20 * time.Second
-	DefaultDiscoveryInterval        = 5 * time.Minute
-	DefaultHealthInterval           = time.Minute
-	DefaultCleanupInterval          = 6 * time.Hour
-	DefaultConfirmationDepth  int64 = 15
-	DefaultScanBatchSize      int64 = 100
-	DefaultInitialLookback    int64 = 200
-	DefaultReorgLookback      int   = 128
-	DefaultInboxBatchSize     int   = 100
-	DefaultWebhookMaxAttempts int   = 10
-	DefaultWebhookLease             = 2 * time.Minute
-	DefaultWebhookMaxAge            = 5 * time.Minute
-	DefaultMonthlyCULimit     int64 = 100_000_000
+	DefaultChainID              int64 = 56
+	DefaultCursorKey                  = "market_logs"
+	DefaultInboxInterval              = 2 * time.Second
+	DefaultScanInterval               = time.Minute
+	DefaultSnapshotInterval           = 20 * time.Second
+	DefaultDiscoveryInterval          = 5 * time.Minute
+	DefaultHealthInterval             = time.Minute
+	DefaultCleanupInterval            = 6 * time.Hour
+	DefaultConfirmationDepth    int64 = 15
+	DefaultScanBatchSize        int64 = 500
+	DefaultHydrationConcurrency       = 2
+	MaxScanBatchSize            int64 = 1000
+	DefaultInitialLookback      int64 = 200
+	DefaultReorgLookback        int   = 128
+	DefaultInboxBatchSize       int   = 100
+	DefaultWebhookMaxAttempts   int   = 10
+	DefaultWebhookLease               = 2 * time.Minute
+	DefaultWebhookMaxAge              = 5 * time.Minute
+	DefaultMonthlyCULimit       int64 = 100_000_000
 )
 
 var (
@@ -42,33 +44,36 @@ var (
 	ErrWebhookBodyTooLarge = errors.New("market webhook body is too large")
 	ErrNoCanonicalAncestor = errors.New("no canonical ancestor found within the reorganization lookback")
 	ErrUnsupportedChain    = errors.New("unsupported market collector chain")
+	ErrParserScopeChanged  = errors.New("market parser scope changed; reload before advancing the scan")
 )
 
 type Settings struct {
-	Enabled            bool
-	ChainKey           string
-	ChainID            int64
-	ChainFallback      string
-	CursorKey          string
-	WebhookSigningKey  string
-	WebhookSigningKeys map[string]string
-	WebhookAutoRepair  bool
-	PublicAppURL       string
-	WebhookMaxAge      time.Duration
-	WebhookLease       time.Duration
-	WebhookMaxAttempts int
-	InboxBatchSize     int
-	ConfirmationDepth  int64
-	ScanBatchSize      int64
-	InitialLookback    int64
-	ReorgLookback      int
-	InboxInterval      time.Duration
-	ScanInterval       time.Duration
-	SnapshotInterval   time.Duration
-	DiscoveryInterval  time.Duration
-	HealthInterval     time.Duration
-	CleanupInterval    time.Duration
-	MonthlyCULimit     int64
+	Enabled              bool
+	ChainKey             string
+	ChainID              int64
+	ChainFallback        string
+	CursorKey            string
+	WebhookWrappingKey   string
+	WebhookSigningKey    string
+	WebhookSigningKeys   map[string]string
+	WebhookAutoRepair    bool
+	PublicAppURL         string
+	WebhookMaxAge        time.Duration
+	WebhookLease         time.Duration
+	WebhookMaxAttempts   int
+	InboxBatchSize       int
+	ConfirmationDepth    int64
+	ScanBatchSize        int64
+	HydrationConcurrency int
+	InitialLookback      int64
+	ReorgLookback        int
+	InboxInterval        time.Duration
+	ScanInterval         time.Duration
+	SnapshotInterval     time.Duration
+	DiscoveryInterval    time.Duration
+	HealthInterval       time.Duration
+	CleanupInterval      time.Duration
+	MonthlyCULimit       int64
 }
 
 func (settings Settings) normalized() Settings {
@@ -102,6 +107,9 @@ func (settings Settings) normalized() Settings {
 	}
 	if settings.ScanBatchSize <= 0 {
 		settings.ScanBatchSize = DefaultScanBatchSize
+	}
+	if settings.HydrationConcurrency <= 0 {
+		settings.HydrationConcurrency = DefaultHydrationConcurrency
 	}
 	if settings.InitialLookback <= 0 {
 		settings.InitialLookback = DefaultInitialLookback
@@ -166,6 +174,7 @@ type Repository interface {
 	UpsertMarketPool(context.Context, store.UpsertMarketPoolParams) (store.MarketPool, error)
 	EnsureMarketProjectPool(context.Context, store.EnsureMarketProjectPoolParams) (store.MarketProjectPool, error)
 	CreateMarketSnapshot(context.Context, store.CreateMarketSnapshotParams) (store.MarketSnapshot, error)
+	RecordMarketQuoteFailure(context.Context, int64, []store.MarketCollectionTarget, time.Time) (int64, error)
 	LatestMarketSnapshot(context.Context, int64, string, *int64) (*store.MarketSnapshot, error)
 
 	CreateWebhookInboxMessage(context.Context, store.CreateWebhookInboxParams) (store.WebhookInboxMessage, bool, error)
@@ -186,8 +195,9 @@ type Repository interface {
 	MarkMarketBlockConfirmed(context.Context, int64, int64) (int64, error)
 	ListUnconfirmedMarketEventBlocks(context.Context, int64, int64, int64) ([]int64, error)
 	MarkMarketBlockReorged(context.Context, int64, int64, string) (int64, error)
+	RecordMarketScanCoverage(context.Context, store.RecordMarketScanCoverageParams) error
 	CreateMarketEvent(context.Context, store.CreateMarketEventParams) (store.MarketEvent, bool, error)
-	UpdateMarketProjectsFourMemeStatus(context.Context, int64, string, string) (int64, error)
+	PersistMarketTransaction(context.Context, store.MarketTransactionParams) ([]store.MarketEvent, error)
 
 	RecordMarketProviderHealth(context.Context, store.RecordMarketProviderHealthParams) (store.MarketProviderHealth, error)
 	UpsertMarketProviderUsage(context.Context, store.UpsertMarketProviderUsageParams) (store.MarketProviderUsage, error)
@@ -203,6 +213,8 @@ type ChainClient interface {
 	TransactionReceipt(context.Context, string, string, string) (map[string]any, error)
 	PoolTokens(context.Context, string, string, string) (string, string, error)
 	PoolFactory(context.Context, string, string, string) (string, error)
+	TokenDecimals(context.Context, string, string, string) (int32, error)
+	CreateWebhook(context.Context, string, string, chain.WebhookCreateRequest) (chain.WebhookSubscription, error)
 	ListWebhooks(context.Context, string, string, chain.WebhookListOptions) (chain.WebhookList, error)
 	UpdateWebhook(context.Context, string, string, string, chain.WebhookUpdateRequest) error
 }
@@ -218,6 +230,7 @@ type Dependencies struct {
 	Chain            ChainClient
 	Market           marketdata.Provider
 	TryLock          TryLockFunc
+	Logger           *slog.Logger
 	Now              func() time.Time
 	EstimatedCUMilli *atomic.Int64
 }
@@ -227,11 +240,16 @@ type Service struct {
 	chain      ChainClient
 	market     marketdata.Provider
 	tryLock    TryLockFunc
+	logger     *slog.Logger
 	settings   Settings
 	now        func() time.Time
 
 	estimatedCU       *atomic.Int64
 	lastDiscoveryUnix atomic.Int64
+	discovery         discoveryProgress
+	poolFacts         immutablePoolFactCache
+	tokenDecimals     tokenDecimalsCache
+	scanScopeNotice   scanScopeNotice
 }
 
 func New(dependencies Dependencies, settings Settings) *Service {
@@ -248,6 +266,7 @@ func New(dependencies Dependencies, settings Settings) *Service {
 		chain:       dependencies.Chain,
 		market:      dependencies.Market,
 		tryLock:     dependencies.TryLock,
+		logger:      dependencies.Logger,
 		settings:    settings.normalized(),
 		now:         now,
 		estimatedCU: estimatedCU,

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 )
 
 var marketAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
@@ -26,7 +28,8 @@ const marketPoolColumns = `
 	token1_address, token1_symbol, token1_decimals,
 	liquidity_usd::text AS liquidity_usd,
 	supports_event_parsing, parser_adapter, verification_status,
-	metadata, first_seen_at, last_seen_at, created_at, updated_at
+	metadata, COALESCE(metadata->'quote_quality','{}'::jsonb) AS quote_quality,
+	first_seen_at, last_seen_at, created_at, updated_at
 `
 
 const marketProjectPoolColumns = `
@@ -48,7 +51,7 @@ const marketSnapshotColumns = `
 	volume_6h_usd::text AS volume_6h_usd,
 	volume_24h_usd::text AS volume_24h_usd,
 	buys_5m, sells_5m, buys_1h, sells_1h, buys_24h, sells_24h,
-	source, source_timestamp, captured_at, raw_payload
+	source, source_timestamp, quote_quality, captured_at, raw_payload
 `
 
 type CreateMarketProjectParams struct {
@@ -65,26 +68,28 @@ type CreateMarketProjectParams struct {
 }
 
 type UpsertMarketPoolParams struct {
-	ChainKey             string
-	ChainID              int64
-	Protocol             string
-	ProtocolVersion      string
-	PoolKey              string
-	PoolAddress          *string
-	FactoryAddress       *string
-	FactoryVerified      bool
-	Token0Address        string
-	Token0Symbol         string
-	Token0Decimals       int32
-	Token1Address        string
-	Token1Symbol         string
-	Token1Decimals       int32
-	LiquidityUSD         string
-	SupportsEventParsing bool
-	ParserAdapter        string
-	VerificationStatus   string
-	Metadata             json.RawMessage
-	SeenAt               time.Time
+	ChainKey               string
+	ChainID                int64
+	Protocol               string
+	ProtocolVersion        string
+	PoolKey                string
+	PoolAddress            *string
+	FactoryAddress         *string
+	FactoryVerified        bool
+	Token0Address          string
+	Token0Symbol           string
+	Token0Decimals         int32
+	Token0DecimalsVerified bool
+	Token1Address          string
+	Token1Symbol           string
+	Token1Decimals         int32
+	Token1DecimalsVerified bool
+	LiquidityUSD           string
+	SupportsEventParsing   bool
+	ParserAdapter          string
+	VerificationStatus     string
+	Metadata               json.RawMessage
+	SeenAt                 time.Time
 }
 
 type LinkMarketProjectPoolParams struct {
@@ -118,6 +123,7 @@ type CreateMarketSnapshotParams struct {
 	Sells24h        *int64
 	Source          string
 	SourceTimestamp *time.Time
+	QuoteQuality    marketquality.Quote
 	CapturedAt      time.Time
 	RawPayload      json.RawMessage
 }
@@ -131,14 +137,26 @@ func (s *Store) CreateMarketProjectWithinQuota(
 		return MarketProject{}, err
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProject, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+		if err != nil {
+			return MarketProject{}, err
+		}
+		defer cancel()
 		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
 			return MarketProject{}, err
 		}
 		if err := requirePolicyPlan(ctx, tx, params.DeBoxUserID, policy); err != nil {
 			return MarketProject{}, err
 		}
+		policy, err = s.marketScopePolicy(ctx, tx, params.DeBoxUserID, policy)
+		if err != nil {
+			return MarketProject{}, err
+		}
 		if policy.MarketProjectLimit <= 0 {
 			return MarketProject{}, ErrMarketMonitoringDenied
+		}
+		if err := validateMarketScopeChain(policy, params.ChainKey, params.ChainID); err != nil {
+			return MarketProject{}, err
 		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `
@@ -170,7 +188,16 @@ func (s *Store) CreateMarketProjectWithinQuota(
 		if isUniqueViolation(err) {
 			return MarketProject{}, ErrMarketProjectExists
 		}
-		return project, err
+		if err != nil {
+			return MarketProject{}, err
+		}
+		if err := validateMarketProjectScope(ctx, tx, project.ID, params.DeBoxUserID, policy); err != nil {
+			return MarketProject{}, err
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return MarketProject{}, err
+		}
+		return project, nil
 	})
 }
 
@@ -264,10 +291,19 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 	policy QuotaPolicy,
 ) (MarketProject, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProject, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return MarketProject{}, err
+		}
+		defer cancel()
 		if err := lockUser(ctx, tx, deboxUserID); err != nil {
 			return MarketProject{}, err
 		}
 		if err := requirePolicyPlan(ctx, tx, deboxUserID, policy); err != nil {
+			return MarketProject{}, err
+		}
+		policy, err = s.marketScopePolicy(ctx, tx, deboxUserID, policy)
+		if err != nil {
 			return MarketProject{}, err
 		}
 		if policy.MarketProjectLimit <= 0 {
@@ -284,6 +320,9 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 		}
 		if err != nil {
 			return MarketProject{}, fmt.Errorf("lock market project: %w", err)
+		}
+		if err := validateMarketProjectScope(ctx, tx, projectID, deboxUserID, policy); err != nil {
+			return MarketProject{}, err
 		}
 		if project.Status == "active" {
 			return project, nil
@@ -302,6 +341,10 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 		if count >= int64(policy.MarketProjectLimit) {
 			return MarketProject{}, ErrMarketProjectLimitReached
 		}
+		holderTargets, err := s.beginProjectHolderTargetCheck(ctx, tx, projectID)
+		if err != nil {
+			return MarketProject{}, err
+		}
 		restored, err := collectOne[MarketProject](ctx, tx, `
 			UPDATE market_projects
 			SET status = 'active', pause_reason = '', frozen_at = NULL, updated_at = NOW()
@@ -315,6 +358,12 @@ func (s *Store) RestoreMarketProjectWithinQuota(
 		)
 		if err != nil {
 			return MarketProject{}, fmt.Errorf("restore market project: %w", err)
+		}
+		if err := s.checkMarketHolderTargetLimit(ctx, tx, holderTargets); err != nil {
+			return MarketProject{}, err
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return MarketProject{}, err
 		}
 		return restored, nil
 	})
@@ -373,23 +422,70 @@ func (s *Store) SetMarketProjectStatus(
 	if status != "active" && status != "paused" && status != "archived" {
 		return MarketProject{}, ErrInvalidMarketStatus
 	}
-	project, err := collectOne[MarketProject](ctx, s.db, `
+	update := func(ctx context.Context, db DBTX) (MarketProject, error) {
+		project, err := collectOne[MarketProject](ctx, db, `
 		UPDATE market_projects
 		SET status = $1, pause_reason = $2, updated_at = NOW()
 		WHERE id = $3 AND debox_user_id = $4
 		RETURNING `+marketProjectColumns,
-		status,
-		pauseReason,
-		projectID,
-		deboxUserID,
-	)
-	if isNoRows(err) {
-		return MarketProject{}, ErrNotFound
+			status,
+			pauseReason,
+			projectID,
+			deboxUserID,
+		)
+		if isNoRows(err) {
+			return MarketProject{}, ErrNotFound
+		}
+		if err != nil {
+			return MarketProject{}, fmt.Errorf("set market project status: %w", err)
+		}
+		return project, nil
 	}
-	if err != nil {
-		return MarketProject{}, fmt.Errorf("set market project status: %w", err)
+	if status == "active" {
+		return withTxValue(ctx, s.db, func(tx DBTX) (MarketProject, error) {
+			ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+			if err != nil {
+				return MarketProject{}, err
+			}
+			defer cancel()
+			if err := lockUser(ctx, tx, deboxUserID); err != nil {
+				return MarketProject{}, err
+			}
+			policy, err := s.marketScopePolicy(ctx, tx, deboxUserID, QuotaPolicy{})
+			if err != nil {
+				return MarketProject{}, err
+			}
+			if err := validateMarketProjectScope(ctx, tx, projectID, deboxUserID, policy); err != nil {
+				return MarketProject{}, err
+			}
+			if s.marketScopePolicies != nil {
+				count, err := queryCount(ctx, tx, `SELECT COUNT(*) FROM market_projects WHERE debox_user_id=$1 AND status='active' AND id<>$2`, deboxUserID, projectID)
+				if err != nil {
+					return MarketProject{}, err
+				}
+				if count >= int64(policy.MarketProjectLimit) {
+					return MarketProject{}, ErrMarketProjectLimitReached
+				}
+			}
+			holderTargets, err := s.beginProjectHolderTargetCheck(ctx, tx, projectID)
+			if err != nil {
+				return MarketProject{}, err
+			}
+			project, err := update(ctx, tx)
+			if err != nil {
+				return MarketProject{}, err
+			}
+			if err := s.checkMarketHolderTargetLimit(ctx, tx, holderTargets); err != nil {
+				return MarketProject{}, err
+			}
+			if err := s.checkResourceCapacity(ctx, tx); err != nil {
+				return MarketProject{}, err
+			}
+			return project, nil
+		})
 	}
-	return project, nil
+	// Stopping or archiving frees capacity and needs no admission.
+	return update(ctx, s.db)
 }
 
 func (s *Store) ArchiveMarketProject(
@@ -508,24 +604,129 @@ func (s *Store) DeleteArchivedMarketProject(
 	return err
 }
 
-func (s *Store) UpdateMarketProjectsFourMemeStatus(
-	ctx context.Context,
-	chainID int64,
-	tokenAddress string,
-	status string,
-) (int64, error) {
+// UpdateMarketFourMemeFromEvent derives state from a stored protocol event. A
+// caller cannot choose a phase or substitute an ingest timestamp for chain order.
+func (s *Store) UpdateMarketFourMemeFromEvent(ctx context.Context, eventID int64) (int64, error) {
+	return withTxValue(ctx, s.db, func(db DBTX) (int64, error) {
+		return updateMarketFourMemeFromEvent(ctx, db, eventID)
+	})
+}
+
+func updateMarketFourMemeFromEvent(ctx context.Context, db DBTX, eventID int64) (int64, error) {
+	if eventID <= 0 {
+		return 0, ErrInvalidMarketEvent
+	}
+	value, err := collectOptional[struct {
+		ChainID      int64  `db:"chain_id"`
+		TokenAddress string `db:"token_address"`
+	}](ctx, db, `
+		SELECT chain_id, token_address FROM market_events
+		WHERE id = $1 AND chain_id = 56 AND reorged = 0
+		  AND metadata->>'adapter' IN ('four_meme_v1', 'four_meme_v2')
+		  AND event_type IN ('token_created', 'buy', 'sell', 'trading_stopped', 'migrated')
+		  AND block_number IS NOT NULL AND block_hash IS NOT NULL
+		  AND transaction_index IS NOT NULL AND log_index IS NOT NULL
+	`, eventID)
+	if err != nil {
+		return 0, fmt.Errorf("get Four.meme state source: %w", err)
+	}
+	if value == nil {
+		return 0, nil
+	}
+	return reconcileMarketFourMemeState(ctx, db, value.ChainID, value.TokenAddress)
+}
+
+func (s *Store) ReconcileMarketFourMemeState(ctx context.Context, chainID int64, tokenAddress string) (int64, error) {
+	return withTxValue(ctx, s.db, func(db DBTX) (int64, error) {
+		return reconcileMarketFourMemeState(ctx, db, chainID, tokenAddress)
+	})
+}
+
+// This helper also runs inside the receipt/reorg transaction. Callers handling
+// several tokens acquire these per-token locks in sorted token-address order.
+func reconcileMarketFourMemeState(ctx context.Context, db DBTX, chainID int64, tokenAddress string) (int64, error) {
 	tokenAddress, err := normalizeMarketAddress(tokenAddress)
 	if err != nil || chainID <= 0 {
 		return 0, ErrInvalidMarketProject
 	}
-	status = normalizeFourMemeStatus(status)
-	tag, err := s.db.Exec(ctx, `
-		UPDATE market_projects
-		SET four_meme_status = $1, updated_at = NOW()
-		WHERE chain_id = $2 AND token_address = $3 AND status <> 'archived'
-	`, status, chainID, tokenAddress)
+	if chainID != 56 {
+		return 0, nil
+	}
+	if _, err := db.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("market-four-meme:%d:%s", chainID, tokenAddress)); err != nil {
+		return 0, fmt.Errorf("lock Four.meme state: %w", err)
+	}
+	latest, err := collectOptional[struct {
+		ID               int64     `db:"id"`
+		BlockHash        string    `db:"block_hash"`
+		BlockNumber      int64     `db:"block_number"`
+		TransactionIndex int32     `db:"transaction_index"`
+		LogIndex         int32     `db:"log_index"`
+		OccurredAt       time.Time `db:"occurred_at"`
+		Status           string    `db:"status"`
+	}](ctx, db, `
+		SELECT id, block_hash, block_number, transaction_index, log_index, occurred_at,
+		       CASE event_type WHEN 'trading_stopped' THEN 'graduating'
+		         WHEN 'migrated' THEN 'migrated' ELSE 'bonding' END AS status
+		FROM market_events
+		WHERE chain_id = $1 AND token_address = $2 AND reorged = 0
+		  AND metadata->>'adapter' IN ('four_meme_v1', 'four_meme_v2')
+		  AND event_type IN ('token_created', 'buy', 'sell', 'trading_stopped', 'migrated')
+		  AND block_number IS NOT NULL AND block_hash IS NOT NULL
+		  AND transaction_index IS NOT NULL AND log_index IS NOT NULL
+		ORDER BY block_number DESC, transaction_index DESC, log_index DESC, id DESC
+		LIMIT 1
+	`, chainID, tokenAddress)
 	if err != nil {
-		return 0, fmt.Errorf("update Four.meme project status: %w", err)
+		return 0, fmt.Errorf("get latest effective Four.meme event: %w", err)
+	}
+	if latest == nil {
+		tag, err := db.Exec(ctx, `DELETE FROM market_four_meme_states WHERE chain_id = $1 AND token_address = $2`, chainID, tokenAddress)
+		if err != nil {
+			return 0, fmt.Errorf("retire Four.meme state: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return 0, nil
+		}
+		tag, err = db.Exec(ctx, `
+			UPDATE market_projects SET four_meme_status = 'unknown', updated_at = NOW()
+			WHERE chain_id = $1 AND token_address = $2 AND status <> 'archived'
+			  AND four_meme_status IS DISTINCT FROM 'unknown'
+		`, chainID, tokenAddress)
+		if err != nil {
+			return 0, fmt.Errorf("reset reorged Four.meme project state: %w", err)
+		}
+		return tag.RowsAffected(), nil
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO market_four_meme_states (
+			chain_id, token_address, source_event_id, source_block_hash,
+			source_block_number, source_transaction_index, source_log_index, status, occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (chain_id, token_address) DO UPDATE
+		SET source_event_id = EXCLUDED.source_event_id,
+		    source_block_hash = EXCLUDED.source_block_hash,
+		    source_block_number = EXCLUDED.source_block_number,
+		    source_transaction_index = EXCLUDED.source_transaction_index,
+		    source_log_index = EXCLUDED.source_log_index,
+		    status = EXCLUDED.status, occurred_at = EXCLUDED.occurred_at, updated_at = NOW()
+		WHERE (market_four_meme_states.source_event_id, market_four_meme_states.source_block_hash,
+		       market_four_meme_states.source_block_number, market_four_meme_states.source_transaction_index,
+		       market_four_meme_states.source_log_index, market_four_meme_states.status)
+		  IS DISTINCT FROM (EXCLUDED.source_event_id, EXCLUDED.source_block_hash,
+		       EXCLUDED.source_block_number, EXCLUDED.source_transaction_index,
+		       EXCLUDED.source_log_index, EXCLUDED.status)
+	`, chainID, tokenAddress, latest.ID, latest.BlockHash, latest.BlockNumber,
+		latest.TransactionIndex, latest.LogIndex, latest.Status, latest.OccurredAt); err != nil {
+		return 0, fmt.Errorf("advance Four.meme state source: %w", err)
+	}
+	tag, err := db.Exec(ctx, `
+		UPDATE market_projects SET four_meme_status = $1, updated_at = NOW()
+		WHERE chain_id = $2 AND token_address = $3 AND status <> 'archived'
+		  AND four_meme_status IS DISTINCT FROM $1
+	`, latest.Status, chainID, tokenAddress)
+	if err != nil {
+		return 0, fmt.Errorf("update ordered Four.meme project state: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }
@@ -545,14 +746,17 @@ func (s *Store) UpsertMarketPool(
 		INSERT INTO market_pools (
 			chain_key, chain_id, protocol, protocol_version, pool_key,
 			pool_address, factory_address, factory_verified,
-			token0_address, token0_symbol, token0_decimals,
-			token1_address, token1_symbol, token1_decimals,
+			token0_address, token0_symbol, token0_decimals, token0_decimals_verified,
+			token1_address, token1_symbol, token1_decimals, token1_decimals_verified,
 			liquidity_usd, supports_event_parsing, parser_adapter,
 			verification_status, metadata, first_seen_at, last_seen_at
 		)
-		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18, $19, $20, $20
+		SELECT
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $21,
+			$12, $13, $14, $22, $15, $16, $17, $18, $19, $20, $20
+		WHERE ($21 AND $22) OR EXISTS (
+			SELECT 1 FROM market_pools
+			WHERE chain_id = $2 AND protocol = $3 AND pool_key = $5
 		)
 		ON CONFLICT (chain_id, protocol, pool_key) DO UPDATE
 		SET chain_key = EXCLUDED.chain_key,
@@ -562,17 +766,27 @@ func (s *Store) UpsertMarketPool(
 		    factory_verified = EXCLUDED.factory_verified,
 		    token0_address = EXCLUDED.token0_address,
 		    token0_symbol = EXCLUDED.token0_symbol,
-		    token0_decimals = EXCLUDED.token0_decimals,
+		    token0_decimals = CASE WHEN EXCLUDED.token0_decimals_verified
+		      THEN EXCLUDED.token0_decimals ELSE market_pools.token0_decimals END,
+		    token0_decimals_verified = market_pools.token0_decimals_verified OR EXCLUDED.token0_decimals_verified,
 		    token1_address = EXCLUDED.token1_address,
 		    token1_symbol = EXCLUDED.token1_symbol,
-		    token1_decimals = EXCLUDED.token1_decimals,
+		    token1_decimals = CASE WHEN EXCLUDED.token1_decimals_verified
+		      THEN EXCLUDED.token1_decimals ELSE market_pools.token1_decimals END,
+		    token1_decimals_verified = market_pools.token1_decimals_verified OR EXCLUDED.token1_decimals_verified,
 		    liquidity_usd = EXCLUDED.liquidity_usd,
-		    supports_event_parsing = EXCLUDED.supports_event_parsing,
+		    supports_event_parsing = CASE WHEN EXCLUDED.supports_event_parsing = 1
+		      AND (market_pools.token0_decimals_verified OR EXCLUDED.token0_decimals_verified)
+		      AND (market_pools.token1_decimals_verified OR EXCLUDED.token1_decimals_verified)
+		      THEN 1 ELSE 0 END,
 		    parser_adapter = EXCLUDED.parser_adapter,
 		    verification_status = EXCLUDED.verification_status,
 		    metadata = EXCLUDED.metadata,
 		    last_seen_at = EXCLUDED.last_seen_at,
 		    updated_at = NOW()
+		WHERE (market_pools.token0_address = EXCLUDED.token0_address
+		       AND market_pools.token1_address = EXCLUDED.token1_address)
+		   OR (EXCLUDED.token0_decimals_verified AND EXCLUDED.token1_decimals_verified)
 		RETURNING `+marketPoolColumns,
 		params.ChainKey,
 		params.ChainID,
@@ -594,8 +808,13 @@ func (s *Store) UpsertMarketPool(
 		params.VerificationStatus,
 		normalizedJSON(params.Metadata),
 		seenAt,
+		params.Token0DecimalsVerified,
+		params.Token1DecimalsVerified,
 	)
 	if err != nil {
+		if isNoRows(err) {
+			return MarketPool{}, ErrInvalidMarketPool
+		}
 		return MarketPool{}, fmt.Errorf("upsert market pool: %w", err)
 	}
 	return pool, nil
@@ -618,7 +837,43 @@ func (s *Store) LinkMarketProjectPool(
 	params LinkMarketProjectPoolParams,
 ) (MarketProjectPool, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProjectPool, error) {
-		return linkMarketProjectPool(ctx, tx, params, false)
+		checkedCtx := ctx
+		var policy QuotaPolicy
+		activating := params.Selected || params.IsPrimary
+		if activating {
+			var cancel context.CancelFunc
+			var err error
+			checkedCtx, cancel, err = s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+			if err != nil {
+				return MarketProjectPool{}, err
+			}
+			defer cancel()
+			if s.resourceCapacity != nil || s.marketScopePolicies != nil {
+				if err := lockUser(checkedCtx, tx, params.DeBoxUserID); err != nil {
+					return MarketProjectPool{}, err
+				}
+			}
+		}
+		if activating {
+			var err error
+			policy, err = s.marketScopePolicy(checkedCtx, tx, params.DeBoxUserID, policy)
+			if err != nil {
+				return MarketProjectPool{}, err
+			}
+		}
+		link, err := linkMarketProjectPool(checkedCtx, tx, params, policy.MarketPoolLimit == 1)
+		if err != nil {
+			return MarketProjectPool{}, err
+		}
+		if activating {
+			if err := validateMarketProjectScope(checkedCtx, tx, params.MarketProjectID, params.DeBoxUserID, policy); err != nil {
+				return MarketProjectPool{}, err
+			}
+			if err := s.checkResourceCapacity(checkedCtx, tx); err != nil {
+				return MarketProjectPool{}, err
+			}
+		}
+		return link, nil
 	})
 }
 
@@ -628,16 +883,44 @@ func (s *Store) LinkMarketProjectPoolWithinQuota(
 	policy QuotaPolicy,
 ) (MarketProjectPool, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProjectPool, error) {
-		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
+		checkedCtx := ctx
+		activating := params.Selected || params.IsPrimary
+		if activating {
+			var cancel context.CancelFunc
+			var err error
+			checkedCtx, cancel, err = s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+			if err != nil {
+				return MarketProjectPool{}, err
+			}
+			defer cancel()
+		}
+		if err := lockUser(checkedCtx, tx, params.DeBoxUserID); err != nil {
 			return MarketProjectPool{}, err
 		}
-		if err := requirePolicyPlan(ctx, tx, params.DeBoxUserID, policy); err != nil {
+		if err := requirePolicyPlan(checkedCtx, tx, params.DeBoxUserID, policy); err != nil {
 			return MarketProjectPool{}, err
+		}
+		var scopeErr error
+		policy, scopeErr = s.marketScopePolicy(checkedCtx, tx, params.DeBoxUserID, policy)
+		if scopeErr != nil {
+			return MarketProjectPool{}, scopeErr
 		}
 		if policy.MarketProjectLimit <= 0 {
 			return MarketProjectPool{}, ErrMarketMonitoringDenied
 		}
-		return linkMarketProjectPool(ctx, tx, params, !policy.MultiPoolMonitoring)
+		link, err := linkMarketProjectPool(checkedCtx, tx, params, !policy.MultiPoolMonitoring || policy.MarketPoolLimit == 1)
+		if err != nil {
+			return MarketProjectPool{}, err
+		}
+		if activating {
+			if err := validateMarketProjectScope(checkedCtx, tx, params.MarketProjectID, params.DeBoxUserID, policy); err != nil {
+				return MarketProjectPool{}, err
+			}
+			if err := s.checkResourceCapacity(checkedCtx, tx); err != nil {
+				return MarketProjectPool{}, err
+			}
+		}
+		return link, nil
 	})
 }
 
@@ -693,6 +976,10 @@ func linkMarketProjectPool(
 		(projectChainID != poolChainID ||
 			(tokenAddress != token0Address && tokenAddress != token1Address)) {
 		return MarketProjectPool{}, ErrMarketPoolMismatch
+	}
+	// Snapshot the previous effective selection before this transactional edit.
+	if err := recordMarketProjectTradeScope(ctx, db, params.MarketProjectID); err != nil {
+		return MarketProjectPool{}, err
 	}
 	selected := params.Selected || params.IsPrimary
 	if selected && singleSelectedPool {
@@ -779,6 +1066,9 @@ func linkMarketProjectPool(
 			return MarketProjectPool{}, fmt.Errorf("clear market project main pool: %w", err)
 		}
 	}
+	if err := recordMarketProjectTradeScope(ctx, db, params.MarketProjectID); err != nil {
+		return MarketProjectPool{}, err
+	}
 	return link, nil
 }
 
@@ -793,15 +1083,17 @@ func (s *Store) ListMarketProjectPools(
 			p.pool_address, p.factory_address, p.factory_verified,
 			p.token0_address, p.token0_symbol, p.token0_decimals,
 			p.token1_address, p.token1_symbol, p.token1_decimals,
-			COALESCE(frozen_snapshot.liquidity_usd, p.liquidity_usd)::text
-				AS liquidity_usd,
+			CASE WHEN mp.frozen_at IS NOT NULL THEN COALESCE(frozen_snapshot.liquidity_usd::text,'')
+				ELSE p.liquidity_usd::text END AS liquidity_usd,
+			CASE WHEN mp.frozen_at IS NOT NULL THEN COALESCE(frozen_snapshot.quote_quality,'{}'::jsonb)
+				ELSE COALESCE(p.metadata->'quote_quality','{}'::jsonb) END AS quote_quality,
 			p.supports_event_parsing, p.parser_adapter, p.verification_status,
 			p.metadata, p.first_seen_at, p.last_seen_at, p.created_at, p.updated_at
 		FROM market_project_pools mpp
 		JOIN market_projects mp ON mp.id = mpp.market_project_id
 		JOIN market_pools p ON p.id = mpp.market_pool_id
 		LEFT JOIN LATERAL (
-			SELECT ms.liquidity_usd
+			SELECT ms.liquidity_usd, ms.quote_quality
 			FROM market_snapshots ms
 			WHERE mp.frozen_at IS NOT NULL
 			  AND ms.market_pool_id = p.id
@@ -830,23 +1122,36 @@ func (s *Store) ListMarketProjectPoolViews(
 			p.pool_address, p.factory_address, p.factory_verified,
 			p.token0_address, p.token0_symbol, p.token0_decimals,
 			p.token1_address, p.token1_symbol, p.token1_decimals,
-			COALESCE(frozen_snapshot.liquidity_usd, p.liquidity_usd)::text
-				AS liquidity_usd,
+			CASE WHEN quote_snapshot.id IS NOT NULL OR mp.frozen_at IS NOT NULL THEN COALESCE(quote_snapshot.liquidity_usd::text,'')
+				ELSE p.liquidity_usd::text END AS liquidity_usd,
+			quote_snapshot.id AS quote_snapshot_id,
+			CASE WHEN quote_snapshot.id IS NOT NULL OR mp.frozen_at IS NOT NULL THEN COALESCE(quote_snapshot.quote_quality,'{}'::jsonb)
+				ELSE COALESCE(p.metadata->'quote_quality','{}'::jsonb) END AS quote_quality,
 			p.supports_event_parsing, p.parser_adapter, p.verification_status,
 			p.metadata, p.first_seen_at, p.last_seen_at, p.created_at, p.updated_at,
 			mpp.selected, mpp.is_primary, mpp.discovery_source
 		FROM market_project_pools mpp
 		JOIN market_projects mp ON mp.id = mpp.market_project_id
 		JOIN market_pools p ON p.id = mpp.market_pool_id
+		LEFT JOIN market_project_deployments quote_deployment
+		  ON quote_deployment.id = mpp.market_project_deployment_id
+		 AND quote_deployment.market_project_id = mp.id
+		LEFT JOIN market_asset_deployments quote_asset
+		  ON quote_asset.id = quote_deployment.market_asset_deployment_id
+		 AND quote_asset.chain_id = p.chain_id
 		LEFT JOIN LATERAL (
-			SELECT ms.liquidity_usd
+			SELECT ms.id, ms.liquidity_usd, ms.quote_quality
 			FROM market_snapshots ms
-			WHERE mp.frozen_at IS NOT NULL
-			  AND ms.market_pool_id = p.id
-			  AND ms.captured_at <= mp.frozen_at
+			WHERE ms.market_pool_id = p.id
+			  AND ms.chain_id = p.chain_id
+			  AND ms.token_address = CASE
+				WHEN mpp.market_project_deployment_id IS NOT NULL THEN quote_asset.token_address
+				WHEN mp.chain_id = p.chain_id AND mp.token_address IN (p.token0_address,p.token1_address) THEN mp.token_address
+			  END
+			  AND ms.captured_at <= COALESCE(mp.frozen_at,NOW())
 			ORDER BY ms.captured_at DESC, ms.id DESC
 			LIMIT 1
-		) frozen_snapshot ON TRUE
+		) quote_snapshot ON TRUE
 		WHERE mpp.market_project_id = $1 AND mp.debox_user_id = $2
 		  AND (mp.frozen_at IS NULL OR mpp.created_at <= mp.frozen_at)
 		ORDER BY mpp.is_primary DESC, mpp.selected DESC, p.liquidity_usd DESC, p.id
@@ -871,6 +1176,18 @@ func (s *Store) CreateMarketSnapshot(
 	if capturedAt.IsZero() {
 		capturedAt = time.Now().UTC()
 	}
+	// pgx persists timestamp columns at microsecond precision. Match that
+	// precision in JSON evidence so an equal fetch/capture instant cannot turn
+	// into an apparently future fetch after a database round trip.
+	quality := params.QuoteQuality.Clone()
+	if quality.FetchedAt != nil {
+		value := quality.FetchedAt.UTC().Truncate(time.Microsecond)
+		quality.FetchedAt = &value
+	}
+	if quality.SourceTimestamp != nil {
+		value := quality.SourceTimestamp.UTC().Truncate(time.Microsecond)
+		quality.SourceTimestamp = &value
+	}
 	snapshot, err := collectOne[MarketSnapshot](ctx, s.db, `
 		INSERT INTO market_snapshots (
 			chain_key, chain_id, token_address, market_pool_id,
@@ -878,11 +1195,11 @@ func (s *Store) CreateMarketSnapshot(
 			fdv_usd, market_cap_usd, volume_5m_usd, volume_15m_usd,
 			volume_1h_usd, volume_6h_usd, volume_24h_usd,
 			buys_5m, sells_5m, buys_1h, sells_1h, buys_24h, sells_24h,
-			source, source_timestamp, captured_at, raw_payload
+			source, source_timestamp, captured_at, raw_payload, quote_quality
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+			$14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
 		)
 		RETURNING `+marketSnapshotColumns,
 		params.ChainKey,
@@ -908,6 +1225,7 @@ func (s *Store) CreateMarketSnapshot(
 		params.SourceTimestamp,
 		capturedAt,
 		normalizedJSON(params.RawPayload),
+		quality,
 	)
 	if err != nil {
 		return MarketSnapshot{}, fmt.Errorf("create market snapshot: %w", err)
@@ -936,7 +1254,7 @@ func (s *Store) ListMarketSnapshots(
 			ms.volume_24h_usd::text AS volume_24h_usd,
 			ms.buys_5m, ms.sells_5m, ms.buys_1h, ms.sells_1h,
 			ms.buys_24h, ms.sells_24h, ms.source, ms.source_timestamp,
-			ms.captured_at, ms.raw_payload
+			ms.quote_quality, ms.captured_at, ms.raw_payload
 		FROM market_snapshots ms
 		JOIN market_projects mp
 		  ON mp.chain_id = ms.chain_id
@@ -971,6 +1289,37 @@ func (s *Store) LatestMarketSnapshot(
 	`, chainID, tokenAddress, marketPoolID)
 	if err != nil {
 		return nil, fmt.Errorf("get latest market snapshot: %w", err)
+	}
+	return value, nil
+}
+
+// MarketValuationSnapshot returns the last observation available at the
+// transaction time, including an unavailable fallback or unknown observation.
+// The caller checks QuoteQuality.AvailableAt(at) before using its amounts. The
+// quality predicate must not be pushed into this query: doing so would hide a
+// newer failed observation behind an older successful one.
+func (s *Store) MarketValuationSnapshot(
+	ctx context.Context,
+	chainID int64,
+	tokenAddress string,
+	marketPoolID *int64,
+	at time.Time,
+) (*MarketSnapshot, error) {
+	tokenAddress, err := normalizeMarketAddress(tokenAddress)
+	if err != nil || chainID <= 0 || at.IsZero() || marketPoolID != nil && *marketPoolID <= 0 {
+		return nil, ErrInvalidMarketProject
+	}
+	value, err := collectOptional[MarketSnapshot](ctx, s.db, `
+		SELECT `+marketSnapshotColumns+`
+		FROM market_snapshots
+		WHERE chain_id = $1 AND token_address = $2
+		  AND ($3::bigint IS NULL OR market_pool_id = $3)
+		  AND captured_at <= $4
+		ORDER BY captured_at DESC, id DESC
+		LIMIT 1
+	`, chainID, tokenAddress, marketPoolID, at.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("get market valuation observation: %w", err)
 	}
 	return value, nil
 }

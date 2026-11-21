@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 )
 
 func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T) {
@@ -94,6 +97,7 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	createSummaryMarketEvent(
 		t, database, bscPool.ID, "bsc", 56, bscToken,
 		"buy", "summary-bsc-buy", "100", periodStart.Add(time.Hour),
+		summaryValuationProofFixture(t, periodStart.Add(time.Hour)),
 	)
 	createSummaryMarketEvent(
 		t, database, bscPool.ID, "bsc", 56, bscToken,
@@ -102,6 +106,7 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	createSummaryMarketEvent(
 		t, database, basePool.ID, "base", 8453, baseToken,
 		"sell", "summary-base-sell", "75", periodStart.Add(3*time.Hour),
+		summaryValuationProofFixture(t, periodStart.Add(3*time.Hour)),
 	)
 	startPrice, endPrice := "1", "1.2"
 	for _, snapshot := range []struct {
@@ -119,6 +124,7 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 			PriceUSD:     snapshot.price,
 			Source:       "integration",
 			CapturedAt:   snapshot.capturedAt,
+			QuoteQuality: marketquality.Quote{Status: "live", FetchedAt: &snapshot.capturedAt},
 		}); err != nil {
 			t.Fatalf("create summary snapshot: %v", err)
 		}
@@ -218,17 +224,14 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO market_rule_events (
 			market_rule_id, market_event_id, trigger_key,
-			previous_value, current_value, notification_status, note
+			previous_value, current_value, notification_status, note,delivery_outcome,notification_route
 		)
-		VALUES ($1, $2, 'base-delivery', '50', '75', 'sending', 'Base sell')
+		SELECT $1,$2,'base-delivery','50','75','pending','Base sell','not_attempted',jsonb_build_object('chat_id',notification_chat_id,'chat_type',notification_chat_type) FROM market_rules WHERE id=$1
 		RETURNING id
 	`, ruleID, recent[0].ID).Scan(&ruleEventID); err != nil {
 		t.Fatalf("create delivery rule event: %v", err)
 	}
-	delivery, err := database.LoadMarketDelivery(ctx, MarketDeliveryClaim{
-		Kind: "realtime",
-		ID:   ruleEventID,
-	})
+	delivery, err := database.LoadMarketDelivery(ctx, claimMarketDelivery(t, database, "realtime"))
 	if err != nil {
 		t.Fatalf("LoadMarketDelivery() error = %v", err)
 	}
@@ -243,9 +246,9 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO market_stage_windows (
 			debox_user_id, market_rule_id, starts_at, ends_at,
-			trigger_count, notification_status
+			trigger_count, notification_status,delivery_outcome,notification_route
 		)
-		VALUES ($1, $2, $3, $4, 1, 'sending')
+		VALUES ($1,$2,$3,$4,1,'pending','not_attempted',jsonb_build_object('chat_id',$1::text,'chat_type','private'))
 		RETURNING id
 	`, userID, ruleID, periodStart, periodEnd).Scan(&stageWindowID); err != nil {
 		t.Fatalf("create stage window: %v", err)
@@ -258,10 +261,7 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	`, stageWindowID, ruleEventID); err != nil {
 		t.Fatalf("create stage window event: %v", err)
 	}
-	stageDelivery, err := database.LoadMarketDelivery(ctx, MarketDeliveryClaim{
-		Kind: "stage",
-		ID:   stageWindowID,
-	})
+	stageDelivery, err := database.LoadMarketDelivery(ctx, claimMarketDelivery(t, database, "stage"))
 	if err != nil {
 		t.Fatalf("LoadMarketDelivery(stage) error = %v", err)
 	}
@@ -302,9 +302,9 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO market_combination_windows (
 			debox_user_id, market_combination_rule_id,
-			starts_at, ends_at, total_trigger_count, notification_status
+			starts_at, ends_at, total_trigger_count, notification_status,delivery_outcome,notification_route
 		)
-		VALUES ($1, $2, $3, $4, 1, 'sending')
+		VALUES ($1,$2,$3,$4,1,'pending','not_attempted',jsonb_build_object('chat_id',$1::text,'chat_type','private'))
 		RETURNING id
 	`, userID, combinationRuleID, periodStart, periodEnd).Scan(&combinationWindowID); err != nil {
 		t.Fatalf("create combination window: %v", err)
@@ -328,10 +328,7 @@ func TestPostgresDailyMarketSummaryGroupsLogicalProjectDeployments(t *testing.T)
 		periodStart.Add(3*time.Hour)); err != nil {
 		t.Fatalf("create combination trigger event: %v", err)
 	}
-	combinationDelivery, err := database.LoadMarketDelivery(ctx, MarketDeliveryClaim{
-		Kind: "combination",
-		ID:   combinationWindowID,
-	})
+	combinationDelivery, err := database.LoadMarketDelivery(ctx, claimMarketDelivery(t, database, "combination"))
 	if err != nil {
 		t.Fatalf("LoadMarketDelivery(combination) error = %v", err)
 	}
@@ -363,6 +360,7 @@ func createSummaryIntegrationPool(
 	pool, err := database.UpsertMarketPool(
 		context.Background(),
 		UpsertMarketPoolParams{
+			Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 			ChainKey: chainKey, ChainID: chainID,
 			Protocol: "integration", ProtocolVersion: "v3",
 			PoolKey: poolAddress, PoolAddress: &poolAddress,
@@ -389,11 +387,16 @@ func createSummaryMarketEvent(
 	eventKey string,
 	usdValue string,
 	occurredAt time.Time,
+	evidence ...json.RawMessage,
 ) {
 	t.Helper()
 	var value *string
 	if usdValue != "" {
 		value = &usdValue
+	}
+	var metadata json.RawMessage
+	if len(evidence) > 0 {
+		metadata = evidence[0]
 	}
 	if _, created, err := database.CreateMarketEvent(
 		context.Background(),
@@ -408,8 +411,19 @@ func createSummaryMarketEvent(
 			Source:       "integration",
 			Confirmed:    true,
 			OccurredAt:   occurredAt,
+			Metadata:     metadata,
 		},
 	); err != nil || !created {
 		t.Fatalf("create %s event: created=%v error=%v", eventType, created, err)
 	}
+}
+
+func summaryValuationProofFixture(t *testing.T, at time.Time) json.RawMessage {
+	t.Helper()
+	proof, err := json.Marshal(map[string]any{"valuation_schema_version": 1, "valuation_complete": true, "valuation_at": at,
+		"valuation_quote_quality": marketquality.Quote{Status: "live", FetchedAt: &at}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return proof
 }

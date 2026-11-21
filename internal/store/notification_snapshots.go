@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdelivery"
 )
 
 const (
@@ -80,6 +82,11 @@ func (s *Store) CreateNotificationDetailSnapshot(
 	ctx context.Context,
 	params CreateNotificationDetailSnapshotParams,
 ) (NotificationDetailSnapshot, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if len(params.Details) > notificationdelivery.MaxSnapshotBytes || len(params.NotificationText) > notificationdelivery.MaxPayloadBytes {
+		return NotificationDetailSnapshot{}, fmt.Errorf("%w: notification snapshot", notificationdelivery.ErrCapacity)
+	}
 	params.SourceKey = strings.TrimSpace(params.SourceKey)
 	params.NotificationKind = strings.ToLower(strings.TrimSpace(params.NotificationKind))
 	params.SourceType = strings.ToLower(strings.TrimSpace(params.SourceType))

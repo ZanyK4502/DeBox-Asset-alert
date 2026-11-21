@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/assetcatalog"
@@ -18,6 +19,7 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/monitor"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdelivery"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/payment"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
@@ -26,9 +28,12 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/summary"
 )
 
-// Temporary maintenance gate; disable after business acceptance to restore both
-// user configuration writes and the original private /start menu.
+// User configuration writes stay closed during maintenance acceptance.
 const userWriteMaintenance = true
+
+// Menu availability is independent from the write gate. Opening the existing
+// menu after acceptance must not reopen purchases or monitoring expansion.
+const privateStartMaintenance = false
 
 type dependencies struct {
 	httpapi httpapi.Dependencies
@@ -38,13 +43,35 @@ type dependencies struct {
 	summary *summary.Runner
 	market  *marketcollector.Runner
 	rules   *marketrules.Runner
+	holders *marketrules.HolderRefreshRunner
 }
 
 func buildDependencies(
 	ctx context.Context,
 	cfg config.Config,
+	logger *slog.Logger,
 ) (dependencies, func(), error) {
-	repository, err := store.Open(ctx, cfg.DatabaseURL)
+	quotaLimits, err := cfg.EffectiveQuotaLimits()
+	if err != nil {
+		return dependencies{}, func() {}, fmt.Errorf("configure plan quotas: %w", err)
+	}
+	monitoringChains, err := cfg.EffectiveMarketMonitoringChainKeys()
+	if err != nil {
+		return dependencies{}, func() {}, fmt.Errorf("configure market monitoring scope: %w", err)
+	}
+	collectorChains, err := marketCollectorChainKeys(cfg, monitoringChains)
+	if err != nil {
+		return dependencies{}, func() {}, err
+	}
+	catalog, err := plans.NewCatalogWithMarketScope(cfg.SubscriptionPrice, cfg.SubscriptionDays, cfg.SubscriptionTokenSymbol, quotaLimits, monitoringChains)
+	if err != nil {
+		return dependencies{}, func() {}, fmt.Errorf("create plan catalog: %w", err)
+	}
+	capacity, err := resourceCapacityPolicy(cfg, catalog)
+	if err != nil {
+		return dependencies{}, func() {}, fmt.Errorf("configure resource capacity: %w", err)
+	}
+	repository, err := store.Open(ctx, cfg.DatabaseURL, store.WithMarketTaskLockConnections(cfg.TaskLockConnections()), store.WithResourceCapacityPolicy(capacity), store.WithMarketScopePolicies(marketScopePolicies(catalog)))
 	if err != nil {
 		return dependencies{}, func() {}, fmt.Errorf("open data store: %w", err)
 	}
@@ -54,15 +81,6 @@ func buildDependencies(
 		return dependencies{}, func() {}, fmt.Errorf("migrate data store: %w", err)
 	}
 
-	catalog, err := plans.NewCatalog(
-		cfg.SubscriptionPrice,
-		cfg.SubscriptionDays,
-		cfg.SubscriptionTokenSymbol,
-	)
-	if err != nil {
-		closeDependencies()
-		return dependencies{}, func() {}, fmt.Errorf("create plan catalog: %w", err)
-	}
 	deboxClient, err := debox.NewOpenAPIClient(
 		cfg.DeBoxBotAPIKey,
 		cfg.DeBoxOpenAPIBase,
@@ -77,6 +95,7 @@ func buildDependencies(
 		cfg.NoditAPIKey,
 		cfg.NoditBaseURL,
 		chain.WithCURateLimit(cfg.NoditCUPerSecond),
+		chain.WithHolderCURateLimit(min(75, max(1, cfg.NoditCUPerSecond/3))),
 		chain.WithUsageObserver(func(usage chain.NoditUsage) {
 			noditCUMeter.Add(usage.CU * 1000)
 		}),
@@ -111,24 +130,30 @@ func buildDependencies(
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create asset catalog: %w", err)
 	}
+	marketReadClient, err := chain.NewMarketReadClient(chainClient, cfg.MarketRPCFallbackURLs)
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create market read client: %w", err)
+	}
 	marketDependencies := marketcollector.Dependencies{
 		Repository:       repository,
-		Chain:            chainClient,
+		Chain:            marketReadClient,
 		Market:           marketDataClient,
 		EstimatedCUMilli: noditCUMeter,
+		Logger:           logger,
 		TryLock: func(
 			ctx context.Context,
 			task string,
 		) (marketcollector.Lock, bool, error) {
-			lock, acquired, lockErr := repository.TryMarketTaskLock(ctx, task)
+			lock, acquired, lockErr := repository.AcquireMarketTaskLock(ctx, task)
 			if lockErr != nil || !acquired {
 				return nil, acquired, lockErr
 			}
 			return lock, true, nil
 		},
 	}
-	marketServices := make([]*marketcollector.Service, 0, len(cfg.MarketChainKeys))
-	for _, marketChainKey := range cfg.MarketChainKeys {
+	marketServices := make([]*marketcollector.Service, 0, len(collectorChains))
+	for _, marketChainKey := range collectorChains {
 		marketChain, profileErr := chain.ChainProfile(marketChainKey, "")
 		if profileErr != nil {
 			closeDependencies()
@@ -140,24 +165,26 @@ func buildDependencies(
 		marketServices = append(marketServices, marketcollector.New(
 			marketDependencies,
 			marketcollector.Settings{
-				Enabled:            cfg.MarketCollectorEnabled,
-				ChainKey:           marketChain.Key,
-				ChainID:            marketChain.ChainID,
-				WebhookSigningKey:  cfg.NoditWebhookSigningKey,
-				WebhookSigningKeys: cfg.NoditWebhookSigningKeys,
-				WebhookAutoRepair:  cfg.MarketWebhookAutoRepair,
-				PublicAppURL:       cfg.PublicAppURL,
-				ConfirmationDepth:  cfg.MarketConfirmationDepthFor(marketChain.Key),
-				ScanBatchSize:      cfg.MarketScanBatchSize,
-				InitialLookback:    cfg.MarketInitialLookback,
-				ReorgLookback:      cfg.MarketReorgLookback,
-				InboxInterval:      cfg.MarketInboxInterval,
-				ScanInterval:       cfg.MarketScanInterval,
-				SnapshotInterval:   cfg.MarketSnapshotInterval,
-				DiscoveryInterval:  cfg.MarketDiscoveryInterval,
-				HealthInterval:     cfg.MarketHealthInterval,
-				CleanupInterval:    cfg.MarketCleanupInterval,
-				MonthlyCULimit:     cfg.NoditMonthlyCULimit,
+				Enabled:              cfg.MarketCollectorEnabled,
+				ChainKey:             marketChain.Key,
+				ChainID:              marketChain.ChainID,
+				WebhookSigningKey:    cfg.NoditWebhookSigningKey,
+				WebhookSigningKeys:   cfg.NoditWebhookSigningKeys,
+				WebhookWrappingKey:   cfg.NoditWebhookWrappingKey,
+				WebhookAutoRepair:    cfg.MarketWebhookAutoRepair,
+				PublicAppURL:         cfg.PublicAppURL,
+				ConfirmationDepth:    cfg.MarketConfirmationDepthFor(marketChain.Key),
+				ScanBatchSize:        cfg.MarketScanBatchSize,
+				HydrationConcurrency: cfg.MarketHydrationConcurrency,
+				InitialLookback:      cfg.MarketInitialLookback,
+				ReorgLookback:        cfg.MarketReorgLookback,
+				InboxInterval:        cfg.MarketInboxInterval,
+				ScanInterval:         cfg.MarketScanInterval,
+				SnapshotInterval:     cfg.MarketSnapshotInterval,
+				DiscoveryInterval:    cfg.MarketDiscoveryInterval,
+				HealthInterval:       cfg.MarketHealthInterval,
+				CleanupInterval:      cfg.MarketCleanupInterval,
+				MonthlyCULimit:       cfg.NoditMonthlyCULimit,
 			},
 		))
 	}
@@ -178,8 +205,22 @@ func buildDependencies(
 		closeDependencies()
 		return dependencies{}, func() {}, fmt.Errorf("create DeBox messenger: %w", err)
 	}
+	if cfg.DeBoxBotUserID != "" && cfg.DeBoxBotUserID != messenger.Self().UserId {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("configured DeBox bot identity differs from authenticated bot")
+	}
+	admission, err := notificationdelivery.NewAdmission(repository, messenger.Self().UserId, cfg.NotificationSendLimit())
+	if err == nil {
+		err = messenger.SetNotificationAdmission(admission)
+	}
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create notification admission: %w", err)
+	}
 	subscriptions := subscription.New(repository, catalog)
-	marketRuleService := marketrules.New(
+	marketRuleService := newMarketRuleService(
+		cfg,
+		monitoringChains,
 		marketrules.Dependencies{
 			Repository:    repository,
 			Notifications: messenger,
@@ -189,25 +230,28 @@ func buildDependencies(
 				ctx context.Context,
 				task string,
 			) (marketrules.Lock, bool, error) {
-				lock, acquired, lockErr := repository.TryMarketTaskLock(ctx, task)
+				lock, acquired, lockErr := repository.AcquireMarketTaskLock(ctx, task)
 				if lockErr != nil || !acquired {
 					return nil, acquired, lockErr
 				}
 				return lock, true, nil
 			},
 		},
-		marketrules.Settings{
-			Enabled:               cfg.MarketRuleEngineEnabled,
-			Interval:              cfg.MarketRuleInterval,
-			HolderRefreshInterval: cfg.MarketHolderRefreshInterval,
-		},
 	)
+	// A full holder sample can have 20 pages. One worker leaves room to finish
+	// its sample within the existing deadline at the holder request rate.
+	holderRunner, err := marketrules.NewHolderRefreshRunner(marketRuleService, marketrules.HolderRefreshSettings{Workers: 1})
+	if err != nil {
+		closeDependencies()
+		return dependencies{}, func() {}, fmt.Errorf("create holder refresh runner: %w", err)
+	}
 	tryMonitorLock := func(ctx context.Context) (monitor.Lock, bool, error) {
 		return repository.TryMonitorExecutionLock(ctx)
 	}
+	walletReadClient := chain.NewWalletReadClient(chainClient)
 	monitorExecutor := monitor.New(monitor.Dependencies{
 		Repository:       repository,
-		Chain:            chainClient,
+		Chain:            walletReadClient,
 		Notifications:    messenger,
 		Catalog:          catalog,
 		TryExecutionLock: tryMonitorLock,
@@ -217,7 +261,7 @@ func buildDependencies(
 	managementService := management.New(management.Dependencies{
 		Repository:      repository,
 		Entitlements:    subscriptions,
-		Chain:           chainClient,
+		Chain:           walletReadClient,
 		Groups:          deboxClient,
 		Notifications:   messenger,
 		InitialChecker:  monitorExecutor,
@@ -256,14 +300,14 @@ func buildDependencies(
 		Repository:    repository,
 		Subscriptions: subscriptions,
 		DeBox:         deboxClient,
-		Chain:         chainClient,
+		Chain:         walletReadClient,
 		Catalog:       catalog,
 		Settings: bot.Settings{
 			PublicAppURL:             cfg.PublicAppURL,
 			BotUserID:                cfg.DeBoxBotUserID,
 			DefaultChainKey:          cfg.ChainKey,
 			SubscriptionTokenAddress: cfg.SubscriptionTokenAddress,
-			PrivateStartMaintenance:  userWriteMaintenance,
+			PrivateStartMaintenance:  privateStartMaintenance,
 		},
 	})
 	tryBotLock := func(ctx context.Context) (bot.Lock, bool, error) {
@@ -296,7 +340,7 @@ func buildDependencies(
 		httpapi: httpapi.Dependencies{
 			Auth:                 auth.New(repository, deboxClient),
 			Subscriptions:        subscriptions,
-			Chain:                chainClient,
+			Chain:                walletReadClient,
 			DeBox:                deboxClient,
 			Management:           managementService,
 			Payments:             paymentService,
@@ -315,5 +359,6 @@ func buildDependencies(
 		summary: summary.NewRunner(summaryExecutor, summary.DefaultInterval),
 		market:  marketcollector.NewRunner(marketCluster.Services()...),
 		rules:   marketrules.NewRunner(marketRuleService),
+		holders: holderRunner,
 	}, closeDependencies, nil
 }

@@ -3,6 +3,7 @@ package marketcollector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -19,54 +20,17 @@ func (service *Service) RefreshMarketData(ctx context.Context) error {
 	return service.withTaskLock(ctx, "market-data", func(ctx context.Context) error {
 		now := service.now().UTC()
 		lastDiscovery := time.Unix(service.lastDiscoveryUnix.Load(), 0)
-		if lastDiscovery.IsZero() || now.Sub(lastDiscovery) >= service.settings.DiscoveryInterval {
-			if err := service.discoverPools(ctx); err != nil {
-				return err
+		var discoveryErr error
+		if service.discoveryPending() || lastDiscovery.IsZero() || now.Sub(lastDiscovery) >= service.settings.DiscoveryInterval {
+			discoveryErr = service.discoverPools(ctx)
+			if !service.discoveryPending() {
+				service.lastDiscoveryUnix.Store(now.Unix())
 			}
-			service.lastDiscoveryUnix.Store(now.Unix())
 		}
-		return service.captureSnapshots(ctx)
+		// Discovery failure must not stop refreshing pools already selected by
+		// users. Both jobs retain their existing schedule and health reporting.
+		return errors.Join(discoveryErr, service.captureSnapshots(ctx))
 	})
-}
-
-func (service *Service) discoverPools(ctx context.Context) error {
-	projects, err := service.repository.ListActiveMarketProjectsForCollection(
-		ctx,
-		service.settings.ChainID,
-		5000,
-	)
-	if err != nil {
-		return err
-	}
-	tokenOrder := make(map[string][2]string)
-	for _, project := range projects {
-		started := time.Now()
-		pairs, requestErr := service.market.DiscoverPools(
-			ctx,
-			service.settings.ChainKey,
-			project.TokenAddress,
-		)
-		_ = service.recordHealth(
-			ctx,
-			"dexscreener",
-			"pool_discovery",
-			started,
-			requestErr,
-			nil,
-		)
-		if requestErr != nil {
-			return fmt.Errorf("discover pools for %s: %w", project.TokenAddress, requestErr)
-		}
-		sort.SliceStable(pairs, func(left, right int) bool {
-			return decimalGreater(pairs[left].Liquidity.USD.String(), pairs[right].Liquidity.USD.String())
-		})
-		for _, pair := range pairs {
-			if err := service.persistDiscoveredPair(ctx, project, pair, tokenOrder); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (service *Service) persistDiscoveredPair(
@@ -74,38 +38,63 @@ func (service *Service) persistDiscoveredPair(
 	project store.MarketProject,
 	pair marketdata.Pair,
 	tokenOrder map[string][2]string,
+	knownDecimals map[string]int,
 ) error {
-	classification := marketprotocol.VerifyPair(
-		ctx,
-		service.chain,
-		service.settings.ChainKey,
-		project.TokenAddress,
-		pair,
-	)
+	facts := marketprotocol.ReadPoolFacts(ctx, service.chain, service.settings.ChainKey, pair)
+	return service.persistDiscoveredPairFacts(ctx, project, pair, facts, knownDecimals, nil, nil)
+}
+
+func (service *Service) persistDiscoveredPairFacts(ctx context.Context, project store.MarketProject, pair marketdata.Pair, facts marketprotocol.PoolFacts, knownDecimals map[string]int, upserts map[[32]byte]discoveryPoolResult, decimalFailures map[string]error) error {
+	if facts.ReadFailed {
+		// An unavailable read is not a new quote-only classification. In
+		// particular it must not downgrade a previously verified shared pool.
+		return fmt.Errorf("read discovered pool facts: %s", facts.FailureReason)
+	}
+	if chain.NormalizeChainKey(pair.ChainID, "") != service.settings.ChainKey {
+		return fmt.Errorf("discovered pool belongs to another chain")
+	}
+	token, err := chain.ValidateAddress(project.TokenAddress)
+	if err != nil {
+		return err
+	}
+	if facts.Token0Address != "" && facts.Token1Address != "" && token != facts.Token0Address && token != facts.Token1Address {
+		return fmt.Errorf("discovered pool does not contain project token")
+	}
+	base, baseErr := chain.ValidateAddress(pair.BaseToken.Address)
+	quote, quoteErr := chain.ValidateAddress(pair.QuoteToken.Address)
+	if baseErr == nil && quoteErr == nil {
+		if token != base && token != quote {
+			return fmt.Errorf("discovered provider pair does not contain project token")
+		}
+		if facts.Token0Address != "" && facts.Token1Address != "" && !((base == facts.Token0Address && quote == facts.Token1Address) || (base == facts.Token1Address && quote == facts.Token0Address)) {
+			return fmt.Errorf("discovered provider pair conflicts with on-chain tokens")
+		}
+	}
+	classification := marketprotocol.ClassifyPairWithFacts(service.settings.ChainKey, token, pair, facts)
 	protocol := classification.Protocol
 	version := classification.ProtocolVersion
 	adapter := classification.ParserAdapter
 	verified := classification.FactoryVerified
 	token0Address := pair.BaseToken.Address
 	token1Address := pair.QuoteToken.Address
-	if classification.Supported {
-		order, exists := tokenOrder[pair.PairAddress]
-		if !exists {
-			order = [2]string{
-				classification.Token0Address,
-				classification.Token1Address,
-			}
-			tokenOrder[pair.PairAddress] = order
+	if facts.Token0Address != "" && facts.Token1Address != "" {
+		token0Address, token1Address = facts.Token0Address, facts.Token1Address
+	}
+	baseDecimals, err := service.discoveryTokenDecimals(ctx, token0Address, knownDecimals, decimalFailures)
+	if err != nil {
+		// A quote-only candidate must not prevent usable verified pools from
+		// being collected, and must not be stored with invented metadata.
+		if !classification.Supported {
+			return nil
 		}
-		token0Address, token1Address = order[0], order[1]
+		return err
 	}
-	baseDecimals := int32(18)
-	quoteDecimals := int32(18)
-	if token0Address == project.TokenAddress {
-		baseDecimals = project.TokenDecimals
-	}
-	if token1Address == project.TokenAddress {
-		quoteDecimals = project.TokenDecimals
+	quoteDecimals, err := service.discoveryTokenDecimals(ctx, token1Address, knownDecimals, decimalFailures)
+	if err != nil {
+		if !classification.Supported {
+			return nil
+		}
+		return err
 	}
 	token0Symbol := pairTokenSymbol(pair, token0Address)
 	token1Symbol := pairTokenSymbol(pair, token1Address)
@@ -132,28 +121,31 @@ func (service *Service) persistDiscoveredPair(
 	if classification.Supported {
 		verificationStatus = "verified"
 	}
-	pool, err := service.repository.UpsertMarketPool(ctx, store.UpsertMarketPoolParams{
-		ChainKey:             service.settings.ChainKey,
-		ChainID:              service.settings.ChainID,
-		Protocol:             protocol,
-		ProtocolVersion:      version,
-		PoolKey:              pair.PairAddress,
-		PoolAddress:          pairAddress,
-		FactoryAddress:       factoryAddress,
-		FactoryVerified:      verified,
-		Token0Address:        token0Address,
-		Token0Symbol:         token0Symbol,
-		Token0Decimals:       baseDecimals,
-		Token1Address:        token1Address,
-		Token1Symbol:         token1Symbol,
-		Token1Decimals:       quoteDecimals,
-		LiquidityUSD:         decimalOrZero(pair.Liquidity.USD),
-		SupportsEventParsing: classification.Supported,
-		ParserAdapter:        adapter,
-		VerificationStatus:   verificationStatus,
-		Metadata:             rawPair,
-		SeenAt:               service.now().UTC(),
-	})
+	params := store.UpsertMarketPoolParams{
+		ChainKey:               service.settings.ChainKey,
+		ChainID:                service.settings.ChainID,
+		Protocol:               protocol,
+		ProtocolVersion:        version,
+		PoolKey:                pair.PairAddress,
+		PoolAddress:            pairAddress,
+		FactoryAddress:         factoryAddress,
+		FactoryVerified:        verified,
+		Token0Address:          token0Address,
+		Token0Symbol:           token0Symbol,
+		Token0Decimals:         int32(baseDecimals),
+		Token0DecimalsVerified: true,
+		Token1Address:          token1Address,
+		Token1Symbol:           token1Symbol,
+		Token1Decimals:         int32(quoteDecimals),
+		Token1DecimalsVerified: true,
+		LiquidityUSD:           decimalOrZero(pair.Liquidity.USD),
+		SupportsEventParsing:   classification.Supported,
+		ParserAdapter:          adapter,
+		VerificationStatus:     verificationStatus,
+		Metadata:               rawPair,
+		SeenAt:                 service.now().UTC(),
+	}
+	poolID, err := service.upsertDiscoveredPool(ctx, params, upserts)
 	if err != nil {
 		return err
 	}
@@ -162,7 +154,7 @@ func (service *Service) persistDiscoveredPair(
 		store.EnsureMarketProjectPoolParams{
 			DeBoxUserID:     project.DeBoxUserID,
 			MarketProjectID: project.ID,
-			MarketPoolID:    pool.ID,
+			MarketPoolID:    poolID,
 			SelectIfNone:    classification.Supported,
 			DiscoverySource: marketdata.SourceDexScreener,
 		},
@@ -171,10 +163,10 @@ func (service *Service) persistDiscoveredPair(
 }
 
 func pairTokenSymbol(pair marketdata.Pair, address string) string {
-	switch address {
-	case pair.BaseToken.Address:
+	switch {
+	case strings.EqualFold(address, pair.BaseToken.Address):
 		return pair.BaseToken.Symbol
-	case pair.QuoteToken.Address:
+	case strings.EqualFold(address, pair.QuoteToken.Address):
 		return pair.QuoteToken.Symbol
 	default:
 		return ""
@@ -190,9 +182,11 @@ func (service *Service) captureSnapshots(ctx context.Context) error {
 		return err
 	}
 	addressSet := make(map[string]struct{})
+	requestedTargets := make([]store.MarketCollectionTarget, 0, len(targets))
 	for _, target := range targets {
 		if target.PoolAddress != nil {
 			addressSet[*target.PoolAddress] = struct{}{}
+			requestedTargets = append(requestedTargets, target)
 		}
 	}
 	if len(addressSet) == 0 {
@@ -218,14 +212,19 @@ func (service *Service) captureSnapshots(ctx context.Context) error {
 		nil,
 	)
 	if requestErr != nil {
-		return fmt.Errorf("refresh market pair quotes: %w", requestErr)
+		_, markErr := service.repository.RecordMarketQuoteFailure(ctx, service.settings.ChainID, requestedTargets, service.now().UTC())
+		if markErr != nil {
+			markErr = fmt.Errorf("record unavailable market quote observations: %w", markErr)
+		}
+		return errors.Join(fmt.Errorf("refresh market pair quotes: %w", requestErr), markErr)
 	}
 	pairByAddress := make(map[string]marketdata.Pair, len(pairs))
 	for _, pair := range pairs {
-		pairByAddress[pair.PairAddress] = pair
+		pairByAddress[strings.ToLower(pair.PairAddress)] = pair
 	}
 	capturedAt := service.now().UTC()
 	captured := make(map[string]struct{})
+	missingTargets := make([]store.MarketCollectionTarget, 0)
 	for _, target := range targets {
 		if target.PoolAddress == nil {
 			continue
@@ -239,14 +238,22 @@ func (service *Service) captureSnapshots(ctx context.Context) error {
 		if _, exists := captured[snapshotKey]; exists {
 			continue
 		}
-		pair, exists := pairByAddress[*target.PoolAddress]
-		if !exists {
+		pair, exists := pairByAddress[strings.ToLower(*target.PoolAddress)]
+		if !exists || !strings.EqualFold(pair.ChainID, target.ChainKey) ||
+			!strings.EqualFold(pair.BaseToken.Address, target.TokenAddress) && !strings.EqualFold(pair.QuoteToken.Address, target.TokenAddress) {
+			missingTargets = append(missingTargets, target)
+			captured[snapshotKey] = struct{}{}
 			continue
 		}
 		if err := service.createPairSnapshot(ctx, target, pair, capturedAt); err != nil {
 			return err
 		}
 		captured[snapshotKey] = struct{}{}
+	}
+	if len(missingTargets) > 0 {
+		if _, err := service.repository.RecordMarketQuoteFailure(ctx, service.settings.ChainID, missingTargets, service.now().UTC()); err != nil {
+			return fmt.Errorf("record missing market quote observations: %w", err)
+		}
 	}
 	return nil
 }
@@ -267,9 +274,12 @@ func (service *Service) createPairSnapshot(
 		fdv = decimalPointer(pair.FDV)
 		marketCap = decimalPointer(pair.MarketCap)
 	}
-	buys5m, sells5m := transactionPointers(pair.Transactions["m5"])
-	buys1h, sells1h := transactionPointers(pair.Transactions["h1"])
-	buys24h, sells24h := transactionPointers(pair.Transactions["h24"])
+	counts5m, has5m := pair.Transactions["m5"]
+	counts1h, has1h := pair.Transactions["h1"]
+	counts24h, has24h := pair.Transactions["h24"]
+	buys5m, sells5m := transactionPointers(counts5m, has5m)
+	buys1h, sells1h := transactionPointers(counts1h, has1h)
+	buys24h, sells24h := transactionPointers(counts24h, has24h)
 	_, err = service.repository.CreateMarketSnapshot(ctx, store.CreateMarketSnapshotParams{
 		ChainKey:        target.ChainKey,
 		ChainID:         target.ChainID,
@@ -291,7 +301,8 @@ func (service *Service) createPairSnapshot(
 		Buys24h:         buys24h,
 		Sells24h:        sells24h,
 		Source:          marketdata.SourceDexScreener,
-		SourceTimestamp: nil,
+		SourceTimestamp: pair.QuoteQuality.SourceTimestamp,
+		QuoteQuality:    pair.QuoteQuality.Clone(),
 		CapturedAt:      capturedAt,
 		RawPayload:      rawPair,
 	})
@@ -349,7 +360,10 @@ func decimalGreater(left, right string) bool {
 	return leftRat.Cmp(rightRat) > 0
 }
 
-func transactionPointers(value marketdata.TransactionCounts) (*int64, *int64) {
+func transactionPointers(value marketdata.TransactionCounts, present bool) (*int64, *int64) {
+	if !present || value.Buys < 0 || value.Sells < 0 {
+		return nil, nil
+	}
 	buys := value.Buys
 	sells := value.Sells
 	return &buys, &sells

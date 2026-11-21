@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
@@ -44,16 +45,26 @@ type Evaluation struct {
 }
 
 type EvaluationInput struct {
-	Rule      store.MarketRule
-	Project   store.MarketProject
-	Snapshots []store.MarketSnapshot
-	Events    []store.MarketEvent
-	Holders   []store.MarketHolder
-	Labels    []store.MarketAddressLabel
-	Now       time.Time
+	NotificationSourceAfter *time.Time
+	// Presence means this parent already has a persisted decision. True is
+	// terminal; false is a narrowly verified reorg recovery of the same trigger.
+	NotificationEventDecisions map[int64]bool
+	Rule                       store.MarketRule
+	Project                    store.MarketProject
+	Snapshots                  []store.MarketSnapshot
+	Events                     []store.MarketEvent
+	Holders                    []store.MarketHolder
+	Labels                     []store.MarketAddressLabel
+	Now                        time.Time
+	// ConsecutiveCounts is supplied only by the validated complete v2 batch.
+	// Its keys are the private ready-sequence event IDs used during evaluation.
+	ConsecutiveCounts map[int64]int64
 }
 
 func Evaluate(input EvaluationInput) (Evaluation, error) {
+	if issues := marketwindow.RuntimeIssues(input.Rule.RuleType, input.Rule.WindowMinutes, input.Rule.ThresholdValue); len(issues) > 0 {
+		return Evaluation{}, fmt.Errorf("%w: %s", marketwindow.ErrUnsupported, issues[0].Message)
+	}
 	state := ruleState{}
 	if len(input.Rule.State) > 0 {
 		_ = json.Unmarshal(input.Rule.State, &state)
@@ -76,6 +87,7 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 			snapshots,
 			state,
 			now,
+			input.NotificationSourceAfter,
 		)
 		if err != nil {
 			return Evaluation{}, err
@@ -96,6 +108,7 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 			events,
 			state,
 			now,
+			input.NotificationSourceAfter, &suppressed, input.NotificationEventDecisions,
 		)
 		if err != nil {
 			return Evaluation{}, err
@@ -105,6 +118,13 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 		state.ConditionActive = active
 		state.PendingCrossing = pending
 	} else {
+		if input.ConsecutiveCounts == nil {
+			if err := validateTradeWindowValuationsAfterDecisions(input.Rule, snapshots, events, state.LastEventID, false, now, input.NotificationSourceAfter, input.NotificationEventDecisions); err != nil {
+				return Evaluation{}, err
+			}
+		} else if err := validateCompleteTradeCountKeys(input.Rule, input.Project, snapshots, notificationCurrentRuleEvents(input.Rule, events, input.NotificationSourceAfter, now, input.NotificationEventDecisions), state.LastEventID, input.ConsecutiveCounts); err != nil {
+			return Evaluation{}, err
+		}
 		eventTriggers, suppressedTriggers, lastEventID, err := evaluateEventRule(
 			input.Rule,
 			input.Project,
@@ -114,6 +134,9 @@ func Evaluate(input EvaluationInput) (Evaluation, error) {
 			holderLabels,
 			state.LastEventID,
 			now,
+			input.ConsecutiveCounts,
+			input.NotificationSourceAfter,
+			input.NotificationEventDecisions,
 		)
 		if err != nil {
 			return Evaluation{}, err
@@ -139,6 +162,7 @@ func evaluateProgressRule(
 	events []store.MarketEvent,
 	state ruleState,
 	now time.Time,
+	sourceAfter *time.Time, suppressed *[]SuppressedTrigger, decisions map[int64]bool,
 ) ([]Trigger, int64, bool, bool, error) {
 	threshold, ok := rat(rule.ThresholdValue)
 	if !ok {
@@ -156,6 +180,12 @@ func evaluateProgressRule(
 		}
 		progress := metadataDecimal(event.Metadata, "progress_percent")
 		if event.ID <= state.LastEventID {
+			if _, existing := decisions[event.ID]; existing {
+				continue
+			}
+			if notificationSourceOld(event, sourceAfter) || notificationStageSourceExpired(rule, event, now) {
+				continue
+			}
 			if event.Reorged == 0 && event.Confirmed == 1 &&
 				progress != nil &&
 				metadataContains(event.Metadata, "protocol", "four_meme") &&
@@ -173,7 +203,19 @@ func evaluateProgressRule(
 			maxEventID = event.ID - 1
 			break
 		}
+		if _, existing := decisions[event.ID]; existing {
+			// An existing progress decision must not change crossing state.
+			continue
+		}
 		if progress == nil || !metadataContains(event.Metadata, "protocol", "four_meme") {
+			continue
+		}
+		if notificationSourceOld(event, sourceAfter) {
+			*suppressed = append(*suppressed, notificationBoundarySuppression(event))
+			continue
+		}
+		if notificationStageSourceExpired(rule, event, now) {
+			*suppressed = append(*suppressed, notificationStageExpiredSuppression(event))
 			continue
 		}
 		value, valid := pointerRat(progress)
@@ -285,17 +327,27 @@ func evaluateSnapshotRule(
 	snapshots []store.MarketSnapshot,
 	state ruleState,
 	now time.Time,
+	sourceAfter ...*time.Time,
 ) (*Trigger, bool, bool, bool, error) {
 	if len(snapshots) == 0 {
 		return nil, state.ConditionActive, state.PendingCrossing, false, nil
 	}
 	latest := snapshots[0]
+	if len(sourceAfter) > 0 && sourceAfter[0] != nil {
+		observed := latest.QuoteQuality.ObservationTime()
+		if observed == nil || observed.Before(*sourceAfter[0]) {
+			return nil, state.ConditionActive, state.PendingCrossing, false, nil
+		}
+	}
+	if !snapshotQuoteAvailable(latest, now) {
+		return nil, state.ConditionActive, state.PendingCrossing, false, nil
+	}
 	current, previous, condition, available, err := snapshotCondition(rule, snapshots)
 	if err != nil {
 		return nil, state.ConditionActive, state.PendingCrossing, true, err
 	}
 	if !available {
-		return nil, false, false, true, nil
+		return nil, state.ConditionActive, state.PendingCrossing, false, nil
 	}
 	crossed := condition && !state.ConditionActive
 	repeatReady := condition && state.ConditionActive &&
@@ -350,7 +402,7 @@ func snapshotCondition(
 	switch rule.RuleType {
 	case plans.MarketPriceAbove, plans.MarketPriceBelow:
 		current = latest.PriceUSD
-		if value, exists := pointerRat(current); exists {
+		if value, exists := pointerRat(current); exists && value.Sign() > 0 {
 			condition = value.Cmp(threshold) >= 0
 			if rule.RuleType == plans.MarketPriceBelow {
 				condition = value.Cmp(threshold) <= 0
@@ -359,13 +411,17 @@ func snapshotCondition(
 		}
 	case plans.MarketLiquidityBelow:
 		current = latest.LiquidityUSD
-		if value, exists := pointerRat(current); exists {
+		if value, exists := pointerRat(current); exists && value.Sign() >= 0 {
 			return current, nil, value.Cmp(threshold) <= 0, true, nil
 		}
 	case plans.MarketPriceIncrease, plans.MarketPriceDecrease,
 		plans.MarketLiquidityDecrease:
-		baseline := snapshotBaseline(snapshots, latest.CapturedAt, rule.WindowMinutes)
-		if baseline == nil {
+		observed := latest.QuoteQuality.ObservationTime()
+		if observed == nil {
+			return nil, nil, false, false, nil
+		}
+		baseline := snapshotBaseline(snapshots, *observed, rule.WindowMinutes)
+		if baseline == nil || !snapshotQuoteAvailable(*baseline, baseline.CapturedAt) {
 			return nil, nil, false, false, nil
 		}
 		current = latest.PriceUSD
@@ -373,6 +429,10 @@ func snapshotCondition(
 		if rule.RuleType == plans.MarketLiquidityDecrease {
 			current = latest.LiquidityUSD
 			previous = baseline.LiquidityUSD
+		}
+		if rule.RuleType != plans.MarketLiquidityDecrease && (!positiveDecimal(current) || !positiveDecimal(previous)) ||
+			rule.RuleType == plans.MarketLiquidityDecrease && (!nonnegativeDecimal(current) || !positiveDecimal(previous)) {
+			return nil, nil, false, false, nil
 		}
 		change, exists := percentChange(current, previous)
 		if !exists {
@@ -387,13 +447,13 @@ func snapshotCondition(
 			decrease.Cmp(threshold) >= 0, true, nil
 	case plans.MarketVolumeAbove:
 		current = snapshotVolume(latest, rule.WindowMinutes)
-		if value, exists := pointerRat(current); exists {
+		if value, exists := pointerRat(current); exists && value.Sign() >= 0 {
 			return current, nil, value.Cmp(threshold) >= 0, true, nil
 		}
 	case plans.MarketVolumeSpike:
 		current = snapshotVolume(latest, rule.WindowMinutes)
 		currentValue, exists := pointerRat(current)
-		if !exists {
+		if !exists || currentValue.Sign() < 0 {
 			return nil, nil, false, false, nil
 		}
 		average, exists := historicalVolumeAverage(snapshots[1:], rule.WindowMinutes)
@@ -405,8 +465,11 @@ func snapshotCondition(
 			ratio.Cmp(threshold) >= 0, true, nil
 	case plans.MarketTradeImbalance:
 		buys, sells, exists := snapshotTrades(latest, rule.WindowMinutes)
-		if !exists || buys+sells == 0 {
+		if !exists || buys < 0 || sells < 0 {
 			return nil, nil, false, false, nil
+		}
+		if buys+sells == 0 {
+			return nil, nil, false, true, nil
 		}
 		dominant := buys
 		if sells > dominant {
@@ -431,6 +494,9 @@ func evaluateEventRule(
 	holderLabels map[string]store.MarketAddressLabel,
 	lastEventID int64,
 	now time.Time,
+	consecutiveCounts map[int64]int64,
+	sourceAfter *time.Time,
+	decisions map[int64]bool,
 ) ([]Trigger, []SuppressedTrigger, int64, error) {
 	result := make([]Trigger, 0)
 	suppressed := make([]SuppressedTrigger, 0)
@@ -450,6 +516,34 @@ func evaluateEventRule(
 			maxEventID = event.ID - 1
 			break
 		}
+		terminal, existing := decisions[event.ID]
+		if existing && terminal {
+			continue
+		}
+		recovering := existing && !terminal
+		if notificationSourceOld(event, sourceAfter) {
+			if notificationEventFamily(rule, event) {
+				suppressed = append(suppressed, notificationBoundarySuppression(event))
+			}
+			continue
+		}
+		if notificationStageSourceExpired(rule, event, now) {
+			if notificationEventFamily(rule, event) {
+				suppressed = append(suppressed, notificationStageExpiredSuppression(event))
+			}
+			continue
+		}
+		if quoteDependentEvent(rule, event, holders) {
+			if reason := eventQuoteUnavailable(rule, snapshots, event, now); reason != "" {
+				eventCopy := event
+				suppressed = append(suppressed, SuppressedTrigger{
+					Trigger: Trigger{Event: &eventCopy, EventType: event.EventType, EventKey: event.EventKey,
+						Note: "行情估值不可用，本次未评估。", Details: event.Metadata, OccurredAt: event.OccurredAt.UTC()},
+					Reason: reason,
+				})
+				continue
+			}
+		}
 		matched, value, note, details := eventCondition(
 			rule,
 			project,
@@ -457,6 +551,7 @@ func evaluateEventRule(
 			events,
 			event,
 			holders,
+			consecutiveCounts,
 		)
 		if !matched {
 			continue
@@ -486,7 +581,7 @@ func evaluateEventRule(
 			})
 			continue
 		}
-		if !cooldownAvailable {
+		if !cooldownAvailable && !recovering {
 			suppressed = append(suppressed, SuppressedTrigger{
 				Trigger: trigger,
 				Reason:  "cooldown_active",
@@ -494,7 +589,7 @@ func evaluateEventRule(
 			continue
 		}
 		result = append(result, trigger)
-		if rule.CooldownSeconds > 0 {
+		if rule.CooldownSeconds > 0 && !recovering {
 			cooldownAvailable = false
 		}
 	}
@@ -508,6 +603,7 @@ func eventCondition(
 	events []store.MarketEvent,
 	event store.MarketEvent,
 	holders map[string]store.MarketHolder,
+	consecutiveCounts map[int64]int64,
 ) (bool, *string, string, json.RawMessage) {
 	matchedType := ""
 	switch rule.RuleType {
@@ -549,12 +645,21 @@ func eventCondition(
 		if event.EventType != direction || !eventThresholdMatch(rule, project, snapshots, event) {
 			return false, nil, "", nil
 		}
-		count := consecutiveCount(rule, project, snapshots, events, event, direction)
+		var count int64
+		if consecutiveCounts != nil {
+			count = consecutiveCounts[event.ID]
+		} else {
+			count = consecutiveCount(rule, project, snapshots, events, event, direction)
+		}
 		if count < rule.TriggerCountThreshold {
 			return false, nil, "", nil
 		}
 		value := strconv.FormatInt(count, 10)
-		return true, &value, marketEventNote(rule, project, event, &value), event.Metadata
+		details := event.Metadata
+		if consecutiveCounts != nil {
+			details = completeTradeWindowDetails(rule, event, count)
+		}
+		return true, &value, marketEventNote(rule, project, event, &value), details
 	}
 	if matchedType != "" && event.EventType != matchedType {
 		return false, nil, "", nil
@@ -595,6 +700,12 @@ func eventValue(
 			project.TotalSupplyRaw != nil {
 			return ratioPercent(*event.TokenAmountRaw, *project.TotalSupplyRaw)
 		}
+		if projection, present := tradeProjectionFromEvent(event); present {
+			if projection.LiquidityComplete && event.USDValue != nil && projection.LiquidityUSD != nil {
+				return ratioPercent(*event.USDValue, *projection.LiquidityUSD)
+			}
+			return nil
+		}
 		if event.USDValue != nil && len(snapshots) > 0 && snapshots[0].LiquidityUSD != nil {
 			return ratioPercent(*event.USDValue, *snapshots[0].LiquidityUSD)
 		}
@@ -615,6 +726,13 @@ func holderEventCondition(
 	event store.MarketEvent,
 	holders map[string]store.MarketHolder,
 ) (bool, *string, string, json.RawMessage) {
+	if (rule.RuleType == plans.MarketHolderRankEntered || rule.RuleType == plans.MarketHolderRankExited) && event.EventType == "holder_rank_changed" {
+		matched, value := holderRankCrossing(rule, event)
+		if !matched {
+			return false, nil, "", nil
+		}
+		return true, value, marketEventNote(rule, project, event, value), event.Metadata
+	}
 	address := holderEventAddress(rule.RuleType, event)
 	if _, tracked := holders[address]; !tracked {
 		return false, nil, "", nil
@@ -681,6 +799,7 @@ func consecutiveCount(
 	var count int64
 	for _, candidate := range events {
 		if candidate.ID > current.ID || candidate.EventType != direction ||
+			candidate.Reorged != 0 || candidate.Confirmed != 1 ||
 			candidate.OccurredAt.Before(from) || candidate.OccurredAt.After(current.OccurredAt) {
 			continue
 		}
@@ -776,11 +895,18 @@ func snapshotBaseline(
 	latestAt time.Time,
 	windowMinutes *int32,
 ) *store.MarketSnapshot {
-	window := time.Duration(defaultWindow(windowMinutes, 60)) * time.Minute
+	if windowMinutes == nil || *windowMinutes < 1 || *windowMinutes > marketwindow.MaxCustomWindowMinutes {
+		return nil
+	}
+	window := time.Duration(*windowMinutes) * time.Minute
 	target := latestAt.Add(-window)
 	for index := 1; index < len(snapshots); index++ {
 		if !snapshots[index].CapturedAt.After(target) {
 			value := snapshots[index]
+			observed := value.QuoteQuality.ObservationTime()
+			if observed == nil || observed.After(target) || target.Sub(*observed) > marketwindow.MaxBaselineLag {
+				return nil
+			}
 			return &value
 		}
 	}
@@ -789,28 +915,28 @@ func snapshotBaseline(
 
 func snapshotVolume(snapshot store.MarketSnapshot, window *int32) *string {
 	minutes := defaultWindow(window, 60)
-	switch {
-	case minutes <= 5:
+	switch minutes {
+	case 5:
 		return snapshot.Volume5mUSD
-	case minutes <= 15:
-		return snapshot.Volume15mUSD
-	case minutes <= 60:
+	case 60:
 		return snapshot.Volume1hUSD
-	case minutes <= 360:
+	case 360:
 		return snapshot.Volume6hUSD
-	default:
+	case 1440:
 		return snapshot.Volume24hUSD
+	default:
+		return nil
 	}
 }
 
 func snapshotTrades(snapshot store.MarketSnapshot, window *int32) (int64, int64, bool) {
 	minutes := defaultWindow(window, 60)
 	switch {
-	case minutes <= 5 && snapshot.Buys5m != nil && snapshot.Sells5m != nil:
+	case minutes == 5 && snapshot.Buys5m != nil && snapshot.Sells5m != nil:
 		return *snapshot.Buys5m, *snapshot.Sells5m, true
-	case minutes <= 60 && snapshot.Buys1h != nil && snapshot.Sells1h != nil:
+	case minutes == 60 && snapshot.Buys1h != nil && snapshot.Sells1h != nil:
 		return *snapshot.Buys1h, *snapshot.Sells1h, true
-	case snapshot.Buys24h != nil && snapshot.Sells24h != nil:
+	case minutes == 1440 && snapshot.Buys24h != nil && snapshot.Sells24h != nil:
 		return *snapshot.Buys24h, *snapshot.Sells24h, true
 	default:
 		return 0, 0, false
@@ -827,6 +953,9 @@ func historicalVolumeAverage(
 		value, exists := pointerRat(snapshotVolume(snapshot, window))
 		if !exists {
 			continue
+		}
+		if value.Sign() < 0 || !snapshotQuoteAvailable(snapshot, snapshot.CapturedAt) {
+			return nil, false
 		}
 		total.Add(total, value)
 		count++

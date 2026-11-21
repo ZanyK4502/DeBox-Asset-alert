@@ -125,7 +125,7 @@ func TestRestorePaidRuleReportsQuotaLimit(t *testing.T) {
 	service := newTestService(t, repository)
 
 	_, err := service.RestorePausedWatchRule(context.Background(), "user-1", 12)
-	if err == nil || err.Error() != "当前套餐最多支持 10 条运行规则。" {
+	if err == nil || err.Error() != "当前套餐最多支持 3 条运行规则。" {
 		t.Fatalf("RestorePausedWatchRule() error = %v", err)
 	}
 	if repository.restoredPolicy.PlanCode != plans.Standard {
@@ -220,19 +220,20 @@ func newTestService(t *testing.T, repository Repository) *Service {
 }
 
 type fakeRepository struct {
-	activeSubscription *store.Subscription
-	permanentBinding   store.PermanentPlanBinding
-	permanentUser      string
-	permanentWallet    string
-	permanentErr       error
-	paidHistory        bool
-	preferences        store.UserPreference
-	rules              []store.WatchRule
-	groups             []store.NotificationGroup
-	ruleCount          int64
-	walletCount        int64
-	groupCount         int64
-	marketProjectCount int64
+	activeSubscription   *store.Subscription
+	permanentBinding     store.PermanentPlanBinding
+	permanentUser        string
+	permanentWallet      string
+	permanentErr         error
+	paidHistory          bool
+	preferences          store.UserPreference
+	rules                []store.WatchRule
+	groups               []store.NotificationGroup
+	ruleCount            int64
+	walletCount          int64
+	groupCount           int64
+	marketProjectCount   int64
+	interactionRuleCount int64
 
 	expiryFallbackCalled bool
 	setFreeCalls         int
@@ -317,6 +318,10 @@ func (f *fakeRepository) ListDailySummaryTargets(
 
 func (f *fakeRepository) CountUserWatchRules(context.Context, string) (int64, error) {
 	return f.ruleCount, nil
+}
+
+func (f *fakeRepository) CountUserInteractionRules(context.Context, string) (int64, error) {
+	return f.interactionRuleCount, nil
 }
 
 func (f *fakeRepository) CountUserWallets(context.Context, string) (int64, error) {

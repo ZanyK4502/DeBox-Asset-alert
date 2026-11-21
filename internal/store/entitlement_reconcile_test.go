@@ -46,13 +46,17 @@ func TestRestoreExpiredMarketEntitlementsRestoresProjectAndCompatibleRule(t *tes
 	mock.ExpectQuery("SELECT EXISTS.*FROM market_projects").
 		WithArgs(projectID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec("UPDATE market_rules SET notification_source_after=NOW").WithArgs(ruleID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	for _, table := range []string{"market_rule_events", "market_stage_windows"} {
+		mock.ExpectExec("WITH candidates.*FROM "+table).WithArgs(ruleID, "market rule was stopped or restored").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	}
 	mock.ExpectExec("UPDATE market_rules.*run_status = 'active'").
 		WithArgs(ruleID, userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	activeSlots := int64(0)
 	result := EntitlementReconcileResult{}
-	err = restoreExpiredMarketEntitlements(
+	err = newWithDB(mock).restoreExpiredMarketEntitlements(
 		context.Background(),
 		mock,
 		userID,
@@ -127,12 +131,14 @@ func TestRestoreExpiredMarketEntitlementsRestoresEligibleCombination(t *testing.
 		mock.ExpectQuery("SELECT rule_type, enabled, run_status.*FROM market_rules").
 			WithArgs(ruleID, userID).
 			WillReturnRows(pgxmock.NewRows([]string{
-				"rule_type", "enabled", "run_status",
-			}).AddRow("market_price_above", int32(1), "active"))
+				"rule_type", "enabled", "run_status", "window_minutes", "threshold_value",
+			}).AddRow("market_price_above", int32(1), "active", nil, "1"))
 	}
 	mock.ExpectQuery("SELECT NOT EXISTS.*market_combination_rule_projects").
 		WithArgs(combinationID).
 		WillReturnRows(pgxmock.NewRows([]string{"active"}).AddRow(true))
+	mock.ExpectExec("UPDATE market_combination_rules SET notification_source_after=NOW").WithArgs(combinationID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("WITH candidates.*FROM market_combination_windows").WithArgs(combinationID, "market combination was stopped or restored").WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec("UPDATE market_combination_rules.*run_status = 'active'").
 		WithArgs(combinationID, userID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -142,7 +148,7 @@ func TestRestoreExpiredMarketEntitlementsRestoresEligibleCombination(t *testing.
 
 	activeSlots := int64(2)
 	result := EntitlementReconcileResult{}
-	err = restoreExpiredMarketEntitlements(
+	err = newWithDB(mock).restoreExpiredMarketEntitlements(
 		context.Background(),
 		mock,
 		userID,

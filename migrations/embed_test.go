@@ -16,11 +16,12 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("no migrations embedded")
 	}
-	if got := names[len(names)-1]; got != "0020_add_professional_permanent_allowlist.sql" {
-		t.Fatalf("latest migration = %q, want professional permanent allowlist migration", got)
+	if got := names[len(names)-1]; got != "0041_holder_refresh_rolling_budget.sql" {
+		t.Fatalf("latest migration = %q, want holder rolling budget migration", got)
 	}
 
 	requiredTables := []string{
+		"resource_capacity_holds",
 		"subscriptions",
 		"watch_rules",
 		"orders",
@@ -54,6 +55,11 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"market_holder_snapshots",
 		"market_address_labels",
 		"market_chain_cursors",
+		"market_chain_collection_states",
+		"market_collection_idle_intervals",
+		"market_collection_gaps",
+		"market_collection_history_ranges",
+		"market_collection_history_reviews",
 		"nodit_webhook_subscriptions",
 		"webhook_inbox",
 		"market_scanned_blocks",
@@ -68,6 +74,38 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 		"market_combination_window_members",
 		"market_combination_trigger_events",
 		"notification_detail_snapshots",
+		"market_trade_scopes",
+		"market_transaction_receipts",
+		"market_transaction_events",
+		"market_trade_parents",
+		"market_trade_legs",
+		"market_trade_ready_events",
+		"market_four_meme_states",
+		"market_trade_parent_summaries",
+		"market_trade_pool_summaries",
+		"market_scan_coverage",
+		"market_holder_refresh_states",
+		"market_holder_snapshot_refs",
+		"market_holder_history_cleanup_cursor",
+		"wallet_notification_outbox",
+		"wallet_trigger_recovery_decisions",
+		"wallet_notification_unknown_resolutions",
+		"market_combination_source_decisions",
+		"market_delivery_unknown_resolutions",
+		"notification_recovery_boundaries",
+		"notification_recovery_boundary_history",
+		"notification_recovery_gaps",
+		"daily_summary_dispatches",
+		"daily_summary_unknown_resolutions",
+		"daily_summary_legacy_reviews",
+		"notification_send_admission",
+		"notification_send_path_admission",
+		"market_trade_rule_readiness",
+		"market_trade_warmup_periods",
+		"market_project_trade_scope_changes",
+		"market_holder_refresh_scheduler",
+		"wallet_balance_read_states",
+		"wallet_balance_source_transitions",
 	}
 	destructive := regexp.MustCompile(
 		`(?im)^\s*(drop\s+(table|column)|truncate|delete|rename)\b`,
@@ -96,7 +134,14 @@ func TestEmbeddedMigrationsAreForwardOnlyAndComplete(t *testing.T) {
 			!repeatsSafeComplimentaryCleanup {
 			t.Fatalf("migration %q contains a destructive statement", name)
 		}
-		if dataUpdate.MatchString(sql) &&
+		executableSQL := sql
+		if name == "0040_market_collection_lifecycle.sql" {
+			// Defining a lifecycle trigger does not execute its future updates.
+			// Continue checking every top-level migration statement below.
+			routines := regexp.MustCompile(`(?is)create\s+or\s+replace\s+function\b.*?\$\$.*?\$\$\s*;`)
+			executableSQL = routines.ReplaceAllString(sql, "")
+		}
+		if dataUpdate.MatchString(executableSQL) &&
 			name != "0011_multichain_market_domain.sql" &&
 			name != "0012_multichain_market_collection.sql" &&
 			name != "0014_repair_multichain_collection_links.sql" &&

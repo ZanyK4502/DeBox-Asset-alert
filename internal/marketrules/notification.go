@@ -4,20 +4,27 @@ import (
 	"encoding/json"
 	"html"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
 func MarketNotificationText(delivery store.MarketNotificationDelivery) string {
+	return marketNotificationTextAt(delivery, time.Now().UTC())
+}
+
+func marketNotificationTextAt(delivery store.MarketNotificationDelivery, now time.Time) string {
+	var text string
 	switch delivery.Kind {
 	case "combination":
-		return marketCombinationText(delivery)
+		text = marketCombinationText(delivery)
 	case "stage":
-		return marketStageText(delivery)
+		text = marketStageText(delivery)
 	default:
-		return marketRealtimeText(delivery)
+		text = marketRealtimeText(delivery)
 	}
+	return appendMarketQuoteReference(text, delivery, now)
 }
 
 func ruleDisplay(ruleType string, english bool) string {

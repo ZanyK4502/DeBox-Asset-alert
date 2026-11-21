@@ -38,7 +38,7 @@ const marketEventColumns = `
 const marketRuleEventColumns = `
 	id, market_rule_id, market_event_id, trigger_key,
 	previous_value, current_value, note, details,
-	notification_message_id, notification_status, notification_error,
+	notification_message_id, notification_status, delivery_outcome, notification_error,
 	notification_attempts, notification_attempted_at, notification_sent_at,
 	next_attempt_at, created_at
 `
@@ -116,12 +116,20 @@ func (s *Store) CreateMarketRuleWithinQuota(
 	policy QuotaPolicy,
 ) (MarketRule, error) {
 	normalizeMarketRuleParams(&params)
+	if err := validateMarketRuleRuntimeParameters(params.RuleType, params.WindowMinutes, params.ThresholdValue); err != nil {
+		return MarketRule{}, err
+	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketRule, error) {
 		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
 			return MarketRule{}, err
 		}
 		if err := requirePolicyPlan(ctx, tx, params.DeBoxUserID, policy); err != nil {
 			return MarketRule{}, err
+		}
+		var scopeErr error
+		policy, scopeErr = s.marketScopePolicy(ctx, tx, params.DeBoxUserID, policy)
+		if scopeErr != nil {
+			return MarketRule{}, scopeErr
 		}
 		if !policy.allowsMarketRuleType(params.RuleType) {
 			return MarketRule{}, ErrMarketRuleTypeDenied
@@ -220,11 +228,18 @@ func (s *Store) CreateMarketRuleWithinQuota(
 			}
 			params.State, _ = json.Marshal(map[string]int64{"last_event_id": lastEventID})
 		}
+		holderTargets, err := s.beginMarketHolderTargetCheck(ctx, tx, params.RuleScope == "standalone" && isMarketHolderRule(params.RuleType))
+		if err != nil {
+			return MarketRule{}, err
+		}
 		rule, err := createMarketRule(ctx, tx, params)
 		if err != nil {
 			return MarketRule{}, err
 		}
 		if err := createMarketRuleScopes(ctx, tx, rule.ID, params); err != nil {
+			return MarketRule{}, err
+		}
+		if err := s.checkMarketHolderTargetLimit(ctx, tx, holderTargets); err != nil {
 			return MarketRule{}, err
 		}
 		return rule, nil
@@ -244,13 +259,13 @@ func createMarketRule(
 			cycle_minutes, trigger_count_threshold,
 			deployment_scope, pool_scope, cooldown_scope, notification_chat_id,
 			notification_chat_type, notification_label, notification_language,
-			aggregation_anchor_at, state
+			aggregation_anchor_at, state, trade_activation_after
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
 			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
 			CASE WHEN $12 = 'stage' AND $13 = 'fixed' THEN NOW() ELSE NULL END,
-			$23
+			$23, CASE WHEN $4 IN ('market_large_buy','market_large_sell','market_consecutive_large_buy','market_consecutive_large_sell') THEN NOW() ELSE NULL END
 		)
 		RETURNING `+marketRuleColumns,
 		params.DeBoxUserID,
@@ -340,7 +355,7 @@ func validateMarketRuleScopes(
 			return ErrMarketPoolMismatch
 		}
 	}
-	return nil
+	return validateMarketProjectScope(ctx, db, params.MarketProjectID, params.DeBoxUserID, policy)
 }
 
 func createMarketRuleScopes(
@@ -483,6 +498,11 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		if err := requirePolicyPlan(ctx, tx, deboxUserID, policy); err != nil {
 			return MarketRule{}, err
 		}
+		var scopeErr error
+		policy, scopeErr = s.marketScopePolicy(ctx, tx, deboxUserID, policy)
+		if scopeErr != nil {
+			return MarketRule{}, scopeErr
+		}
 		rule, err := collectOne[MarketRule](ctx, tx, `
 			SELECT `+marketRuleColumns+`
 			FROM market_rules
@@ -497,6 +517,9 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		}
 		if rule.Enabled != 1 || rule.RuleScope != "standalone" {
 			return MarketRule{}, ErrNotFound
+		}
+		if err := validateMarketRuleRuntimeParameters(rule.RuleType, rule.WindowMinutes, rule.ThresholdValue); err != nil {
+			return MarketRule{}, err
 		}
 		var projectFrozen bool
 		if err := tx.QueryRow(ctx, `
@@ -542,6 +565,9 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 				return MarketRule{}, ErrMarketPoolMismatch
 			}
 		}
+		if err := validateStoredMarketRuleScope(ctx, tx, rule, policy); err != nil {
+			return MarketRule{}, err
+		}
 		if rule.RunStatus == "active" {
 			return rule, nil
 		}
@@ -551,6 +577,13 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		}
 		if count >= int64(policy.RuleLimit) {
 			return MarketRule{}, ErrRuleLimitReached
+		}
+		holderTargets, err := s.beginMarketHolderTargetCheck(ctx, tx, isMarketHolderRule(rule.RuleType))
+		if err != nil {
+			return MarketRule{}, err
+		}
+		if err := advanceMarketRuleNotificationFence(ctx, tx, rule.ID); err != nil {
+			return MarketRule{}, err
 		}
 		restored, err := collectOne[MarketRule](ctx, tx, `
 			UPDATE market_rules
@@ -569,6 +602,9 @@ func (s *Store) RestoreMarketRuleWithinQuota(
 		if err != nil {
 			return MarketRule{}, fmt.Errorf("restore market rule: %w", err)
 		}
+		if err := s.checkMarketHolderTargetLimit(ctx, tx, holderTargets); err != nil {
+			return MarketRule{}, err
+		}
 		return restored, nil
 	})
 }
@@ -583,6 +619,7 @@ func (s *Store) UpdateMarketRuleState(
 		UPDATE market_rules
 		SET state = $1,
 		    last_evaluated_at = NOW(),
+		    next_evaluation_at = NULL,
 		    last_triggered_at = CASE WHEN $2 THEN NOW() ELSE last_triggered_at END,
 		    updated_at = NOW()
 		WHERE id = $3
@@ -622,7 +659,9 @@ func (s *Store) ListEnabledMarketRules(
 		JOIN market_projects mp ON mp.id = mr.market_project_id
 		WHERE mr.enabled = 1
 		  AND mr.run_status = 'active'
+		  AND (mr.next_evaluation_at IS NULL OR mr.next_evaluation_at<=NOW())
 		  AND mp.status = 'active'
+		  AND `+marketRuleSupportedParametersSQL("mr")+`
 		ORDER BY COALESCE(mr.last_evaluated_at, mr.created_at), mr.id
 		LIMIT $1
 	`, limit)
@@ -636,10 +675,18 @@ func (s *Store) CreateMarketEvent(
 	ctx context.Context,
 	params CreateMarketEventParams,
 ) (MarketEvent, bool, error) {
+	return createMarketEvent(ctx, s.db, params)
+}
+
+func createMarketEvent(
+	ctx context.Context,
+	db DBTX,
+	params CreateMarketEventParams,
+) (MarketEvent, bool, error) {
 	if err := normalizeMarketEventParams(&params); err != nil {
 		return MarketEvent{}, false, err
 	}
-	event, err := collectOne[MarketEvent](ctx, s.db, `
+	event, err := collectOne[MarketEvent](ctx, db, `
 		INSERT INTO market_events (
 			market_pool_id, chain_key, chain_id, token_address,
 			event_type, event_key, transaction_hash, transaction_index,
@@ -685,7 +732,7 @@ func (s *Store) CreateMarketEvent(
 	if !isNoRows(err) {
 		return MarketEvent{}, false, fmt.Errorf("create market event: %w", err)
 	}
-	existing, err := collectOne[MarketEvent](ctx, s.db, `
+	existing, err := collectOne[MarketEvent](ctx, db, `
 		SELECT `+marketEventColumns+`
 		FROM market_events
 		WHERE chain_id = $1
@@ -710,7 +757,7 @@ func (s *Store) CreateMarketEvent(
 	// retired row with its new canonical block placement instead of silently
 	// leaving it marked as reorged.
 	if existing.Reorged == 1 {
-		revived, reviveErr := collectOne[MarketEvent](ctx, s.db, `
+		revived, reviveErr := collectOne[MarketEvent](ctx, db, `
 			UPDATE market_events
 			SET market_pool_id = $1,
 			    event_type = $2,
@@ -866,17 +913,22 @@ func (s *Store) ListMarketRuleEventHistory(
 			mre.previous_value,
 			mre.current_value,
 			mre.note,
-			mre.notification_status,
+			mre.notification_status, mre.delivery_outcome,
 			mre.notification_error,
 			mre.notification_sent_at,
 			mre.created_at,
-			me.market_pool_id,
+			CASE WHEN trade_scope.frozen THEN
+				CASE WHEN cardinality(trade_scope.pool_ids) = 1 THEN trade_scope.pool_ids[1] END
+				ELSE me.market_pool_id END AS market_pool_id,
+			CASE WHEN trade_scope.frozen THEN trade_scope.pool_ids ELSE ARRAY[]::bigint[] END AS trade_pool_ids,
 			me.chain_key,
 			me.event_type,
 			me.transaction_hash,
 			me.wallet_address,
-			me.token_amount::text AS token_amount,
-			me.usd_value::text AS usd_value,
+			CASE WHEN trade_scope.frozen THEN NULLIF(mre.details #>> '{trade_projection,token_amount}', '')
+				ELSE me.token_amount::text END AS token_amount,
+			CASE WHEN trade_scope.frozen THEN NULLIF(mre.details #>> '{trade_projection,usd_value}', '')
+				ELSE me.usd_value::text END AS usd_value,
 			me.source,
 			me.occurred_at,
 			(mre.notification_status = 'sent') AS notification_successful,
@@ -902,6 +954,17 @@ func (s *Store) ListMarketRuleEventHistory(
 		JOIN market_rules mr ON mr.id = mre.market_rule_id
 		JOIN market_events me ON me.id = mre.market_event_id
 		JOIN market_projects mp ON mp.id = mr.market_project_id
+		CROSS JOIN LATERAL (
+			SELECT mre.details ? 'trade_projection' AS frozen,
+				ARRAY(
+					SELECT DISTINCT value::bigint
+					FROM jsonb_array_elements_text(
+						CASE WHEN jsonb_typeof(mre.details #> '{trade_projection,pool_ids}') = 'array'
+						THEN mre.details #> '{trade_projection,pool_ids}' ELSE '[]'::jsonb END
+					)
+					ORDER BY 1
+				) AS pool_ids
+		) trade_scope
 		WHERE mr.market_project_id = $1
 		  AND mr.debox_user_id = $2
 		  AND mre.created_at >= COALESCE(mp.frozen_at, NOW()) - INTERVAL '30 days'
@@ -909,7 +972,8 @@ func (s *Store) ListMarketRuleEventHistory(
 		  AND ($3::bigint = 0 OR mre.id < $3)
 		  AND ($4::text = '' OR me.chain_key = $4)
 		  AND ($5::text = '' OR mr.rule_type = $5)
-		  AND ($6::bigint = 0 OR me.market_pool_id = $6)
+		  AND ($6::bigint = 0 OR CASE WHEN trade_scope.frozen THEN $6 = ANY(trade_scope.pool_ids)
+			ELSE me.market_pool_id = $6 END)
 		  AND ($7::text = '' OR me.wallet_address = $7)
 		ORDER BY mre.id DESC
 		LIMIT $8
@@ -987,19 +1051,68 @@ func (s *Store) MarkMarketBlockConfirmed(
 	chainID int64,
 	throughBlock int64,
 ) (int64, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE market_events
-		SET confirmed = 1
-		WHERE chain_id = $1
-		  AND block_number IS NOT NULL
-		  AND block_number <= $2
-		  AND confirmed = 0
-		  AND reorged = 0
-	`, chainID, throughBlock)
-	if err != nil {
-		return 0, fmt.Errorf("confirm market events: %w", err)
+	if chainID <= 0 || throughBlock < 0 {
+		return 0, ErrInvalidMarketEvent
 	}
-	return tag.RowsAffected(), nil
+	type confirmationResult struct {
+		Count   int64
+		Pending bool
+	}
+	result, err := withTxValue(ctx, s.db, func(tx DBTX) (confirmationResult, error) {
+		if err := lockMarketTradeChain(ctx, tx, chainID); err != nil {
+			return confirmationResult{}, err
+		}
+		rows, err := tx.Query(ctx, `
+			WITH RECURSIVE candidates AS MATERIALIZED (
+				SELECT r.id,r.block_number FROM market_transaction_receipts r
+				WHERE r.chain_id=$1 AND r.block_number<=$2 AND r.complete AND NOT r.reorged
+				  AND NOT r.confirmed
+				  AND EXISTS(SELECT 1 FROM market_scanned_blocks b WHERE b.chain_id=r.chain_id
+				    AND b.block_number=r.block_number AND b.block_hash=r.block_hash AND b.canonical=1)
+				ORDER BY r.block_number,r.id LIMIT 2000 FOR UPDATE SKIP LOCKED
+			), ranked AS MATERIALIZED (
+				SELECT candidates.*,ROW_NUMBER() OVER(ORDER BY block_number,id) AS ordinal FROM candidates
+			), picked AS (
+				SELECT c.*,cost.parents AS total_parents FROM ranked c
+				CROSS JOIN LATERAL (SELECT GREATEST(1,COUNT(*)) AS parents FROM market_transaction_events x WHERE x.receipt_id=c.id) cost
+				WHERE c.ordinal=1
+				UNION ALL
+				SELECT c.*,previous.total_parents+cost.parents FROM picked previous JOIN ranked c ON c.ordinal=previous.ordinal+1
+				CROSS JOIN LATERAL (SELECT GREATEST(1,COUNT(*)) AS parents FROM market_transaction_events x WHERE x.receipt_id=c.id) cost
+				WHERE previous.total_parents<10000 AND previous.total_parents+cost.parents<=10000
+			) SELECT id FROM picked ORDER BY ordinal
+		`, chainID, throughBlock)
+		if err != nil {
+			return confirmationResult{}, fmt.Errorf("find verified complete market receipts: %w", err)
+		}
+		ids, err := collectInt64Rows(rows)
+		if err != nil {
+			return confirmationResult{}, err
+		}
+		count, err := confirmMarketReceipts(ctx, tx, ids)
+		if err != nil {
+			return confirmationResult{}, err
+		}
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM market_transaction_receipts r WHERE r.chain_id=$1 AND r.block_number<=$2
+			AND r.complete AND NOT r.reorged AND NOT r.confirmed
+			AND EXISTS(SELECT 1 FROM market_scanned_blocks b WHERE b.chain_id=r.chain_id
+			AND b.block_number=r.block_number AND b.block_hash=r.block_hash AND b.canonical=1)
+		)`, chainID, throughBlock).Scan(&pending); err != nil {
+			return confirmationResult{}, err
+		}
+		return confirmationResult{Count: count, Pending: pending}, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	// Report the bounded remainder only after COMMIT. Returning it from inside
+	// withTxValue would roll back progress and retry the same first batch forever.
+	if result.Pending {
+		return result.Count, ErrMarketTradeConfirmationPending
+	}
+	return result.Count, nil
 }
 
 func (s *Store) ListUnconfirmedMarketEventBlocks(
@@ -1039,6 +1152,14 @@ func (s *Store) MarkMarketBlockReorged(
 		return 0, ErrInvalidMarketEvent
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (int64, error) {
+		if err := lockMarketTradeChain(ctx, tx, chainID); err != nil {
+			return 0, err
+		}
+		var replacedBlock bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM market_scanned_blocks
+		 WHERE chain_id=$1 AND block_number=$2 AND canonical=1 AND block_hash<>$3)`, chainID, blockNumber, canonicalBlockHash).Scan(&replacedBlock); err != nil {
+			return 0, err
+		}
 		tag, err := tx.Exec(ctx, `
 			UPDATE market_events
 			SET reorged = 1, confirmed = 0
@@ -1051,20 +1172,31 @@ func (s *Store) MarkMarketBlockReorged(
 		if err != nil {
 			return 0, fmt.Errorf("mark market block reorged: %w", err)
 		}
+		if tag.RowsAffected() > 0 || replacedBlock {
+			if err := rewindMarketScanCoverage(ctx, tx, chainID, "", blockNumber-1); err != nil {
+				return 0, err
+			}
+		}
 		if tag.RowsAffected() > 0 {
 			if _, err := tx.Exec(ctx, `
 				UPDATE market_rule_events mre
-				SET notification_status = 'skipped',
-				    notification_error = 'source event was removed by a chain reorganization'
+				SET notification_status='skipped',delivery_outcome=CASE WHEN notification_send_started_at IS NOT NULL OR(notification_lease_token=0 AND(notification_status='sending' OR(notification_status IN('pending','failed') AND delivery_outcome=''))) THEN 'unknown' ELSE 'cancelled' END,
+ notification_error=LEFT(CASE WHEN notification_error='' THEN 'source event was removed by a chain reorganization' ELSE notification_error||'; source event was removed by a chain reorganization' END,2000)
 				FROM market_events me
 				WHERE me.id = mre.market_event_id
 				  AND me.chain_id = $1
 				  AND me.block_number = $2
 				  AND me.reorged = 1
-				  AND mre.notification_status IN ('pending', 'sending', 'failed')
+				  AND mre.notification_status IN ('pending', 'sending', 'failed', 'staged', 'combined') AND mre.delivery_outcome<>'unknown'
 			`, chainID, blockNumber); err != nil {
 				return 0, fmt.Errorf("skip reorged market notifications: %w", err)
 			}
+		}
+		if err := retireMarketTradeReceipts(ctx, tx, chainID, blockNumber, &blockNumber, canonicalBlockHash); err != nil {
+			return 0, err
+		}
+		if err := reconcileReorgedFourMemeTokens(ctx, tx, chainID, blockNumber, &blockNumber); err != nil {
+			return 0, err
 		}
 		return tag.RowsAffected(), nil
 	})
@@ -1074,6 +1206,77 @@ func (s *Store) CreateMarketRuleEvent(
 	ctx context.Context,
 	params CreateMarketRuleEventParams,
 ) (MarketRuleEvent, bool, error) {
+	return createMarketRuleEvent(ctx, s.db, params)
+}
+
+// WithMarketRuleEvaluationWrite only wraps persistence. Provider calls,
+// read-only compact statistics and pure evaluation must finish before it.
+func (s *Store) WithMarketRuleEvaluationWrite(ctx context.Context, ruleID int64, write func(*Store) error) error {
+	if ruleID <= 0 || write == nil {
+		return ErrInvalidMarketRuleEvent
+	}
+	_, err := withMarketDeliveryTx(ctx, s.db, func(tx DBTX) (struct{}, error) {
+		var owner string
+		if err := tx.QueryRow(ctx, `SELECT debox_user_id FROM market_rules WHERE id=$1`, ruleID).Scan(&owner); err != nil {
+			if isNoRows(err) {
+				return struct{}{}, ErrMarketRuleEvaluationInactive
+			}
+			return struct{}{}, err
+		}
+		// Match lifecycle/configuration lock order before taking rule/project
+		// rows. A stopped rule must not consume a cursor even with no trigger.
+		if err := lockUser(ctx, tx, owner); err != nil {
+			return struct{}{}, err
+		}
+		if bounded, ok := tx.(*marketDeliveryBudgetDB); ok {
+			bounded.owner = owner
+			bounded.ruleID = ruleID
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext('notification-recovery-boundary'))`); err != nil {
+			return struct{}{}, err
+		}
+		var id int64
+		if err := tx.QueryRow(ctx, `SELECT mr.id FROM market_rules mr JOIN market_projects mp ON mp.id=mr.market_project_id
+		 WHERE mr.id=$1 AND mr.enabled=1 AND mr.run_status='active' AND mp.status='active' FOR UPDATE OF mr,mp`, ruleID).Scan(&id); err != nil {
+			if isNoRows(err) {
+				return struct{}{}, ErrMarketRuleEvaluationInactive
+			}
+			return struct{}{}, err
+		}
+		return struct{}{}, write(newWithDB(tx))
+	})
+	return err
+}
+
+// CreateMarketRuleEventAndEnqueue commits a logical trigger and all of its
+// market delivery associations together. Replaying an existing trigger repairs
+// missing associations without incrementing an existing link a second time.
+func (s *Store) CreateMarketRuleEventAndEnqueue(ctx context.Context, params CreateMarketRuleEventParams) (MarketRuleEvent, bool, error) {
+	type result struct {
+		Event   MarketRuleEvent
+		Created bool
+	}
+	value, err := withMarketDeliveryTx(ctx, s.db, func(tx DBTX) (result, error) {
+		if err := lockMarketRuleNotificationOwner(ctx, tx, params.MarketRuleID); err != nil {
+			return result{}, err
+		}
+		event, created, err := createMarketRuleEvent(ctx, tx, params)
+		if err != nil {
+			return result{}, err
+		}
+		if err := enqueueMarketRuleEvent(ctx, tx, event); err != nil {
+			return result{}, err
+		}
+		event, err = collectOne[MarketRuleEvent](ctx, tx, `SELECT `+marketRuleEventColumns+` FROM market_rule_events WHERE id=$1`, event.ID)
+		if err != nil {
+			return result{}, err
+		}
+		return result{Event: event, Created: created}, nil
+	})
+	return value.Event, value.Created, err
+}
+
+func createMarketRuleEvent(ctx context.Context, db DBTX, params CreateMarketRuleEventParams) (MarketRuleEvent, bool, error) {
 	params.TriggerKey = strings.TrimSpace(params.TriggerKey)
 	params.NotificationStatus = normalizeInitialMarketNotificationStatus(
 		params.NotificationStatus,
@@ -1081,17 +1284,34 @@ func (s *Store) CreateMarketRuleEvent(
 	if params.MarketRuleID <= 0 || params.MarketEventID <= 0 || params.TriggerKey == "" {
 		return MarketRuleEvent{}, false, ErrInvalidMarketRuleEvent
 	}
-	value, err := collectOne[MarketRuleEvent](ctx, s.db, `
+	cutoff, err := marketResourceNotificationCutoff(ctx, db, params.MarketRuleID, false)
+	if err != nil {
+		return MarketRuleEvent{}, false, err
+	}
+	if cutoff != nil && params.NotificationStatus != "skipped" {
+		var occurredAt time.Time
+		if err := db.QueryRow(ctx, `SELECT occurred_at FROM market_events WHERE id=$1`, params.MarketEventID).Scan(&occurredAt); err != nil {
+			return MarketRuleEvent{}, false, err
+		}
+		if occurredAt.Before(*cutoff) {
+			params.NotificationStatus = "skipped"
+			params.NotificationError = "source precedes recorded recovery cutoff"
+		}
+	}
+	value, err := collectOne[MarketRuleEvent](ctx, db, `
 		INSERT INTO market_rule_events (
 			market_rule_id, market_event_id, trigger_key,
 			previous_value, current_value, note, details,
-			notification_status, notification_error
+			notification_status, delivery_outcome, notification_error,notification_route
 		)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+		 CASE WHEN $8='skipped' THEN 'cancelled' ELSE 'not_attempted' END,$9,
+		 jsonb_build_object('chat_id',mr.notification_chat_id,'chat_type',mr.notification_chat_type)
 		FROM market_rules mr
 		JOIN market_projects mp ON mp.id = mr.market_project_id
 		JOIN market_events me ON me.id = $2
 		WHERE mr.id = $1
+		  AND mr.enabled = 1 AND mr.run_status = 'active' AND mp.status = 'active'
 		  AND (
 			(mp.chain_id = me.chain_id AND mp.token_address = me.token_address)
 			OR EXISTS (
@@ -1115,6 +1335,8 @@ func (s *Store) CreateMarketRuleEvent(
 			)
 		  )
 		  AND me.reorged = 0
+		  AND me.confirmed = 1
+		  AND ($8='skipped' OR (`+marketDeliveryEventValidSQL("($7::jsonb)", "me")+`))
 		ON CONFLICT DO NOTHING
 		RETURNING `+marketRuleEventColumns,
 		params.MarketRuleID,
@@ -1133,7 +1355,7 @@ func (s *Store) CreateMarketRuleEvent(
 	if !isNoRows(err) {
 		return MarketRuleEvent{}, false, fmt.Errorf("create market rule event: %w", err)
 	}
-	existing, err := collectOptional[MarketRuleEvent](ctx, s.db, `
+	existing, err := collectOptional[MarketRuleEvent](ctx, db, `
 		SELECT `+marketRuleEventColumns+`
 		FROM market_rule_events
 		WHERE market_rule_id = $1
@@ -1146,7 +1368,60 @@ func (s *Store) CreateMarketRuleEvent(
 	if existing == nil {
 		return MarketRuleEvent{}, false, ErrInvalidMarketRuleEvent
 	}
+	if params.NotificationStatus != "skipped" && existing.MarketEventID == params.MarketEventID && existing.NotificationStatus == "skipped" {
+		revived, err := reviveUnsentReorgedMarketRuleEvent(ctx, db, *existing, params, cutoff)
+		if err != nil {
+			return MarketRuleEvent{}, false, err
+		}
+		if revived != nil {
+			return *revived, false, nil
+		}
+	}
 	return *existing, false, nil
+}
+
+func reviveUnsentReorgedMarketRuleEvent(ctx context.Context, db DBTX, existing MarketRuleEvent, params CreateMarketRuleEventParams, cutoff *time.Time) (*MarketRuleEvent, error) {
+	// Only a newly verified trade-ready revision may recover a never-attempted,
+	// never-prepared source cancelled by reorg. Other skipped decisions and all
+	// possibly delivered/frozen records remain immutable.
+	return collectOptional[MarketRuleEvent](ctx, db, `UPDATE market_rule_events mre SET
+	 notification_status=$2,delivery_outcome='not_attempted',notification_error='',notification_source_reconciled=FALSE,
+	 previous_value=$4,current_value=$5,note=$6,details=$3::jsonb,
+	 notification_source_audit=(SELECT COALESCE(jsonb_agg(value ORDER BY ord),'[]'::jsonb)
+	  FROM jsonb_array_elements(mre.notification_source_audit||jsonb_build_array(jsonb_build_object(
+	   'at',NOW(),'previous_reason',mre.notification_error,'reason','canonical complete trade revision reconfirmed before delivery',
+	   'previous_ready_id',mre.details#>'{trade_projection,ready_id}','ready_id',$3::jsonb#>'{trade_projection,ready_id}'))) WITH ORDINALITY item(value,ord)
+	  WHERE ord>GREATEST(0,jsonb_array_length(mre.notification_source_audit)+1-16))
+	 FROM market_events me,market_rules mr,market_projects mp
+	 WHERE mre.id=$1 AND mre.market_event_id=me.id AND mr.id=mre.market_rule_id AND mp.id=mr.market_project_id
+	  AND mre.notification_status='skipped' AND mre.delivery_outcome IN('','cancelled')
+	  AND RIGHT(mre.notification_error,LENGTH('source event was removed by a chain reorganization'))='source event was removed by a chain reorganization'
+	  AND mre.notification_payload='{}'::jsonb AND mre.notification_snapshot_id IS NULL
+	  AND mre.details ? 'trade_projection'
+	  AND (`+marketDeliveryRouteValidSQL("realtime", "mre")+`)
+	  AND mre.notification_send_started_at IS NULL AND mre.notification_message_id IS NULL AND mre.notification_attempts=0
+	  AND NOT EXISTS(SELECT 1 FROM market_stage_window_events l JOIN market_stage_windows w ON w.id=l.market_stage_window_id
+	    WHERE l.market_rule_event_id=mre.id AND(w.closed_at IS NOT NULL OR w.ends_at<=NOW() OR w.notification_payload<>'{}'::jsonb
+	      OR w.notification_send_started_at IS NOT NULL OR w.notification_status IN('sent','sending','skipped') OR w.delivery_outcome='unknown'
+	      OR NOT COALESCE((`+marketDeliveryRouteValidSQL("stage", "w")+`),FALSE)))
+	  AND NOT EXISTS(SELECT 1 FROM market_combination_trigger_events l JOIN market_combination_windows w ON w.id=l.market_combination_window_id
+	    WHERE l.source_type='market' AND l.market_rule_event_id=mre.id AND(w.closed_at IS NOT NULL OR w.ends_at<=NOW() OR w.notification_payload<>'{}'::jsonb
+	      OR w.notification_send_started_at IS NOT NULL OR w.notification_status IN('sent','sending','skipped') OR w.delivery_outcome='unknown'
+	      OR NOT COALESCE((`+marketDeliveryRouteValidSQL("combination", "w")+`),FALSE)))
+	  AND (mre.notification_attempted_at IS NULL OR mre.notification_lease_token>0)
+	  AND mr.enabled=1 AND mr.run_status='active' AND mp.status='active'
+	  AND ($7::timestamptz IS NULL OR (me.occurred_at>=$7 AND mre.created_at>=$7))
+	  AND ($3::jsonb ? 'trade_projection') AND (`+marketDeliveryEventValidSQL("($3::jsonb)", "me")+`)
+	 RETURNING `+qualifiedMarketRuleEventColumns("mre"),
+		existing.ID, params.NotificationStatus, normalizedJSON(params.Details), params.PreviousValue, params.CurrentValue, truncate(params.Note, 2000), cutoff)
+}
+
+func qualifiedMarketRuleEventColumns(alias string) string {
+	parts := strings.Split(marketRuleEventColumns, ",")
+	for i, part := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(part)
+	}
+	return strings.Join(parts, ",")
 }
 
 func normalizeInitialMarketNotificationStatus(value string) string {
@@ -1178,12 +1453,14 @@ func (s *Store) UpdateMarketRuleEventNotification(
 	value, err := collectOne[MarketRuleEvent](ctx, s.db, `
 		UPDATE market_rule_events
 		SET notification_status = $1,
+		    delivery_outcome = CASE WHEN $1='sent' THEN 'sent' ELSE delivery_outcome END,
 		    notification_message_id = COALESCE($2, notification_message_id),
 		    notification_error = $3,
 		    notification_attempts = notification_attempts + 1,
 		    notification_attempted_at = NOW(),
 		    notification_sent_at = CASE WHEN $1 = 'sent' THEN NOW() ELSE notification_sent_at END
-		WHERE id = $4
+		WHERE id = $4 AND notification_lease_token=0 AND delivery_outcome<>'unknown'
+		  AND notification_status<>'sent'
 		RETURNING `+marketRuleEventColumns,
 		status,
 		messageID,

@@ -8,9 +8,11 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdelivery"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationfmt"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -95,7 +97,10 @@ type Dependencies struct {
 }
 
 type Executor struct {
-	deps Dependencies
+	deps                Dependencies
+	cycleMu             sync.Mutex
+	afterSubscriptionID int64
+	afterTargetID       int64
 }
 
 func New(dependencies Dependencies) *Executor {
@@ -112,34 +117,146 @@ type ErrorResult struct {
 }
 
 type CycleResult struct {
-	Sent    int64         `json:"sent"`
-	Skipped int64         `json:"skipped"`
-	Locked  int64         `json:"locked"`
-	Errors  []ErrorResult `json:"errors"`
+	Sent             int64         `json:"sent"`
+	Skipped          int64         `json:"skipped"`
+	Locked           int64         `json:"locked"`
+	Errors           []ErrorResult `json:"errors"`
+	NeedsNormalCycle bool          `json:"needs_normal_cycle,omitempty"`
+	NextDeliveryAt   *time.Time    `json:"next_delivery_at,omitempty"`
+}
+
+type pendingSummaryRepository interface {
+	dailySummaryDispatchRepository
+	ListDueDailySummaryDispatches(context.Context, time.Time, int) ([]store.DailySummaryDispatchRef, error)
+	GetDailySummaryRetryTarget(context.Context, int64, int64) (*store.DailySummaryTarget, error)
+	NextDailySummaryDispatchAt(context.Context) (*time.Time, error)
+}
+
+// SendPending only retries existing frozen dispatches. The ordinary SendDue
+// cycle retains ownership of report generation and cross-period merging.
+func (e *Executor) SendPending(ctx context.Context, limit int) (CycleResult, error) {
+	result := CycleResult{Errors: []ErrorResult{}}
+	if !e.cycleMu.TryLock() {
+		result.Locked = 1
+		return result, nil
+	}
+	defer e.cycleMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if e.deps.Notifications == nil {
+		return result, errors.New("daily summary sender is unavailable")
+	}
+	repository, ok := e.deps.Repository.(pendingSummaryRepository)
+	if !ok {
+		return result, nil
+	}
+	now := e.deps.Now().UTC()
+	if notificationdelivery.NextAdmissionAt(e.deps.Notifications).After(now) {
+		return result, nil
+	}
+	refs, err := repository.ListDueDailySummaryDispatches(ctx, now, clamp(limit, 1, 100))
+	if err != nil {
+		return result, err
+	}
+	for _, ref := range refs {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if notificationdelivery.NextAdmissionAt(e.deps.Notifications).After(e.deps.Now()) {
+			break
+		}
+		if e.deps.TryLock == nil {
+			return result, errors.New("summary lock is not configured")
+		}
+		lock, acquired, lockErr := e.deps.TryLock(ctx, ref.SubscriptionID)
+		if lockErr != nil {
+			result.Errors = append(result.Errors, ErrorResult{SubscriptionID: ref.SubscriptionID, Error: lockErr.Error()})
+			continue
+		}
+		if !acquired {
+			result.Locked++
+			continue
+		}
+		var retryAt time.Time
+		sent, merge, itemErr := e.sendPendingLocked(ctx, repository, ref, &retryAt)
+		itemErr = errors.Join(itemErr, lock.Unlock(context.WithoutCancel(ctx)))
+		result.NeedsNormalCycle = result.NeedsNormalCycle || merge
+		if sent {
+			result.Sent++
+		} else {
+			result.Skipped++
+		}
+		if itemErr != nil {
+			result.Errors = append(result.Errors, ErrorResult{SubscriptionID: ref.SubscriptionID, Error: itemErr.Error()})
+		}
+		if !retryAt.IsZero() && itemErr == nil {
+			result.NextDeliveryAt = &retryAt
+			break
+		}
+	}
+	return result, nil
+}
+
+func (e *Executor) sendPendingLocked(ctx context.Context, repository pendingSummaryRepository, ref store.DailySummaryDispatchRef, next *time.Time) (bool, bool, error) {
+	subscription, err := e.deps.Repository.GetScheduledSubscription(ctx, ref.SubscriptionID)
+	if err != nil || subscription == nil {
+		return false, false, err
+	}
+	target, err := repository.GetDailySummaryRetryTarget(ctx, ref.SubscriptionID, ref.TargetID)
+	if err != nil || target == nil {
+		return false, false, err
+	}
+	effective := effectiveSummaryTarget(*subscription, *target)
+	if effective.Enabled != 1 {
+		return false, false, nil
+	}
+	open, err := repository.GetOpenDailySummaryDispatch(ctx, subscription.ID, effective.ChatType, effective.ChatID)
+	if err != nil || open == nil || open.ID != ref.ID || open.Status != store.DailySummaryDispatchPending && open.Status != store.DailySummaryDispatchFailed {
+		return false, false, err
+	}
+	now := e.deps.Now().UTC()
+	if due, _, periodEnd := summaryTargetDue(effective, now); due && periodEnd.After(open.PeriodEndAt) {
+		return false, true, nil
+	}
+	if blocked, err := repository.CheckDailySummaryLegacyReviews(ctx, subscription.ID, effective.ID, now); err != nil || blocked {
+		return false, false, err
+	}
+	sent, err := e.sendFrozenSummaryNext(ctx, repository, open, now, next)
+	return sent, false, err
 }
 
 func (e *Executor) SendDue(ctx context.Context, limit int) (CycleResult, error) {
-	result := CycleResult{Errors: make([]ErrorResult, 0)}
-	afterID := int64(0)
+	if !e.cycleMu.TryLock() {
+		return CycleResult{Locked: 1, Errors: []ErrorResult{}}, nil
+	}
+	defer e.cycleMu.Unlock()
+	result := CycleResult{Errors: []ErrorResult{}}
+	subscriptionsLeft, targetsLeft := 1000, 1000
 	pageSize := clamp(limit, 1, 1000)
-
-	for {
-		subscriptions, err := e.deps.Repository.ListDueScheduledSubscriptions(
-			ctx,
-			afterID,
-			pageSize,
-		)
+	afterID := e.afterSubscriptionID
+	for subscriptionsLeft > 0 && targetsLeft > 0 {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		subscriptions, err := e.deps.Repository.ListDueScheduledSubscriptions(ctx, afterID, min(pageSize, subscriptionsLeft))
 		if err != nil {
 			return result, err
 		}
 		if len(subscriptions) == 0 {
+			e.afterSubscriptionID, e.afterTargetID = 0, 0
 			return result, nil
 		}
-		afterID = subscriptions[len(subscriptions)-1].ID
-
 		for _, candidate := range subscriptions {
-			itemStatus, itemErr := e.processCandidate(ctx, candidate.ID)
-			switch itemStatus {
+			if subscriptionsLeft == 0 || targetsLeft == 0 {
+				return result, nil
+			}
+			subscriptionsLeft--
+			resumeTarget := int64(0)
+			if candidate.ID == e.afterSubscriptionID+1 {
+				resumeTarget = e.afterTargetID
+			}
+			status, lastTarget, complete, itemErr := e.processCandidate(ctx, candidate.ID, resumeTarget, &targetsLeft)
+			switch status {
 			case "sent":
 				result.Sent++
 			case "skipped":
@@ -148,129 +265,94 @@ func (e *Executor) SendDue(ctx context.Context, limit int) (CycleResult, error) 
 				result.Locked++
 			}
 			if itemErr != nil {
-				result.Errors = append(result.Errors, ErrorResult{
-					SubscriptionID: candidate.ID,
-					Error:          itemErr.Error(),
-				})
+				result.Errors = append(result.Errors, ErrorResult{SubscriptionID: candidate.ID, Error: itemErr.Error()})
 			}
+			if !complete {
+				e.afterSubscriptionID, e.afterTargetID = candidate.ID-1, lastTarget
+				return result, nil
+			}
+			afterID = candidate.ID
+			e.afterSubscriptionID, e.afterTargetID = afterID, 0
 		}
 	}
+	return result, nil
 }
 
-func (e *Executor) processCandidate(ctx context.Context, subscriptionID int64) (string, error) {
+func (e *Executor) processCandidate(ctx context.Context, subscriptionID, targetAfter int64, remaining *int) (string, int64, bool, error) {
 	if e.deps.TryLock == nil {
-		return "error", errors.New("summary lock is not configured")
+		return "error", targetAfter, true, errors.New("summary lock is not configured")
 	}
 	lock, acquired, err := e.deps.TryLock(ctx, subscriptionID)
 	if err != nil {
-		return "error", err
+		return "error", targetAfter, true, err
 	}
 	if !acquired {
-		return "locked", nil
+		return "locked", targetAfter, true, nil
 	}
-
-	status, processErr := e.processLocked(ctx, subscriptionID)
+	status, lastTarget, complete, processErr := e.processLocked(ctx, subscriptionID, targetAfter, remaining)
 	unlockErr := lock.Unlock(ctx)
-	if processErr != nil && unlockErr != nil {
-		return status, errors.Join(processErr, unlockErr)
-	}
-	if processErr != nil {
-		return status, processErr
-	}
-	if unlockErr != nil {
-		return status, unlockErr
-	}
-	return status, nil
+	return status, lastTarget, complete, errors.Join(processErr, unlockErr)
 }
 
-func (e *Executor) processLocked(ctx context.Context, subscriptionID int64) (string, error) {
+func (e *Executor) processLocked(ctx context.Context, subscriptionID, targetAfter int64, remaining *int) (string, int64, bool, error) {
 	subscription, err := e.deps.Repository.GetScheduledSubscription(ctx, subscriptionID)
 	if err != nil {
-		return "error", err
+		return "error", targetAfter, true, err
 	}
 	if subscription == nil {
-		return "skipped", nil
+		return "skipped", targetAfter, true, nil
 	}
-
-	targets, err := e.deps.Repository.ListDailySummaryTargets(ctx, subscription.ID)
+	repository, ok := e.deps.Repository.(dailySummaryDispatchRepository)
+	if !ok {
+		return "error", targetAfter, true, errors.New("durable daily summary repository is unavailable")
+	}
+	if e.deps.Notifications == nil {
+		return "error", targetAfter, true, errors.New("daily summary sender is unavailable")
+	}
+	limit := min(*remaining, 1000)
+	targets, err := repository.ListDailySummaryDispatchTargets(ctx, subscription.ID, targetAfter, limit)
 	if err != nil {
-		return "error", err
+		return "error", targetAfter, true, err
 	}
 	if len(targets) == 0 {
-		return "error", errors.New("每日摘要没有可用的推送对象。")
+		if targetAfter == 0 {
+			return "error", targetAfter, true, errors.New("每日摘要没有可用的推送对象。")
+		}
+		return "skipped", targetAfter, true, nil
 	}
-	sentCount := 0
-	lastSentDate := ""
-	var lastPeriodEnd time.Time
-	for _, rawTarget := range targets {
-		target := effectiveSummaryTarget(*subscription, rawTarget)
+	sent := false
+	var failures []error
+	lastTarget := targetAfter
+	for _, raw := range targets {
+		if err := ctx.Err(); err != nil {
+			status := "error"
+			if sent {
+				status = "sent"
+			}
+			return status, lastTarget, false, errors.Join(append(failures, err)...)
+		}
+		if *remaining == 0 {
+			break
+		}
+		*remaining--
+		lastTarget = raw.ID
+		target := effectiveSummaryTarget(*subscription, raw)
 		if target.Enabled != 1 {
 			continue
 		}
-		due, localDate, periodEnd := summaryTargetDue(target, e.deps.Now())
-		if !due {
-			continue
-		}
-		periodStart, periodEnd := summaryTargetPeriod(target, periodEnd)
-		summarySubscription := summarySubscriptionForTarget(*subscription, target)
-		content, err := e.loadDailySummaryContent(
-			ctx,
-			summarySubscription,
-			periodStart,
-			periodEnd,
-		)
+		delivered, err := e.processSummaryTarget(ctx, repository, *subscription, target)
+		sent = sent || delivered
 		if err != nil {
-			return "error", err
+			failures = append(failures, err)
 		}
-		text := buildSummaryText(
-			summarySubscription,
-			periodStart,
-			periodEnd,
-			content.Statistics,
-			content.AddressEvents,
-			content.MarketEvents,
-			content.MarketSummaries,
-		)
-		snapshot, err := e.createDailySummarySnapshot(
-			ctx,
-			*subscription,
-			target,
-			periodStart,
-			periodEnd,
-			text,
-			content,
-		)
-		if err != nil {
-			return "error", err
-		}
-		if _, err := e.sendSummaryNotification(target, text, snapshot.PublicID); err != nil {
-			return "error", err
-		}
-		target.LastSentDate = localDate
-		if err := e.deps.Repository.MarkDailySummaryTargetSent(
-			ctx,
-			subscription.ID,
-			periodEnd,
-			target,
-		); err != nil {
-			return "error", err
-		}
-		sentCount++
-		lastSentDate = localDate
-		lastPeriodEnd = periodEnd
 	}
-	if sentCount == 0 {
-		return "skipped", nil
+	status := "skipped"
+	if sent {
+		status = "sent"
+	} else if len(failures) > 0 {
+		status = "error"
 	}
-	if err := e.deps.Repository.MarkScheduledPushSent(
-		ctx,
-		subscription.ID,
-		lastSentDate,
-		lastPeriodEnd,
-	); err != nil {
-		return "error", err
-	}
-	return "sent", nil
+	return status, lastTarget, len(targets) < limit, errors.Join(failures...)
 }
 
 func (e *Executor) sendSummaryNotification(
@@ -363,7 +445,7 @@ func summaryTargetDue(
 		0,
 		location,
 	)
-	if target.LastSentDate == localDate {
+	if target.LastSentDate == localDate || target.LastPeriodEndAt != nil && !target.LastPeriodEndAt.Before(periodEnd) {
 		return false, localDate, periodEnd.UTC()
 	}
 	return !localNow.Before(periodEnd), localDate, periodEnd.UTC()

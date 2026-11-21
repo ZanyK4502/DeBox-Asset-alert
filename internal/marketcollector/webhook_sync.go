@@ -31,6 +31,9 @@ func (service *Service) SyncWebhookSubscriptions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if len(projects) == 5000 && service.settings.ChainKey != "bsc" {
+			return fmt.Errorf("active webhook target query reached its limit; existing filter retained")
+		}
 		tokens := make([]string, 0, len(projects))
 		seen := make(map[string]struct{}, len(projects))
 		for _, project := range projects {
@@ -49,9 +52,9 @@ func (service *Service) SyncWebhookSubscriptions(ctx context.Context) error {
 			seen[token] = struct{}{}
 			tokens = append(tokens, token)
 		}
-		// Nodit does not accept an empty TOKEN_TRANSFER condition. Retain the
-		// existing bootstrap condition until the first active project exists.
-		if len(tokens) == 0 {
+		// With no token filters an active transfer subscription could keep charging
+		// for archived projects. Keep the existing BSC bootstrap policy.
+		if len(tokens) == 0 && service.settings.ChainKey == "bsc" {
 			return nil
 		}
 		sort.Strings(tokens)
@@ -64,6 +67,9 @@ func (service *Service) SyncWebhookSubscriptions(ctx context.Context) error {
 		)
 		if err != nil {
 			return err
+		}
+		if service.settings.ChainKey != "bsc" {
+			return service.syncChainTransfer(ctx, subscription, tokens)
 		}
 		if subscription == nil || subscription.ExternalID == nil ||
 			strings.TrimSpace(*subscription.ExternalID) == "" {

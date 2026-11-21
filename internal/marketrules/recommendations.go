@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -22,7 +23,45 @@ func RecommendThresholds(
 	snapshot store.MarketSnapshot,
 	recentEvents []store.MarketEvent,
 ) []Recommendation {
-	largeTrade := recommendedLargeTrade(snapshot, recentEvents)
+	return RecommendThresholdsAt(snapshot, recentEvents, time.Now().UTC())
+}
+
+// RecommendThresholdsAt leaves the preset formulas unchanged, but accepts only
+// a current usable observation and samples with reliable original valuations.
+func RecommendThresholdsAt(snapshot store.MarketSnapshot, recentEvents []store.MarketEvent, now time.Time) []Recommendation {
+	if !snapshotQuoteAvailable(snapshot, now) || !positiveDecimal(snapshot.PriceUSD) || !nonnegativeDecimal(snapshot.LiquidityUSD) {
+		return nil
+	}
+	usableEvents := make([]store.MarketEvent, 0, len(recentEvents))
+	for _, event := range recentEvents {
+		if event.Confirmed == 1 && event.Reorged == 0 && eventValuationAvailable(event) {
+			usableEvents = append(usableEvents, event)
+		}
+	}
+	amounts := make([]string, 0, len(usableEvents))
+	for _, event := range usableEvents {
+		if event.USDValue != nil {
+			amounts = append(amounts, *event.USDValue)
+		}
+	}
+	return recommendThresholdsFromAmounts(snapshot, amounts)
+}
+
+// RecommendThresholdsWithSamplesAt accepts only the dedicated, validated store
+// sample DTO. It does not manufacture quote timestamps or relax Event proofs.
+func RecommendThresholdsWithSamplesAt(snapshot store.MarketSnapshot, validatedSamples []store.MarketRecommendationSample, now time.Time) []Recommendation {
+	if !snapshotQuoteAvailable(snapshot, now) || !positiveDecimal(snapshot.PriceUSD) || !nonnegativeDecimal(snapshot.LiquidityUSD) {
+		return nil
+	}
+	amounts := make([]string, 0, len(validatedSamples))
+	for _, sample := range validatedSamples {
+		amounts = append(amounts, sample.USDValue)
+	}
+	return recommendThresholdsFromAmounts(snapshot, amounts)
+}
+
+func recommendThresholdsFromAmounts(snapshot store.MarketSnapshot, amounts []string) []Recommendation {
+	largeTrade := recommendedLargeTrade(snapshot, amounts)
 	volumeAbove := recommendedVolumeAbove(snapshot)
 	liquidityChange := recommendedLiquidityChange(snapshot)
 	price, hasPrice := pointerRat(snapshot.PriceUSD)
@@ -139,7 +178,7 @@ func recommendedLiquidityChange(snapshot store.MarketSnapshot) *big.Rat {
 
 func recommendedLargeTrade(
 	snapshot store.MarketSnapshot,
-	recentEvents []store.MarketEvent,
+	amounts []string,
 ) *big.Rat {
 	candidates := []*big.Rat{big.NewRat(100, 1)}
 	if liquidity, ok := pointerRat(snapshot.LiquidityUSD); ok {
@@ -148,9 +187,9 @@ func recommendedLargeTrade(
 	if volume, ok := pointerRat(snapshot.Volume24hUSD); ok {
 		candidates = append(candidates, new(big.Rat).Mul(volume, big.NewRat(1, 100)))
 	}
-	trades := make([]*big.Rat, 0, len(recentEvents))
-	for _, event := range recentEvents {
-		if value, ok := pointerRat(event.USDValue); ok && value.Sign() > 0 {
+	trades := make([]*big.Rat, 0, len(amounts))
+	for _, amount := range amounts {
+		if value, ok := rat(amount); ok && value.Sign() > 0 {
 			trades = append(trades, value)
 		}
 	}

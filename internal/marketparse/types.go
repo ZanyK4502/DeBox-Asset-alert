@@ -129,6 +129,27 @@ type Event struct {
 	Source           string
 	Confidence       string
 	Metadata         map[string]string
+	TradeLegs        []TradeLeg
+}
+
+// TradeLeg preserves one pool's exact contribution to a logical transaction
+// event. Amounts use the parent event's token and direction; quote quantities
+// are deliberately kept separate when different pools use different assets.
+type TradeLeg struct {
+	PoolID           int64
+	PoolKey          string
+	LogIndex         uint64
+	Protocol         string
+	Version          string
+	Adapter          string
+	QuoteAddress     string
+	TokenAmountRaw   string
+	QuoteAmountRaw   string
+	Amount0DeltaRaw  string
+	Amount1DeltaRaw  string
+	WalletAddress    string
+	RecipientAddress string
+	Metadata         map[string]string
 }
 
 type swapLeg struct {

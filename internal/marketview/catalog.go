@@ -2,34 +2,40 @@ package marketview
 
 import (
 	"context"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 )
 
 type RuleDefinition struct {
-	Code             string   `json:"code"`
-	NameZH           string   `json:"name_zh"`
-	NameEN           string   `json:"name_en"`
-	DescriptionZH    string   `json:"description_zh"`
-	DescriptionEN    string   `json:"description_en"`
-	Units            []string `json:"units"`
-	DefaultUnit      string   `json:"default_unit"`
-	DefaultThreshold string   `json:"default_threshold"`
-	DefaultWindow    int32    `json:"default_window_minutes"`
-	RequiresPool     bool     `json:"requires_pool"`
-	Professional     bool     `json:"professional"`
-	Allowed          bool     `json:"allowed"`
+	Code                  string                  `json:"code"`
+	NameZH                string                  `json:"name_zh"`
+	NameEN                string                  `json:"name_en"`
+	DescriptionZH         string                  `json:"description_zh"`
+	DescriptionEN         string                  `json:"description_en"`
+	Units                 []string                `json:"units"`
+	DefaultUnit           string                  `json:"default_unit"`
+	DefaultThreshold      string                  `json:"default_threshold"`
+	DefaultWindow         int32                   `json:"default_window_minutes"`
+	Window                marketwindow.Capability `json:"window"`
+	MaxHolderRank         int32                   `json:"max_holder_rank,omitempty"`
+	MaxBaselineLagSeconds int64                   `json:"max_baseline_lag_seconds,omitempty"`
+	RequiresPool          bool                    `json:"requires_pool"`
+	Professional          bool                    `json:"professional"`
+	Allowed               bool                    `json:"allowed"`
 }
 
 type CatalogResult struct {
-	Plan               plans.Plan       `json:"plan"`
-	Rules              []RuleDefinition `json:"rules"`
-	MonitoringGoals    []string         `json:"monitoring_goals"`
-	SupportedChain     string           `json:"supported_chain"`
-	SupportedChains    []chain.Profile  `json:"supported_chains"`
-	SupportedProtocols []string         `json:"supported_protocols"`
+	Plan                      plans.Plan       `json:"plan"`
+	Rules                     []RuleDefinition `json:"rules"`
+	MonitoringGoals           []string         `json:"monitoring_goals"`
+	SupportedChain            string           `json:"supported_chain"`
+	SupportedChains           []chain.Profile  `json:"supported_chains"`
+	MonitoringSupportedChains []chain.Profile  `json:"monitoring_supported_chains"`
+	SupportedProtocols        []string         `json:"supported_protocols"`
 }
 
 func (s *Service) Catalog(
@@ -48,7 +54,23 @@ func (s *Service) Catalog(
 	for _, definition := range marketRuleDefinitions {
 		_, enabled := allowed[definition.Code]
 		definition.Allowed = enabled
+		definition.Window = marketwindow.ForRule(definition.Code)
+		definition.DefaultWindow = definition.Window.DefaultMinutes
 		definitions = append(definitions, definition)
+	}
+	monitoringProfiles := make([]chain.Profile, 0)
+	if plan.MarketProjectLimit > 0 {
+		monitoringKeys, err := plans.NormalizeMarketMonitoringChainKeys(plan.AllowedMarketChainKeys)
+		if err != nil {
+			return CatalogResult{}, err
+		}
+		for _, key := range monitoringKeys {
+			profile, e := chain.ChainProfile(key, "")
+			if e != nil {
+				return CatalogResult{}, e
+			}
+			monitoringProfiles = append(monitoringProfiles, profile)
+		}
 	}
 	return CatalogResult{
 		Plan:  plan,
@@ -56,9 +78,10 @@ func (s *Service) Catalog(
 		MonitoringGoals: []string{
 			"price", "liquidity", "volume", "large_trade", "holder", "four_meme",
 		},
-		SupportedChain:     "bsc",
-		SupportedChains:    chain.SupportedChains(),
-		SupportedProtocols: marketprotocol.ProtocolNames(),
+		SupportedChain:            "bsc",
+		SupportedChains:           chain.SupportedChains(),
+		MonitoringSupportedChains: monitoringProfiles,
+		SupportedProtocols:        marketprotocol.ProtocolNames(),
 	}, nil
 }
 
@@ -95,18 +118,29 @@ func rule(
 	window int32,
 	requiresPool bool,
 ) RuleDefinition {
+	var maxHolderRank int32
+	if code == plans.MarketHolderRankEntered || code == plans.MarketHolderRankExited {
+		maxHolderRank = marketwindow.MaxHolderRank
+	}
+	var baselineLagSeconds int64
+	if marketwindow.ForRule(code).Kind == marketwindow.KindCustomSnapshot {
+		baselineLagSeconds = int64(marketwindow.MaxBaselineLag / time.Second)
+	}
 	return RuleDefinition{
-		Code:             code,
-		NameZH:           nameZH,
-		NameEN:           nameEN,
-		DescriptionZH:    descriptionZH,
-		DescriptionEN:    descriptionEN,
-		Units:            units,
-		DefaultUnit:      defaultUnit,
-		DefaultThreshold: threshold,
-		DefaultWindow:    window,
-		RequiresPool:     requiresPool,
-		Professional:     isProfessionalRule(code),
+		Code:                  code,
+		NameZH:                nameZH,
+		NameEN:                nameEN,
+		DescriptionZH:         descriptionZH,
+		DescriptionEN:         descriptionEN,
+		Units:                 units,
+		DefaultUnit:           defaultUnit,
+		DefaultThreshold:      threshold,
+		DefaultWindow:         window,
+		Window:                marketwindow.ForRule(code),
+		MaxHolderRank:         maxHolderRank,
+		MaxBaselineLagSeconds: baselineLagSeconds,
+		RequiresPool:          requiresPool,
+		Professional:          isProfessionalRule(code),
 	}
 }
 

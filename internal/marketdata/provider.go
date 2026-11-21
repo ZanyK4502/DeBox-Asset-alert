@@ -3,6 +3,8 @@ package marketdata
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 )
 
 const (
@@ -42,6 +44,7 @@ type Pair struct {
 	FDV           Decimal                      `json:"fdv"`
 	MarketCap     Decimal                      `json:"marketCap"`
 	PairCreatedAt *int64                       `json:"pairCreatedAt,omitempty"`
+	QuoteQuality  marketquality.Quote          `json:"quote_quality"`
 	Info          json.RawMessage              `json:"info,omitempty"`
 	Boosts        json.RawMessage              `json:"boosts,omitempty"`
 }

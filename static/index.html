@@ -96,6 +96,7 @@
           </div>
           <span id="marketCapability" class="badge muted" data-i18n="notConnected">未连接</span>
         </div>
+        <p id="marketMonitoringScope" class="field-note"></p>
 
         <div id="marketWizard" class="market-wizard">
           <div class="market-guide" role="list" aria-label="创建代币监控步骤" data-i18n-aria-label="marketWizardSteps">
@@ -250,7 +251,8 @@
                 <label id="marketWizardWindowWrap" data-i18n-label="marketWindow">
                   统计窗口（分钟）
                   <input id="marketWizardWindowInput" type="number" min="1" step="1" value="60" />
-                  <small class="field-note" data-i18n="marketWindowHelp">系统每次扫描会根据扫描前这段窗口时间内的数据，判断是否需要提醒。</small>
+                  <select id="marketWizardWindowSelect" hidden></select>
+                  <small id="marketWizardWindowHelp" class="field-note"></small>
                 </label>
                 <label id="marketWizardCooldownWrap" data-i18n-label="cooldown">
                   冷却时间（秒）
@@ -431,7 +433,8 @@
                 <label id="marketWindowWrap" data-i18n-label="marketWindow">
                   统计窗口（分钟）
                   <input id="marketWindowInput" type="number" min="1" step="1" value="60" />
-                  <small class="field-note" data-i18n="marketWindowHelp">系统每次扫描会根据扫描前这段窗口时间内的数据，判断是否需要提醒。</small>
+                  <select id="marketWindowSelect" hidden></select>
+                  <small id="marketWindowHelp" class="field-note"></small>
                 </label>
                 <label id="marketCooldownWrap" data-i18n-label="cooldown">
                   冷却时间（秒）
@@ -1023,9 +1026,9 @@
       </div>
     </div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/i18n.js?v=20260802-monitoring-dashboard"></script>
+    <script src="/static/i18n.js?v=20261121-admission-limits"></script>
     <script src="/static/time.js?v=20260801-force-refresh-v1"></script>
-    <script src="/static/notification-detail.js?v=20260801-force-refresh-v2"></script>
-    <script src="/static/app.js?v=20260803-ios-summary-v2"></script>
+    <script src="/static/notification-detail.js?v=20261114-quote-quality"></script>
+    <script src="/static/app.js?v=20261121-admission-limits"></script>
   </body>
 </html>

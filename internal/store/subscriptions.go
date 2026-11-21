@@ -74,11 +74,23 @@ func (s *Store) ActivateSubscription(
 	days int,
 ) (Subscription, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (Subscription, error) {
-		return activateSubscription(ctx, tx, deboxUserID, planCode, days, true)
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return Subscription{}, err
+		}
+		defer cancel()
+		subscription, err := s.activateSubscription(ctx, tx, deboxUserID, planCode, days, true)
+		if err != nil {
+			return Subscription{}, err
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return Subscription{}, err
+		}
+		return subscription, nil
 	})
 }
 
-func activateSubscription(
+func (s *Store) activateSubscription(
 	ctx context.Context,
 	db DBTX,
 	deboxUserID string,
@@ -88,6 +100,10 @@ func activateSubscription(
 ) (Subscription, error) {
 	if _, err := db.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", deboxUserID); err != nil {
 		return Subscription{}, fmt.Errorf("lock subscription: %w", err)
+	}
+	holderTargets, err := s.beginSubscriptionHolderTargetCheck(ctx, db, deboxUserID, planCode)
+	if err != nil {
+		return Subscription{}, err
 	}
 	if _, err := expireSubscriptions(ctx, db, deboxUserID); err != nil {
 		return Subscription{}, err
@@ -153,7 +169,7 @@ func activateSubscription(
 		if err != nil {
 			return Subscription{}, fmt.Errorf("renew subscription: %w", err)
 		}
-		return subscription, nil
+		return subscription, s.deferSubscriptionHolderTargets(ctx, db, deboxUserID, holderTargets)
 	}
 	if active != nil && active.PlanCode == "free" && planCode != "free" {
 		if _, err := db.Exec(ctx,
@@ -183,7 +199,7 @@ func activateSubscription(
 	if err != nil {
 		return Subscription{}, fmt.Errorf("insert subscription: %w", err)
 	}
-	return subscription, nil
+	return subscription, s.deferSubscriptionHolderTargets(ctx, db, deboxUserID, holderTargets)
 }
 
 func expireSubscriptions(ctx context.Context, db DBTX, deboxUserID string) (int64, error) {

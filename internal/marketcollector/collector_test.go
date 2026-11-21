@@ -49,6 +49,7 @@ func TestPersistFourMemeQuoteKeepsPoolKeyWithoutFakeAddress(t *testing.T) {
 			QuoteToken:  marketdata.Token{Address: quoteAddress, Symbol: "WBNB"},
 		},
 		map[string][2]string{},
+		map[string]int{tokenAddress: 18},
 	)
 	if err != nil {
 		t.Fatalf("persist Four.meme quote: %v", err)
@@ -97,6 +98,9 @@ func (repository *fakeRepository) EnsureMarketProjectPool(context.Context, store
 }
 func (repository *fakeRepository) CreateMarketSnapshot(context.Context, store.CreateMarketSnapshotParams) (store.MarketSnapshot, error) {
 	return store.MarketSnapshot{}, nil
+}
+func (*fakeRepository) RecordMarketQuoteFailure(context.Context, int64, []store.MarketCollectionTarget, time.Time) (int64, error) {
+	return 0, nil
 }
 func (repository *fakeRepository) LatestMarketSnapshot(context.Context, int64, string, *int64) (*store.MarketSnapshot, error) {
 	return nil, nil
@@ -197,6 +201,9 @@ func (repository *fakeRepository) ReconcileMarketReorg(_ context.Context, _ int6
 func (repository *fakeRepository) MarkMarketBlockConfirmed(context.Context, int64, int64) (int64, error) {
 	return 0, nil
 }
+func (repository *fakeRepository) RecordMarketScanCoverage(context.Context, store.RecordMarketScanCoverageParams) error {
+	return nil
+}
 func (repository *fakeRepository) ListUnconfirmedMarketEventBlocks(context.Context, int64, int64, int64) ([]int64, error) {
 	return nil, nil
 }
@@ -259,6 +266,10 @@ func (client *fakeChain) PoolTokens(context.Context, string, string, string) (st
 func (client *fakeChain) PoolFactory(context.Context, string, string, string) (string, error) {
 	return marketparse.BSCPancakeV3Factory, nil
 }
+func (client *fakeChain) CreateWebhook(context.Context, string, string, chain.WebhookCreateRequest) (chain.WebhookSubscription, error) {
+	return chain.WebhookSubscription{}, fmt.Errorf("unexpected webhook creation")
+}
+
 func (client *fakeChain) ListWebhooks(context.Context, string, string, chain.WebhookListOptions) (chain.WebhookList, error) {
 	return chain.WebhookList{}, nil
 }

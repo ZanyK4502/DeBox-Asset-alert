@@ -21,6 +21,7 @@ func buildSummaryText(
 	events []store.SummaryEvent,
 	marketEvents []store.MarketSummaryEvent,
 	marketSummaries []store.MarketProjectChainSummary,
+	historicalCoverageIncomplete ...bool,
 ) string {
 	english := normalizeLanguage(subscription.DailySummaryLanguage) == "en"
 	group := strings.EqualFold(
@@ -39,7 +40,7 @@ func buildSummaryText(
 			dailySummaryConclusion(
 				statistics,
 				notificationFailures,
-				dataGap != "",
+				dataGap != "" || len(historicalCoverageIncomplete) > 0 && historicalCoverageIncomplete[0],
 				hasActivity,
 				english,
 			),
@@ -443,7 +444,7 @@ func dailySummaryLargestTrade(
 	for index := range events {
 		event := &events[index]
 		if event.EventType != "buy" && event.EventType != "sell" ||
-			event.USDValue == nil {
+			event.USDValue == nil || event.ValuationStatus == "unknown" {
 			continue
 		}
 		value, ok := new(big.Rat).SetString(strings.TrimSpace(*event.USDValue))
@@ -549,6 +550,21 @@ func dailySummaryFundsDirection(
 	english bool,
 ) string {
 	if statistics.MarketBuyCount > 0 || statistics.MarketSellCount > 0 {
+		if dailySummaryValuationIncomplete(statistics) {
+			parts := make([]string, 0, 2)
+			if statistics.MarketBuyValuedCount > 0 {
+				parts = append(parts, dailySummaryLabel("已估值买入 $", "valued buys $", english)+notificationfmt.Money(statistics.MarketBuyUSD))
+			}
+			if statistics.MarketSellValuedCount > 0 {
+				parts = append(parts, dailySummaryLabel("已估值卖出 $", "valued sells $", english)+notificationfmt.Money(statistics.MarketSellUSD))
+			}
+			text := dailySummaryLabel("成交美元估值不完整，无法判断净流向", "trade USD estimates are incomplete; net flow is unavailable", english)
+			if len(parts) > 0 {
+				text += dailySummaryLabel("；部分小计：", "; partial subtotals: ", english) + strings.Join(parts, dailySummarySeparator(english))
+			}
+			text += dailySummaryLabel("（", " (", english) + dailySummaryTradeCounts(statistics, english) + dailySummaryLabel("）", ")", english)
+			return dailySummaryKeyValue(dailySummaryLabel("资金方向", "Funds", english), text, english)
+		}
 		net, ok := new(big.Rat).SetString(strings.TrimSpace(
 			statistics.MarketNetBuyUSD,
 		))
@@ -714,12 +730,20 @@ func dailySummaryDataGap(
 	missingPrice := false
 	missingLiquidity := false
 	missingVolume := false
+	missingQuoteEvidence := false
+	missingTradeValuation := dailySummaryValuationIncomplete(statistics)
 	if len(summaries) == 0 {
 		missingPrice = true
 		missingLiquidity = true
 		missingVolume = true
 	} else {
 		for _, item := range summaries {
+			if item.QuoteUnavailableCount > 0 {
+				missingQuoteEvidence = true
+			}
+			if item.ValuationSchemaVersion > 0 && (item.BuyValuedCount < item.BuyCount || item.SellValuedCount < item.SellCount) {
+				missingTradeValuation = true
+			}
 			if item.SnapshotCount == 0 {
 				missingPrice = true
 				missingLiquidity = true
@@ -739,11 +763,19 @@ func dailySummaryDataGap(
 			}
 		}
 	}
-	if !missingPrice && !missingLiquidity && !missingVolume {
+	if !missingPrice && !missingLiquidity && !missingVolume && !missingQuoteEvidence && !missingTradeValuation {
 		return ""
 	}
 	missing := make([]string, 0, 3)
 	impact := make([]string, 0, 3)
+	if missingQuoteEvidence {
+		missing = append(missing, dailySummaryLabel("有效行情证据", "valid quote evidence", english))
+		impact = append(impact, dailySummaryLabel("行情统计完整性", "quote coverage", english))
+	}
+	if missingTradeValuation {
+		missing = append(missing, dailySummaryLabel("完整成交美元估值", "complete trade USD estimates", english))
+		impact = append(impact, dailySummaryLabel("成交金额与净流向", "trade amounts and net flow", english))
+	}
 	if missingPrice {
 		missing = append(missing, dailySummaryLabel("价格", "price", english))
 		impact = append(impact, dailySummaryLabel(
@@ -788,6 +820,11 @@ func dailySummaryDataGap(
 		),
 		false,
 	)
+}
+
+func dailySummaryValuationIncomplete(statistics store.SummaryStatistics) bool {
+	return statistics.ValuationSchemaVersion > 0 &&
+		(statistics.MarketBuyValuedCount < statistics.MarketBuyCount || statistics.MarketSellValuedCount < statistics.MarketSellCount)
 }
 
 func dailySummaryHasActivity(statistics store.SummaryStatistics) bool {

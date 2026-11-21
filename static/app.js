@@ -58,6 +58,8 @@ const state = {
   marketRecommendationUpdatedAt: "",
   marketRecommendationLoading: false,
   marketRecommendationError: "",
+  marketRecommendationQuoteQuality: {},
+  marketRecommendationQuoteMaxAgeSeconds: 0,
   marketEvents: [],
   marketEventsNextBeforeId: null,
   marketEventFilters: freshMarketEventFilters(),
@@ -79,6 +81,8 @@ function freshMarketWizard() {
     recommendationUpdatedAt: "",
     recommendationLoading: false,
     recommendationError: "",
+    recommendationQuoteQuality: {},
+    recommendationQuoteMaxAgeSeconds: 0,
     searchRequest: 0,
     busy: false,
   };
@@ -365,12 +369,46 @@ function t(key, values = {}) {
   return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, (_, name) => String(values[name] ?? ""));
 }
 
+function quotaNumber(value) {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !/^\d+$/.test(value.trim())) return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
 function localizedPlan(plan) {
   const localized = I18N.plans[state.uiLanguage]?.[plan?.code];
+  const description = localized?.[1] || plan?.description || "";
   return {
     name: localized?.[0] || plan?.name || "-",
-    description: localized?.[1] || plan?.description || "",
+    description: localized?.[1]
+      ? String(description).replace(/\{([a-z_]+)\}/g, (_, key) => String(quotaNumber(plan?.[key]) ?? "-"))
+      : description,
   };
+}
+
+function interactionQuotaText(plan = currentPlan(), entitlement = state.entitlement) {
+  const limit = quotaNumber(plan?.interaction_rule_limit);
+  if (limit === null) return "";
+  const used = quotaNumber(entitlement?.interaction_rule_count);
+  return t(used === null ? "interactionRuleLimit" : "interactionRuleMetric", { used, limit });
+}
+
+function ruleTypeHelp(type) {
+  const description = localizedRuleDescription(type);
+  const quota = type === "address_interaction" ? interactionQuotaText() : "";
+  return quota ? `${description} ${quota}` : description;
+}
+
+function combinationDraftQuotaText() {
+  const plan = currentPlan();
+  if (!plan) return "";
+  return t("combinationDraftQuota", {
+    members: state.combinationMembers.length,
+    interactions: state.combinationMembers.filter((member) => member.rule?.rule_type === "address_interaction").length,
+    totalLimit: quotaNumber(plan.rule_limit) ?? "-",
+    interactionLimit: quotaNumber(plan.interaction_rule_limit) ?? "-",
+  });
 }
 
 function localizedRuleLabel(code) {
@@ -384,6 +422,8 @@ function localizedRuleDescription(code) {
 function localizedApiError(message) {
   const value = String(message || "").trim();
   if (state.uiLanguage === "zh" || !/[\u3400-\u9fff]/u.test(value)) return value || t("requestFailed");
+  if (/^当前套餐最多支持\s*\d+\s*条指定地址交互规则[，。]/u.test(value)) return t("interactionRuleLimitExceeded");
+  if (/^当前套餐最多支持\s*\d+\s*条(?:运行)?规则。$/u.test(value)) return t("ruleLimitExceeded");
   return t("requestFailed");
 }
 
@@ -542,17 +582,31 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = response.status === 401
+    const translations = {
+      maintenance: "maintenanceNotice",
+      quote_unavailable: "marketRecommendationUnavailable",
+      capacity_not_ready: "capacityNotReadyNotice",
+      capacity_full: "capacityFullNotice",
+      subscription_seats_full: "subscriptionSeatsFullNotice",
+      holder_targets_full: "holderTargetsFullNotice",
+      market_chain_not_allowed: "marketMonitoringChainNotAllowed",
+      market_pool_limit_reached: "marketMonitoringPoolLimitExceeded",
+      market_pool_scope_not_allowed: "marketMonitoringPoolScopeDenied",
+    };
+    const sessionExpired = response.status === 401;
+    const code = data?.code;
+    const translation = typeof code === "string" && Object.prototype.hasOwnProperty.call(translations, code) ? translations[code] : undefined;
+    const message = sessionExpired
       ? t("sessionExpired")
-      : data.code === "maintenance"
-        ? t("maintenanceNotice")
-        : localizedApiError(data.detail || data.message || t("requestFailed"));
+      : translation
+        ? t(translation)
+        : localizedApiError(data?.detail || data?.message || t("requestFailed"));
     const error = new Error(message);
     error.status = response.status;
-    if (response.status !== 401 && data.code === "maintenance") {
-      error.code = "maintenance";
+    if (!sessionExpired && translation) {
+      error.code = code;
     }
-    if (response.status === 401 && path !== "/api/auth/session") {
+    if (sessionExpired && path !== "/api/auth/session") {
       resetConnectionState();
     }
     throw error;
@@ -835,6 +889,52 @@ function currentPlan() {
 
 function marketPoolDiscoveryAllowed() {
   return currentPlan()?.market_query === true;
+}
+
+function marketScopePlan() {
+  return state.marketCatalog?.plan || currentPlan();
+}
+
+function marketMonitoringChainKeys(plan = marketScopePlan()) {
+  if (!Array.isArray(plan?.allowed_market_chain_keys) ||
+      !Array.isArray(state.marketCatalog?.monitoring_supported_chains)) return [];
+  const available = new Set(state.marketCatalog.monitoring_supported_chains.map((chain) => String(chain.key || "").toLowerCase()));
+  return [...new Set(plan.allowed_market_chain_keys.map((key) => String(key).toLowerCase()))]
+    .filter((key) => available.has(key));
+}
+
+function marketMonitoringChainAllowed(chainKey) {
+  return marketMonitoringChainKeys().includes(String(chainKey || "").toLowerCase());
+}
+
+function marketMonitoringScopeText() {
+  const plan = marketScopePlan();
+  const projects = quotaNumber(plan?.market_project_limit);
+  const pools = quotaNumber(plan?.market_pool_limit);
+  if (projects === 0) return t("marketFreeQueryOnly");
+  if (projects === null || pools === null || !Array.isArray(plan?.allowed_market_chain_keys) ||
+      !Array.isArray(state.marketCatalog?.monitoring_supported_chains)) return t("marketMonitoringScopeUnavailable");
+  const chains = marketMonitoringChainKeys().map(marketChainName).join(" / ");
+  return chains && pools > 0 ? t("marketMonitoringScope", { chains, projects, pools }) : t("marketMonitoringScopeClosed");
+}
+
+function marketWizardMonitoringGroups() {
+  return (state.marketWizard.poolResult?.groups || []).filter((group) => marketMonitoringChainAllowed(group.chain_key));
+}
+
+function marketWizardSelectedPoolCount() {
+  return Object.values(state.marketWizard.poolSelections).reduce((sum, item) => sum + item.selected.size, 0);
+}
+
+function marketWizardScopeError() {
+  const limit = quotaNumber(marketScopePlan()?.market_pool_limit);
+  if (limit === null || !Array.isArray(state.marketCatalog?.monitoring_supported_chains) ||
+      !Array.isArray(marketScopePlan()?.allowed_market_chain_keys)) return t("marketMonitoringScopeUnavailable");
+  const invalid = Object.entries(state.marketWizard.poolSelections)
+    .some(([chainKey, item]) => item.selected.size > 0 && !marketMonitoringChainAllowed(chainKey));
+  if (invalid || !marketWizardMonitoringGroups().length) return t("marketMonitoringChainNotAllowed");
+  return marketWizardSelectedPoolCount() > limit || limit === 0
+    ? t("marketMonitoringPoolLimit", { limit }) : "";
 }
 
 function syncMarketPoolDiscoveryAccess() {
@@ -1226,10 +1326,12 @@ function renderSubscription(syncSummary = true) {
     </div>
     <div class="mini-grid">
       <span>${escapeHtml(t("walletMetric", { used: state.entitlement.wallet_count, limit: plan.wallet_limit }))}</span>
-      <span>${escapeHtml(t("ruleMetric", { used: state.entitlement.rule_count, limit: plan.rule_limit }))}</span>
+      <span>${escapeHtml(t("ruleMetric", { used: quotaNumber(state.entitlement.rule_count) ?? "-", limit: quotaNumber(plan.rule_limit) ?? "-" }))}</span>
+      ${interactionQuotaText(plan) ? `<span>${escapeHtml(interactionQuotaText(plan))}</span>` : ""}
       <span>${escapeHtml(t("groupMetric", { used: state.entitlement.group_count, limit: plan.group_limit }))}</span>
       <span>${escapeHtml(t("marketProjectMetric", { used: state.entitlement.market_project_count, limit: plan.market_project_limit }))}</span>
     </div>
+    <small class="muted">${escapeHtml(t("sharedRuleQuotaHelp"))}</small>
     <small class="muted">${escapeHtml(
       isFree
         ? freeHint
@@ -1305,6 +1407,8 @@ function requiresPositiveThreshold(ruleType) {
 }
 
 function localizedPauseReason(rule, plan) {
+  const pauseReason = String(rule.pause_reason || "");
+  if (pauseReason === "interaction_rule_limit" || pauseReason.includes("交互规则额度")) return t("interactionRuleLimitExceeded");
   if (state.uiLanguage === "zh") return rule.pause_reason || t("rulePaused");
   if (!rule.enabled) return t("ruleClosed");
   if (!plan?.allowed_rule_types?.includes(rule.rule_type)) return t("planRuleUnsupported");
@@ -1510,6 +1614,10 @@ function aggregateEventStatus(event) {
       return { text: t("notificationSent"), className: "" };
     case "failed":
       return { text: t("notificationFailed"), className: "failed" };
+    case "unknown":
+      return { text: t("notificationUnknown"), className: "pending" };
+    case "skipped":
+      return { text: t("notificationSkipped"), className: "" };
     case "pending":
       return { text: t("notificationPending"), className: "pending" };
     default:
@@ -1782,6 +1890,7 @@ function marketEventSummary(event) {
 
 function marketEventDetailHtml(event) {
   const pool = (state.marketDetail?.pools || []).find((item) => item.id === event.market_pool_id);
+  const status = marketRuleEventStatus(event);
   const explorer = chainExplorerTransaction(event.chain_key, event.transaction_hash);
   const copyRows = [
     detailCopyRow(t("holderAddress"), event.wallet_address),
@@ -1796,7 +1905,7 @@ function marketEventDetailHtml(event) {
     <div class="event-detail-metrics">
       <div><span>${escapeHtml(t("detailActualValue"))}</span><strong>${escapeHtml(marketRuleEventValue(event.current_value, event.threshold_unit))}</strong></div>
       <div><span>${escapeHtml(t("threshold"))}</span><strong>${escapeHtml(marketRuleEventValue(event.threshold_value, event.threshold_unit))}</strong></div>
-      <div><span>${escapeHtml(t("eventDetailDelivery"))}</span><strong class="${event.notification_successful ? "sent" : "failed"}">${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}</strong></div>
+      <div><span>${escapeHtml(t("eventDetailDelivery"))}</span><strong class="${status.unknown ? "pending" : event.notification_successful ? "sent" : "failed"}">${escapeHtml(status.text)}</strong></div>
     </div>
     ${detailSectionHtml(t("eventDetailRuleBasis"), detailFactsHtml([
       [t("ruleType"), marketRuleDisplayName(event.rule_type)],
@@ -1809,7 +1918,7 @@ function marketEventDetailHtml(event) {
       [t("detailOccurredAt"), marketDate(event.occurred_at)],
       [t("detailCurrentValue"), marketRuleEventValue(event.current_value, event.threshold_unit)],
       [t("marketEventAddressLabel"), event.address_label],
-      [t("notificationFailedReason"), event.notification_successful ? "" : marketRuleEventReason(event)],
+      [t("notificationFailedReason"), marketRuleEventReason(event)],
     ]))}
     ${copyRows ? detailSectionHtml(t("detailCopyValues"), `<div class="event-detail-copy-list">${copyRows}</div>`) : ""}
     ${explorer ? `<a class="primary button-link event-detail-explorer" href="${escapeHtml(explorer)}" target="_blank" rel="noopener noreferrer">${escapeHtml(t("viewOnExplorer"))}</a>` : ""}
@@ -2061,7 +2170,7 @@ function updateRuleFields() {
   $("targetLabelInput").required = needsTarget;
   $("thresholdWrap").hidden = thresholdless;
   $("tokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
-  $("ruleDescription").textContent = localizedRuleDescription(type);
+  $("ruleDescription").textContent = ruleTypeHelp(type);
   $("thresholdHint").textContent = thresholdless
     ? t("thresholdNotRequired")
     : requiresPositiveThreshold(type)
@@ -2100,7 +2209,7 @@ function updateCombinationMemberFields() {
   $("combinationTargetLabelInput").required = needsTarget;
   $("combinationThresholdWrap").hidden = thresholdless;
   $("combinationTokenAddressInput").placeholder = type === "approval_change" ? t("tokenRequired") : t("tokenOptional");
-  $("combinationRuleDescription").textContent = localizedRuleDescription(type);
+  $("combinationRuleDescription").textContent = ruleTypeHelp(type);
   $("combinationThresholdHint").textContent = thresholdless
     ? t("thresholdNotRequired")
     : requiresPositiveThreshold(type)
@@ -2201,7 +2310,8 @@ function resetCombinationMemberEditor() {
 
 function renderCombinationDraft() {
   $("combinationMemberCount").textContent = String(state.combinationMembers.length);
-  $("combinationDraftList").innerHTML = state.combinationMembers.length
+  const quotaText = combinationDraftQuotaText();
+  const draftHTML = state.combinationMembers.length
     ? state.combinationMembers
         .map(
           (member) => `
@@ -2216,6 +2326,7 @@ function renderCombinationDraft() {
         )
         .join("")
     : `<div class="notice muted">${escapeHtml(t("combinationNeedsTwoMembers"))}</div>`;
+  $("combinationDraftList").innerHTML = `${quotaText ? `<div class="notice muted">${escapeHtml(quotaText)}</div>` : ""}${draftHTML}`;
   document.querySelectorAll("[data-remove-member]").forEach((button) => {
     button.addEventListener("click", () => {
       state.combinationMembers = state.combinationMembers.filter(
@@ -3070,6 +3181,7 @@ function marketDeliveryModeLabel(mode) {
 }
 
 function marketMoney(value, currency = true) {
+  if (value == null || String(value).trim() === "") return "-";
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
   const absolute = Math.abs(number);
@@ -3125,6 +3237,7 @@ function renderMarket() {
 
 function renderMarketCapability() {
   const badge = $("marketCapability");
+  if ($("marketMonitoringScope")) $("marketMonitoringScope").textContent = marketMonitoringScopeText();
   if (!state.deboxUserId) {
     badge.textContent = t("notConnected");
     badge.classList.add("muted");
@@ -3349,6 +3462,7 @@ function renderMarketSelectedAsset() {
         <span>
           <strong>${escapeHtml(deployment.chain_name || marketChainName(deployment.chain_key))}</strong>
           <small>${escapeHtml(deployment.contract_address)}</small>
+          ${marketMonitoringChainAllowed(deployment.chain_key) ? "" : `<small>${escapeHtml(t("marketQueryChainOnly"))}</small>`}
         </span>
         <b>${escapeHtml(checked ? t("selected") : t("notSelected"))}</b>
       </label>
@@ -3410,13 +3524,9 @@ function renderMarketWizardPools() {
   });
   container.querySelectorAll("[data-market-wizard-primary]").forEach((radio) => {
     radio.addEventListener("change", () => {
-      const selection = marketPoolSelection(radio.dataset.marketWizardPrimary);
-      if ((currentPlan()?.code || "free") === "standard") {
-        selection.selected.clear();
-      }
-      selection.primary = radio.value;
-      selection.selected.add(radio.value);
-      renderMarketWizardPools();
+      updateWizardPoolSelection({ checked: true,
+        dataset: { chain: radio.dataset.marketWizardPrimary, marketWizardPool: radio.value },
+      }, true);
     });
   });
   $("marketPoolsContinueBtn").disabled = state.marketWizard.busy || !marketWizardPoolsReady();
@@ -3427,13 +3537,15 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
   const address = pair.pairAddress || "";
   const selected = selection.selected.has(address);
   const primary = selection.primary === address;
+  const monitoringAllowed = marketMonitoringChainAllowed(group.chain_key);
   return `
     <div class="market-pool-card market-wizard-pool-card${quoteOnly ? " unsupported" : " has-primary-choice"}">
-      <input type="checkbox" data-market-wizard-pool="${escapeHtml(address)}" data-chain="${escapeHtml(group.chain_key)}" ${selected ? "checked" : ""} ${quoteOnly ? "disabled" : ""} />
+      <input type="checkbox" data-market-wizard-pool="${escapeHtml(address)}" data-chain="${escapeHtml(group.chain_key)}" ${selected ? "checked" : ""} ${quoteOnly || !monitoringAllowed ? "disabled" : ""} />
       <div class="market-wizard-pool-info">
         <strong>${escapeHtml(preview.protocol || pair.dexId || "-")} ${escapeHtml(preview.protocol_version || "")}</strong>
         <span>${escapeHtml(pair.baseToken?.symbol || "-")} / ${escapeHtml(pair.quoteToken?.symbol || "-")}</span>
         <small>${escapeHtml(shortAddress(address))}</small>
+        ${monitoringAllowed ? "" : `<small>${escapeHtml(t("marketQueryChainOnly"))}</small>`}
       </div>
       <div class="market-pool-values">
         <span class="market-pool-value-row">
@@ -3444,8 +3556,9 @@ function renderWizardPoolCard(group, preview, selection, quoteOnly) {
           <small>${escapeHtml(t("marketTokenPrice"))}</small>
           <strong>${marketMoney(pair.priceUsd)}</strong>
         </span>
+        <small>${escapeHtml(marketQuoteLabel(pair.quote_quality, group.quote_max_age_seconds))}</small>
       </div>
-      ${quoteOnly ? "" : `
+      ${quoteOnly || !monitoringAllowed ? "" : `
         <label class="market-primary-choice${primary ? " selected" : ""}">
           <input type="radio" name="market-primary-${escapeHtml(group.chain_key)}" data-market-wizard-primary="${escapeHtml(group.chain_key)}" value="${escapeHtml(address)}" ${primary ? "checked" : ""} />
           ${escapeHtml(t(primary ? "marketPoolPrimary" : "marketSetPrimary"))}
@@ -3498,7 +3611,8 @@ function marketPoolSelection(chainKey) {
 }
 
 function marketWizardPoolsReady() {
-  const groups = state.marketWizard.poolResult?.groups || [];
+  if (marketWizardScopeError()) return false;
+  const groups = marketWizardMonitoringGroups();
   return groups.length > 0 && groups.every((group) => {
     const selection = marketPoolSelection(group.chain_key);
     return !group.error && selection.selected.size > 0 &&
@@ -3506,15 +3620,28 @@ function marketWizardPoolsReady() {
   });
 }
 
-function updateWizardPoolSelection(checkbox) {
+function updateWizardPoolSelection(checkbox, makePrimary = false) {
   const selection = marketPoolSelection(checkbox.dataset.chain);
-  const planCode = currentPlan()?.code || "free";
-  if (checkbox.checked && planCode === "standard") {
-    selection.selected.clear();
-  }
+  const limit = quotaNumber(marketScopePlan()?.market_pool_limit);
+  const singlePool = marketScopePlan()?.market_pool_mode === "main";
   if (checkbox.checked) {
+    if (!marketMonitoringChainAllowed(checkbox.dataset.chain) || limit === null || limit === 0) {
+      checkbox.checked = false;
+      toast(t(limit === null ? "marketMonitoringScopeUnavailable" : "marketMonitoringChainNotAllowed"));
+      renderMarketWizardPools();
+      return;
+    }
+    const replacing = singlePool ? selection.selected.size : 0;
+    const additional = singlePool || !selection.selected.has(checkbox.dataset.marketWizardPool) ? 1 : 0;
+    if (marketWizardSelectedPoolCount() - replacing + additional > limit) {
+      checkbox.checked = false;
+      toast(t("marketMonitoringPoolLimit", { limit }));
+      renderMarketWizardPools();
+      return;
+    }
+    if (singlePool) selection.selected.clear();
     selection.selected.add(checkbox.dataset.marketWizardPool);
-    if (!selection.primary || planCode === "standard") {
+    if (!selection.primary || singlePool || makePrimary) {
       selection.primary = checkbox.dataset.marketWizardPool;
     }
   } else {
@@ -3582,8 +3709,8 @@ function renderMarketWizardRuleEditor() {
   $("marketWizardGroupWrap").hidden = $("marketWizardTargetTypeSelect").value !== "group";
   const createButton = $("createMarketProjectBtn");
   createButton.disabled = currentPlan()?.code === "free" || !definition?.allowed ||
-    state.marketWizard.busy;
-  createButton.title = currentPlan()?.code === "free" ? t("marketFreeQueryOnly") : "";
+    state.marketWizard.busy || !marketWizardPoolsReady();
+  createButton.title = currentPlan()?.code === "free" ? t("marketFreeQueryOnly") : marketWizardScopeError();
 }
 
 function renderMarketWizardSummary() {
@@ -3600,7 +3727,7 @@ function renderMarketWizardSummary() {
     <h4>${escapeHtml(t("marketCreationSummary"))}</h4>
     <dl>
       <div><dt>${escapeHtml(t("marketProjectToken"))}</dt><dd>${escapeHtml(asset ? `${asset.name} (${asset.symbol})` : "-")}</dd></div>
-      <div><dt>${escapeHtml(t("marketSelectedChains"))}</dt><dd>${escapeHtml(String(state.marketWizard.selectedChains.size))}</dd></div>
+      <div><dt>${escapeHtml(t("marketSelectedChains"))}</dt><dd>${escapeHtml(String(marketWizardMonitoringGroups().filter((group) => marketPoolSelection(group.chain_key).selected.size > 0).length))}</dd></div>
       <div><dt>${escapeHtml(t("marketSelectedPools"))}</dt><dd>${escapeHtml(String(selectedPools))}</dd></div>
       <div><dt>${escapeHtml(t("firstRule"))}</dt><dd>${escapeHtml(marketRuleName(definition) || "-")}</dd></div>
       <div><dt>${escapeHtml(t("notificationMethod"))}</dt><dd>${escapeHtml(t($("marketWizardTargetTypeSelect")?.value === "group" ? "groupNotification" : "privateNotification"))}</dd></div>
@@ -3701,8 +3828,9 @@ function renderMarketDetail() {
     ? detail.snapshots
     : (detail.latest_snapshot ? [detail.latest_snapshot] : []);
   const snapshot = snapshots[0] || {};
-  const totalLiquidity = snapshots.reduce((total, item) => total + Number(item.liquidity_usd || 0), 0);
-  const totalVolume = snapshots.reduce((total, item) => total + Number(item.volume_24h_usd || 0), 0);
+  const totalLiquidity = marketSnapshotTotal(snapshots, "liquidity_usd");
+  const totalVolume = marketSnapshotTotal(snapshots, "volume_24h_usd");
+  const referenceQuotes = snapshots.some((item) => !marketQuoteAvailable(item.quote_quality, detail.quote_max_age_seconds));
   const activeRules = (detail.rules || []).filter(marketRuleIsActive);
   const activeCombinations = (detail.combinations || []).filter(marketCombinationIsActive);
   const metrics = [
@@ -3713,8 +3841,8 @@ function renderMarketDetail() {
     [t("marketMonitoredPools"), String((detail.pools || []).filter((pool) => Number(pool.selected) === 1).length)],
     [t("marketRunningRulesCount"), String(activeRules.length + activeCombinations.length)],
   ];
-  $("marketMetricGrid").innerHTML = metrics.map(([label, value]) => `
-    <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>
+  $("marketMetricGrid").innerHTML = metrics.map(([label, value], index) => `
+    <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong>${index < 3 && referenceQuotes ? `<small>${escapeHtml(t("marketQuotesReferenceOnly"))}</small>` : ""}</div>
   `).join("");
   const chainKeys = new Set(deployments.map((deployment) => deployment.chain_key));
   const providerHealth = (detail.provider_health || []).filter(
@@ -3755,7 +3883,8 @@ function marketDetailDeployments() {
 }
 
 function marketRuleIsActive(rule) {
-  return Number(rule?.enabled) === 1 && rule?.run_status === "active";
+  return Number(rule?.enabled) === 1 && rule?.run_status === "active" &&
+    !(rule?.runtime_issues || []).length;
 }
 
 function marketCombinationIsActive(rule) {
@@ -3840,7 +3969,7 @@ function renderMarketOverview() {
             ${chainLogoSrc(deployment.chain_key) ? `<img src="${escapeHtml(chainLogoSrc(deployment.chain_key))}" alt="" />` : ""}
             <strong>${escapeHtml(marketChainName(deployment.chain_key))}</strong>
           </span>
-          <small>${escapeHtml(snapshot ? marketDate(snapshot.captured_at) : t("marketWaitingForData"))}</small>
+          <small>${escapeHtml(snapshot ? marketQuoteLabel(snapshot.quote_quality, detail.quote_max_age_seconds) : t("marketWaitingForData"))}</small>
         </div>
         <dl>
           <div><dt>${escapeHtml(t("marketMetricPrice"))}</dt><dd>${marketMoney(snapshot?.price_usd)}</dd></div>
@@ -3884,7 +4013,7 @@ function renderMarketProjectPools() {
     if (!groups.has(pool.chain_key)) groups.set(pool.chain_key, []);
     groups.get(pool.chain_key).push(pool);
   });
-  $("marketProjectPools").innerHTML = [...groups.entries()].map(([chainKey, pools]) => {
+  $("marketProjectPools").innerHTML = `<p class="field-note">${escapeHtml(marketMonitoringScopeText())}</p>` + ([...groups.entries()].map(([chainKey, pools]) => {
     const expanded = state.marketExpandedPoolChains.has(chainKey);
     const visiblePools = expanded ? pools : pools.slice(0, 1);
     return `
@@ -3896,6 +4025,7 @@ function renderMarketProjectPools() {
         </span>
         <small>${escapeHtml(t("marketManagedPoolCount", { count: pools.length }))}</small>
       </div>
+      ${marketMonitoringChainAllowed(chainKey) ? "" : `<p class="field-note">${escapeHtml(t("marketQueryChainOnly"))}</p>`}
       <div class="market-pool-list">
         ${visiblePools.map((pool) => {
     const selected = Number(pool.selected) === 1;
@@ -3915,6 +4045,7 @@ function renderMarketProjectPools() {
         </div>
         <div class="market-pool-values">
           <strong>${marketMoney(pool.liquidity_usd)}</strong>
+          <small>${escapeHtml(marketQuoteLabel(pool.quote_quality, detail.quote_max_age_seconds))}</small>
           <span class="market-pool-status ${supported ? (selected ? "monitoring" : "available") : "quotes"}">${escapeHtml(t(statusKey))}</span>
           ${primary ? `<small>${escapeHtml(t("marketDefaultQuotePool"))}</small>` : ""}
         </div>
@@ -3937,7 +4068,7 @@ function renderMarketProjectPools() {
       </div>
     </section>
   `;
-  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`;
+  }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoPools"))}</div>`);
   $("marketProjectPools").querySelectorAll("[data-market-primary]").forEach((button) => {
     button.addEventListener("click", guardAsync(() => updateMarketPool(Number(button.dataset.marketPrimary), true, true)));
   });
@@ -4090,6 +4221,8 @@ function marketRecommendationControls(mode) {
     thresholdHelp: $(wizard ? "marketWizardThresholdHelp" : "marketThresholdHelp"),
     windowWrap: $(wizard ? "marketWizardWindowWrap" : "marketWindowWrap"),
     window: $(wizard ? "marketWizardWindowInput" : "marketWindowInput"),
+    windowSelect: $(wizard ? "marketWizardWindowSelect" : "marketWindowSelect"),
+    windowHelp: $(wizard ? "marketWizardWindowHelp" : "marketWindowHelp"),
     cooldownWrap: $(wizard ? "marketWizardCooldownWrap" : "marketCooldownWrap"),
     cooldown: $(wizard ? "marketWizardCooldownInput" : "marketCooldownInput"),
     repeatWrap: $(wizard ? "marketWizardRepeatWrap" : "marketRepeatWrap"),
@@ -4116,6 +4249,8 @@ function marketRecommendationState(mode) {
       updatedAt: state.marketWizard.recommendationUpdatedAt,
       loading: state.marketWizard.recommendationLoading,
       error: state.marketWizard.recommendationError,
+      quoteQuality: state.marketWizard.recommendationQuoteQuality,
+      quoteMaxAgeSeconds: state.marketWizard.recommendationQuoteMaxAgeSeconds,
     };
   }
   return {
@@ -4123,6 +4258,8 @@ function marketRecommendationState(mode) {
     updatedAt: state.marketRecommendationUpdatedAt,
     loading: state.marketRecommendationLoading,
     error: state.marketRecommendationError,
+    quoteQuality: state.marketRecommendationQuoteQuality,
+    quoteMaxAgeSeconds: state.marketRecommendationQuoteMaxAgeSeconds,
   };
 }
 
@@ -4136,6 +4273,135 @@ function formatRecommendationTime(value) {
     second: "2-digit",
     hourCycle: "h23",
   }).format(date);
+}
+
+function marketQuoteObservationTime(quality) {
+  const zeroTime = new Date("0001-01-01T00:00:00Z").getTime();
+  if (quality?.source_timestamp != null) {
+    const source = quality.source_timestamp;
+    const timestamp = typeof source === "string" ? new Date(source).getTime() : NaN;
+    if (!Number.isFinite(timestamp)) return "";
+    if (timestamp !== zeroTime) return source;
+  }
+  const fetched = quality?.fetched_at;
+  const timestamp = typeof fetched === "string" ? new Date(fetched).getTime() : NaN;
+  return Number.isFinite(timestamp) && timestamp !== zeroTime ? fetched : "";
+}
+
+function marketSnapshotTotal(snapshots, field) {
+  if (!snapshots.length) return null;
+  let total = 0;
+  for (const snapshot of snapshots) {
+    const value = snapshot[field];
+    if (value == null || String(value).trim() === "" || !Number.isFinite(Number(value))) return null;
+    total += Number(value);
+  }
+  return total;
+}
+
+function marketQuoteAvailable(quality, maxAgeSeconds, now = Date.now()) {
+  const age = Number(maxAgeSeconds);
+  if (!["live", "cached"].includes(quality?.status) || !Number.isFinite(age) || age <= 0 || !Number.isFinite(now)) return false;
+  const fetchedAt = quality?.fetched_at ? new Date(quality.fetched_at).getTime() : NaN;
+  const observedAt = new Date(marketQuoteObservationTime(quality)).getTime();
+  const maxAge = age * 1000;
+  if (!Number.isFinite(maxAge)) return false;
+  return Number.isFinite(fetchedAt) && Number.isFinite(observedAt) &&
+    fetchedAt <= now && observedAt <= now && now - fetchedAt <= maxAge && now - observedAt <= maxAge;
+}
+
+function marketQuoteLabel(quality, maxAgeSeconds, now = Date.now()) {
+  const status = quality?.status === "stale_fallback"
+    ? "marketQuoteFallback"
+    : !["live", "cached"].includes(quality?.status) || !marketQuoteObservationTime(quality)
+      ? "marketQuoteUnknown"
+      : !marketQuoteAvailable(quality, maxAgeSeconds, now)
+        ? "marketQuoteStale"
+        : quality.status === "cached" ? "marketQuoteCached" : "marketQuoteLive";
+  const observedAt = marketQuoteObservationTime(quality);
+  if (!observedAt) return t(status);
+  const timeKey = quality?.source_timestamp === observedAt ? "marketQuoteSourceTime" : "marketQuoteFetchedTime";
+  return `${t(status)} · ${t(timeKey, { time: marketDate(observedAt) })}`;
+}
+
+function marketRecommendationCanApply(mode, definition) {
+  const controls = marketRecommendationControls(mode);
+  if (MARKET_EVENT_ONLY_RULES.has(definition?.code) || controls.sensitivity.value === "custom") return true;
+  const recommendationState = marketRecommendationState(mode);
+  return !recommendationState.error && !recommendationState.loading &&
+    marketQuoteAvailable(recommendationState.quoteQuality, recommendationState.quoteMaxAgeSeconds) &&
+    Boolean(selectedMarketRecommendation(definition?.code, controls.sensitivity.value, recommendationState.recommendations));
+}
+
+function marketWindowCapability(definition) {
+  return definition?.window || { kind: Number(definition?.default_window_minutes) ? "custom_event" : "none", min_minutes: 1 };
+}
+
+function marketWindowIssue(definition, rawValue) {
+  const capability = marketWindowCapability(definition);
+  if (capability.kind === "none") return "";
+  const minutes = Number(rawValue);
+  if (capability.kind === "fixed") {
+    const allowed = capability.fixed_minutes || [];
+    return Number.isInteger(minutes) && allowed.includes(minutes) ? "" : t("marketUnsupportedWindow", { value: rawValue || "-", allowed: allowed.join(" / ") });
+  }
+  return Number.isInteger(minutes) && minutes >= Number(capability.min_minutes || 1) &&
+    (!Number(capability.max_minutes) || minutes <= Number(capability.max_minutes))
+    ? "" : t("marketCustomWindowRange", { min: capability.min_minutes || 1, max: capability.max_minutes || "-" });
+}
+
+function marketRuleParameterIssue(definition, window, threshold) {
+  const windowIssue = marketWindowIssue(definition, window);
+  if (windowIssue) return windowIssue;
+  const maxRank = Number(definition?.max_holder_rank);
+  if (maxRank > 0 && (!Number.isInteger(Number(threshold)) || Number(threshold) < 1 || Number(threshold) > maxRank)) {
+    return t("marketHolderRankRange", { max: maxRank });
+  }
+  return "";
+}
+
+function marketRuleEditorParametersValid(mode, definition) {
+  const controls = marketRecommendationControls(mode);
+  const issue = marketRuleParameterIssue(definition, controls.window.value, controls.threshold.value);
+  if (issue) toast(issue);
+  return !issue;
+}
+
+function updateMarketWindowControl(mode, definition, editable) {
+  const controls = marketRecommendationControls(mode);
+  const capability = marketWindowCapability(definition);
+  const fixed = capability.kind === "fixed";
+  const unused = capability.kind === "none";
+  const locked = !editable || controls.sensitivity.value !== "custom";
+  controls.windowWrap.hidden = unused;
+  controls.window.hidden = fixed;
+  controls.window.disabled = unused || fixed || locked;
+  controls.window.min = String(capability.min_minutes || 1);
+  controls.window.max = capability.max_minutes ? String(capability.max_minutes) : "";
+  controls.window.step = "1";
+  controls.windowSelect.hidden = !fixed;
+  controls.windowSelect.disabled = !fixed || locked;
+  if (fixed) {
+    const value = controls.window.value;
+    const allowed = capability.fixed_minutes || [];
+    const supported = allowed.includes(Number(value)) && Number.isInteger(Number(value));
+    controls.windowSelect.innerHTML = `${supported ? "" : `<option value="${escapeHtml(value)}" disabled>${escapeHtml(t("marketSavedUnsupportedWindow", { value: value || "-" }))}</option>`}${allowed.map((minutes) => `<option value="${minutes}">${escapeHtml(t("marketWindowMinutesValue", { minutes }))}</option>`).join("")}`;
+    controls.windowSelect.value = value;
+    controls.windowSelect.onchange = () => {
+      controls.window.value = controls.windowSelect.value;
+      updateMarketWindowControl(mode, definition, editable);
+    };
+  }
+  controls.window.oninput = () => updateMarketWindowControl(mode, definition, editable);
+  const issue = marketWindowIssue(definition, controls.window.value);
+  controls.windowHelp.textContent = unused ? "" : issue || (fixed
+    ? t("marketFixedWindowHelp", { allowed: (capability.fixed_minutes || []).join(" / ") })
+    : t(capability.kind === "custom_snapshot" ? "marketSnapshotWindowHelp" : "marketEventWindowHelp", {
+      min: capability.min_minutes || 1, max: capability.max_minutes || "-", lag: definition.max_baseline_lag_seconds,
+    }));
+  controls.threshold.min = Number(definition?.max_holder_rank) ? "1" : "0";
+  controls.threshold.max = Number(definition?.max_holder_rank) ? String(definition.max_holder_rank) : "";
+  controls.threshold.step = Number(definition?.max_holder_rank) ? "1" : "any";
 }
 
 function applyMarketRecommendationEditor(mode, definition, editable) {
@@ -4174,7 +4440,7 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
     controls.unit.value = definition.default_unit || definition.units?.[0] || "count";
     controls.window.value = definition.default_window_minutes || 60;
     controls.cooldown.value = 300;
-  } else if (systemRecommended && definition) {
+  } else if (systemRecommended && definition && marketRecommendationCanApply(mode, definition)) {
     const recommendation = selectedMarketRecommendation(
       definition.code,
       controls.sensitivity.value,
@@ -4197,20 +4463,21 @@ function applyMarketRecommendationEditor(mode, definition, editable) {
   controls.unit.disabled = lockRecommended;
   controls.window.disabled = lockRecommended;
   controls.cooldown.disabled = lockRecommended;
+  updateMarketWindowControl(mode, definition, editable);
   updateMarketThresholdHelp(mode, definition);
 
-  if (recommendationState.error) {
-    controls.status.textContent = t("recommendationRefreshFailed");
+  if (systemRecommended && !marketRecommendationCanApply(mode, definition)) {
+    controls.status.textContent = t("marketRecommendationUnavailable");
   } else {
-    const updatedTime = formatRecommendationTime(recommendationState.updatedAt);
+    const updatedTime = formatRecommendationTime(marketQuoteObservationTime(recommendationState.quoteQuality));
     controls.status.textContent = systemRecommended && updatedTime
-      ? t("recommendationUpdatedAt", { time: updatedTime })
+      ? marketQuoteLabel(recommendationState.quoteQuality, recommendationState.quoteMaxAgeSeconds)
       : "";
   }
 }
 
 function marketWizardRecommendationInput() {
-  return selectedWizardDeployments().map((deployment) => {
+  return selectedWizardDeployments().filter((deployment) => marketMonitoringChainAllowed(deployment.chain_key)).map((deployment) => {
     const selection = marketPoolSelection(deployment.chain_key);
     return {
       chain_key: deployment.chain_key,
@@ -4249,6 +4516,13 @@ function marketDetailRecommendationInput() {
     : [];
 }
 
+function updateMarketRecommendationEditor(mode) {
+  const wizard = mode === "wizard";
+  const definition = marketRuleDefinition($(wizard ? "marketWizardRuleTypeSelect" : "marketRuleTypeSelect").value);
+  const editable = wizard || (state.marketDetail?.project?.status === "active" && Boolean(definition?.allowed));
+  applyMarketRecommendationEditor(mode, definition, editable);
+}
+
 async function refreshMarketRecommendations(mode) {
   const wizard = mode === "wizard";
   const deployments = wizard
@@ -4261,53 +4535,52 @@ async function refreshMarketRecommendations(mode) {
   if (wizard) {
     state.marketWizard.recommendationLoading = true;
     state.marketWizard.recommendationError = "";
-    renderMarketWizardRuleEditor();
   } else {
     state.marketRecommendationLoading = true;
     state.marketRecommendationError = "";
-    renderMarketRuleEditor();
   }
+  // Refresh only recommendation controls. Rebuilding the whole form would
+  // reset a user's pool selection even when the quote request later fails.
+  updateMarketRecommendationEditor(mode);
   try {
     const result = await api("/api/market/recommendations/preview", {
       method: "POST",
       body: JSON.stringify({ deployments }),
     });
-    if (!Array.isArray(result.recommendations) || !result.recommendations.length) {
+    if (!Array.isArray(result.recommendations) || !result.recommendations.length ||
+      !marketQuoteAvailable(result.quote_quality, result.quote_max_age_seconds)) {
       throw new Error(t("recommendationRefreshFailed"));
     }
     if (wizard) {
       state.marketWizard.recommendations = result.recommendations;
       state.marketWizard.recommendationUpdatedAt = result.generated_at || new Date().toISOString();
       state.marketWizard.recommendationError = "";
+      state.marketWizard.recommendationQuoteQuality = result.quote_quality;
+      state.marketWizard.recommendationQuoteMaxAgeSeconds = result.quote_max_age_seconds;
     } else {
       state.marketRecommendations = result.recommendations;
       state.marketRecommendationUpdatedAt = result.generated_at || new Date().toISOString();
       state.marketRecommendationError = "";
+      state.marketRecommendationQuoteQuality = result.quote_quality;
+      state.marketRecommendationQuoteMaxAgeSeconds = result.quote_max_age_seconds;
     }
     return true;
   } catch (_) {
     if (wizard) {
       state.marketWizard.recommendationError = "refresh_failed";
-      if (!state.marketWizard.recommendations.length) {
-        $("marketWizardSensitivitySelect").value = "custom";
-      }
     } else {
       state.marketRecommendationError = "refresh_failed";
-      if (!state.marketRecommendations.length) {
-        $("marketSensitivitySelect").value = "custom";
-      }
     }
     toast(t("recommendationRefreshFailed"));
     return false;
   } finally {
     if (wizard) {
       state.marketWizard.recommendationLoading = false;
-      renderMarketWizardRuleEditor();
       renderMarketWizardSummary();
     } else {
       state.marketRecommendationLoading = false;
-      renderMarketRuleEditor();
     }
+    updateMarketRecommendationEditor(mode);
   }
 }
 
@@ -4332,16 +4605,22 @@ function renderMarketRules() {
     const definition = marketRuleDefinition(rule.rule_type);
     const active = Number(rule.enabled) === 1 && rule.run_status === "active";
     const pauseReason = active ? "" : marketPauseReason(rule.pause_reason);
+    const issues = rule.runtime_issues || [];
+    const parameterIssue = marketRuleParameterIssue(definition, rule.window_minutes, rule.threshold_value);
+    const unsupported = issues.length > 0 || Boolean(parameterIssue);
+    const usesWindow = marketWindowCapability(definition).kind !== "none";
     return `
       <div class="list-item">
         <div>
           <strong>${escapeHtml(marketRuleName(definition) || marketRuleDisplayName(rule.rule_type))}</strong>
           <span>${escapeHtml(rule.threshold_value)} ${escapeHtml(t(MARKET_UNIT_KEYS[rule.threshold_unit] || rule.threshold_unit))} · ${escapeHtml(t(rule.deployment_scope === "all" ? "marketAllChains" : "marketSelectedChainsScope"))} · ${escapeHtml(marketDeliveryModeLabel(rule.delivery_mode))}</span>
-          <small>${escapeHtml(active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${pauseReason ? ` · ${escapeHtml(pauseReason)}` : ""}</small>
+          ${usesWindow ? `<small>${escapeHtml(t("marketSavedWindow", { value: rule.window_minutes ?? "-" }))}</small>` : ""}
+          <small>${escapeHtml(unsupported ? t("marketRuleStatusUnsupported") : active ? t("marketRuleStatusActive") : t("marketRuleStatusPaused"))}${pauseReason ? ` · ${escapeHtml(pauseReason)}` : ""}</small>
+          ${unsupported ? `<small>${escapeHtml(parameterIssue || t("marketSavedParametersUnsupported"))}</small>` : ""}
           <small>${escapeHtml(rule.last_triggered_at ? t("marketLastTriggeredAt", { time: marketDate(rule.last_triggered_at) }) : t("marketNotTriggeredYet"))}</small>
         </div>
         <div class="list-item-actions"${frozen ? " hidden" : ""}>
-          ${active || !projectActive ? "" : `<button type="button" class="secondary compact" data-restore-market-rule="${rule.id}">${escapeHtml(t("restoreMonitor"))}</button>`}
+          ${active || !projectActive ? "" : `<button type="button" class="secondary compact" data-restore-market-rule="${rule.id}" ${unsupported ? "disabled" : ""}>${escapeHtml(t("restoreMonitor"))}</button>`}
           <button type="button" class="secondary compact danger" data-delete-market-rule="${rule.id}">${escapeHtml(t("delete"))}</button>
         </div>
       </div>
@@ -4398,6 +4677,18 @@ function renderMarketCombinations() {
     button.addEventListener("click", guardAsync(() =>
       deletePausedMarketCombination(Number(button.dataset.permanentlyDeleteMarketCombination))));
   });
+}
+
+function marketHolderCoverageHTML(states, selectedChain = "") {
+  const visible = (states || []).filter((item) => !selectedChain || item.chain_key === selectedChain);
+  const rows = visible.map((item) => {
+    const usable = item.status === "complete";
+    const label = usable ? t("marketHolderCoverageReady") : t("marketHolderCoverageUnknown");
+    const asof = item.last_success_at ? marketDate(item.last_success_at) : t("marketHolderCoverageTimeUnknown");
+    return `<small>${escapeHtml(marketChainName(item.chain_key))} · ${escapeHtml(label)} · ${escapeHtml(t("marketHolderCoverageAsOf", { count: Number(item.covered_top_n) || 0, time: asof }))}</small>`;
+  });
+  if (!rows.length) rows.push(`<small>${escapeHtml(t("marketHolderCoverageUnknown"))}</small>`);
+  return `<div class="market-holder-row"><div>${rows.join("")}<small>${escapeHtml(t("marketHolderCoverageLimit"))}</small></div></div>`;
 }
 
 function renderMarketHolders() {
@@ -4482,6 +4773,7 @@ function renderMarketHolders() {
       </div>
     `;
   }).join("") || `<div class="empty-state">${escapeHtml(t("marketNoHolders"))}</div>`;
+  $("marketHoldersList").insertAdjacentHTML("afterbegin", marketHolderCoverageHTML(detail.holder_refresh_states, selectedChain));
   if (holders.length > 1) {
     $("marketHoldersList").insertAdjacentHTML("beforeend", `
       <button type="button" class="market-list-toggle" data-market-holders-toggle aria-expanded="${state.marketHoldersExpanded}">
@@ -4540,7 +4832,17 @@ function marketRuleEventValue(value, unit) {
   return `${marketMoney(value, false)} ${t(unitKey)}`;
 }
 
+function marketRuleEventStatus(event) {
+  const unknown = event.delivery_outcome === "unknown" || event.notification_status === "unknown";
+  return {
+    unknown,
+    text: t(unknown ? "marketEventUnknown" : event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"),
+    className: event.notification_successful && !unknown ? "notified" : "not-notified",
+  };
+}
+
 function marketRuleEventReason(event) {
+  if (marketRuleEventStatus(event).unknown) return t("marketEventReasonUnknown");
   if (event.notification_successful) return "";
   if (event.notification_error === "cooldown_active") return t("marketEventReasonCooldown");
   if (event.notification_error === "holder_excluded") return t("marketEventReasonHolderExcluded");
@@ -4563,14 +4865,15 @@ function renderMarketEvents() {
   list.innerHTML = visibleEvents.length ? visibleEvents.map((event) => {
     const definition = marketRuleDefinition(event.rule_type);
     const pool = event.market_pool_id ? pools.get(event.market_pool_id) : null;
+    const status = marketRuleEventStatus(event);
     return `
       <article class="market-event-row">
         <div class="market-event-main">
           <span class="market-event-title">
             <strong>${escapeHtml(marketRuleName(definition) || marketRuleDisplayName(event.rule_type))}</strong>
             <span class="badge">${escapeHtml(marketChainName(event.chain_key))}</span>
-            <span class="market-notification-status ${event.notification_successful ? "notified" : "not-notified"}">
-              ${escapeHtml(t(event.notification_successful ? "marketEventNotified" : "marketEventNotNotified"))}
+            <span class="market-notification-status ${status.className}">
+              ${escapeHtml(status.text)}
             </span>
             ${event.address_excluded ? `<span class="badge">${escapeHtml(t("marketEventExcluded"))}</span>` : ""}
           </span>
@@ -4582,7 +4885,7 @@ function renderMarketEvents() {
           ${Array.isArray(event.combination_notes) ? event.combination_notes.map((note) => `
             <small>${escapeHtml(t("marketEventCombinationNote"))}：${escapeHtml(note)}</small>
           `).join("") : ""}
-          ${!event.notification_successful ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
+          ${!event.notification_successful || status.unknown ? `<small class="market-notification-reason">${escapeHtml(marketRuleEventReason(event))}</small>` : ""}
         </div>
         <div class="market-event-side">
           <time>${escapeHtml(marketDate(event.occurred_at))}</time>
@@ -4647,6 +4950,8 @@ function setMarketWizardBusy(busy) {
       control.disabled = busy || !marketWizardPoolsReady();
     } else if (id === "marketVerifyAndDiscoverBtn") {
       control.disabled = busy || !marketPoolDiscoveryAllowed();
+    } else if (id === "createMarketProjectBtn") {
+      control.disabled = busy || !marketWizardPoolsReady();
     } else {
       control.disabled = busy;
     }
@@ -4883,7 +5188,7 @@ async function verifyAndDiscoverMarketPools() {
     (poolResult.groups || []).forEach((group) => {
       const first = group.full_monitoring_pools?.[0]?.pair?.pairAddress || "";
       const selection = marketPoolSelection(group.chain_key);
-      if (first) {
+      if (first && marketMonitoringChainAllowed(group.chain_key) && quotaNumber(marketScopePlan()?.market_pool_limit) > 0) {
         selection.selected.add(first);
         selection.primary = first;
       }
@@ -4904,7 +5209,7 @@ async function verifyAndDiscoverMarketPools() {
 
 function continueMarketWizardToRules() {
   if (!marketWizardPoolsReady()) {
-    toast(t("marketSelectPoolEachChain"));
+    toast(marketWizardScopeError() || t("marketSelectPoolEachChain"));
     return;
   }
   state.marketWizard.recommendations = [];
@@ -4933,14 +5238,30 @@ async function createMarketProject() {
     toast(t("marketNotLoaded"));
     return;
   }
+  if (!marketRecommendationCanApply("wizard", definition)) {
+    toast(t("marketRecommendationUnavailable"));
+    return;
+  }
+  if (!marketRuleEditorParametersValid("wizard", definition)) return;
   if (currentPlan()?.code === "free") {
     toast(t("marketFreeQueryOnly"));
+    return;
+  }
+  const scopeError = marketWizardScopeError();
+  if (scopeError || !marketWizardPoolsReady()) {
+    toast(scopeError || t("marketSelectPoolEachChain"));
+    return;
+  }
+  const projectLimit = quotaNumber(marketScopePlan()?.market_project_limit);
+  const projectCount = quotaNumber(state.entitlement?.market_project_count);
+  if (projectLimit !== null && projectCount !== null && projectCount >= projectLimit) {
+    toast(t("marketMonitoringProjectLimit", { limit: projectLimit }));
     return;
   }
   const deploymentsByChain = new Map(
     selectedWizardDeployments().map((deployment) => [deployment.chain_key, deployment]),
   );
-  const deployments = (wizard.poolResult.groups || []).map((group) => {
+  const deployments = marketWizardMonitoringGroups().map((group) => {
     const deployment = deploymentsByChain.get(group.chain_key);
     const selection = marketPoolSelection(group.chain_key);
     return {
@@ -5059,12 +5380,23 @@ async function loadMarketProjectExtras(projectId) {
     return;
   }
   const [recommendations] = await Promise.all([
-    api(`/api/market/projects/${projectId}/recommendations`),
+    api(`/api/market/projects/${projectId}/recommendations`).catch((error) => {
+      // A quote outage affects new recommendations, not read access to an
+      // existing project. Authentication and all other errors retain their path.
+      if (error?.code !== "quote_unavailable") throw error;
+      return null;
+    }),
     loadMarketEvents(projectId),
   ]);
-  state.marketRecommendations = recommendations.recommendations || [];
-  state.marketRecommendationUpdatedAt = recommendations.generated_at || "";
-  state.marketRecommendationError = "";
+  if (recommendations) {
+    state.marketRecommendations = recommendations.recommendations || [];
+    state.marketRecommendationUpdatedAt = recommendations.generated_at || "";
+    state.marketRecommendationQuoteQuality = recommendations.quote_quality || {};
+    state.marketRecommendationQuoteMaxAgeSeconds = recommendations.quote_max_age_seconds || 0;
+    state.marketRecommendationError = "";
+  } else {
+    state.marketRecommendationError = "quote_unavailable";
+  }
   renderMarketDetail();
 }
 
@@ -5123,9 +5455,32 @@ async function deleteMarketProject() {
   toast(t("marketProjectDeleted"));
 }
 
+function marketPoolUpdateScopeError(poolId, selected, isPrimary) {
+  if (!selected) return ""; // Existing scopes can always be reduced.
+  const pools = state.marketDetail?.pools || [];
+  const pool = pools.find((item) => Number(item.id) === Number(poolId));
+  if (!pool) return ""; // The backend validates ownership and current state.
+  if (!marketMonitoringChainAllowed(pool.chain_key)) return t("marketMonitoringChainNotAllowed");
+  const limit = quotaNumber(marketScopePlan()?.market_pool_limit);
+  if (limit === null) return t("marketMonitoringScopeUnavailable");
+  if (limit === 0) return t("marketMonitoringPoolLimit", { limit });
+  const alreadySelected = Number(pool.selected) === 1;
+  if (marketScopePlan()?.market_pool_mode === "main") {
+    if (isPrimary) return ""; // Standard's server path atomically replaces its primary.
+    if (!alreadySelected) return t("marketMonitoringPoolScopeDenied");
+  }
+  const proposed = pools.filter((item) => Number(item.selected) === 1).length + (alreadySelected ? 0 : 1);
+  return proposed > limit ? t("marketMonitoringPoolLimit", { limit }) : "";
+}
+
 async function updateMarketPool(poolId, selected, isPrimary) {
   const projectId = state.marketDetail?.project?.id;
   if (!projectId) return;
+  const scopeError = marketPoolUpdateScopeError(poolId, selected, isPrimary);
+  if (scopeError) {
+    toast(scopeError);
+    return;
+  }
   state.marketDetail = await api(`/api/market/projects/${projectId}/pool`, {
     method: "PATCH",
     body: JSON.stringify({
@@ -5146,6 +5501,11 @@ async function createMarketRule(event) {
     toast(t("marketNotLoaded"));
     return;
   }
+  if (!marketRecommendationCanApply("detail", definition)) {
+    toast(t("marketRecommendationUnavailable"));
+    return;
+  }
+  if (!marketRuleEditorParametersValid("detail", definition)) return;
   const poolValue = $("marketRulePoolSelect").value;
   await api(`/api/market/projects/${projectId}/rules`, {
     method: "POST",

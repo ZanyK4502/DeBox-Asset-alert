@@ -3,10 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type DailySummarySettings struct {
@@ -113,12 +110,7 @@ func (s *Store) UpdateDailySummarySettings(
 						THEN ''
 						ELSE daily_summary_targets.last_sent_date
 					END,
-					last_period_end_at = CASE
-						WHEN daily_summary_targets.push_time IS DISTINCT FROM EXCLUDED.push_time
-						  OR daily_summary_targets.timezone IS DISTINCT FROM EXCLUDED.timezone
-						THEN NULL
-						ELSE daily_summary_targets.last_period_end_at
-					END
+					last_period_end_at = daily_summary_targets.last_period_end_at
 			`, subscription.ID, target.ChatType, target.ChatID, target.Enabled,
 				target.PushTime, target.Timezone, target.Label,
 				normalizeLanguage(target.Language)); err != nil {
@@ -139,6 +131,9 @@ func (s *Store) UpdateDailySummarySettings(
 			  AND NOT ((chat_type || ':' || chat_id) = ANY($2::text[]))
 		`, subscription.ID, targetKeys); err != nil {
 			return Subscription{}, fmt.Errorf("remove stale daily summary targets: %w", err)
+		}
+		if _, err := cancelInvalidDailySummaryDispatches(ctx, tx, deboxUserID, time.Now().UTC()); err != nil {
+			return Subscription{}, fmt.Errorf("invalidate stopped daily summaries: %w", err)
 		}
 		return subscription, nil
 	})
@@ -212,6 +207,7 @@ func (s *Store) MarkDailySummaryTargetSent(
 			WHERE subscription_id = $3
 			  AND chat_type = $4
 			  AND chat_id = $5
+			  AND (last_period_end_at IS NULL OR last_period_end_at <= $2)
 		`, target.LastSentDate, periodEnd.UTC(), subscriptionID,
 			target.ChatType, target.ChatID); err != nil {
 			return struct{}{}, fmt.Errorf("advance daily summary target: %w", err)
@@ -226,7 +222,8 @@ func (s *Store) ListDueScheduledSubscriptions(
 	afterID int64,
 	limit int,
 ) ([]Subscription, error) {
-	subscriptions, err := collectMany[Subscription](ctx, s.db, `
+	subscriptions, err := summaryDispatchTx(ctx, s.db, true, func(ctx context.Context, db DBTX) ([]Subscription, error) {
+		return collectMany[Subscription](ctx, db, `
 		SELECT `+subscriptionColumns+`
 		FROM subscriptions
 		WHERE status = 'active'
@@ -242,6 +239,7 @@ func (s *Store) ListDueScheduledSubscriptions(
 		ORDER BY id ASC
 		LIMIT $2
 	`, max(afterID, 0), clamp(limit, 1, 1000))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list due scheduled subscriptions: %w", err)
 	}
@@ -252,7 +250,8 @@ func (s *Store) GetScheduledSubscription(
 	ctx context.Context,
 	subscriptionID int64,
 ) (*Subscription, error) {
-	subscription, err := collectOptional[Subscription](ctx, s.db, `
+	subscription, err := summaryDispatchTx(ctx, s.db, true, func(ctx context.Context, db DBTX) (*Subscription, error) {
+		return collectOptional[Subscription](ctx, db, `
 		SELECT `+subscriptionColumns+`
 		FROM subscriptions
 		WHERE id = $1
@@ -267,78 +266,28 @@ func (s *Store) GetScheduledSubscription(
 		  )
 		LIMIT 1
 	`, subscriptionID)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get scheduled subscription: %w", err)
 	}
 	return subscription, nil
 }
 
-type SummaryLock struct {
-	conn           *pgxpool.Conn
-	subscriptionID int64
-	once           sync.Once
+type SummaryLock struct{ lock *MarketTaskLock }
+
+func (s *Store) TryScheduledSummaryLock(ctx context.Context, subscriptionID int64) (*SummaryLock, bool, error) {
+	lock, acquired, err := s.tryLegacyTaskLock(ctx, summaryLockNamespace, int32(subscriptionID))
+	if err != nil || !acquired {
+		return nil, acquired, err
+	}
+	return &SummaryLock{lock: lock}, true, nil
 }
 
-func (s *Store) TryScheduledSummaryLock(
-	ctx context.Context,
-	subscriptionID int64,
-) (*SummaryLock, bool, error) {
-	if s.pool == nil {
-		return nil, false, ErrPoolRequired
+func (lock *SummaryLock) Unlock(ctx context.Context) error {
+	if lock == nil {
+		return nil
 	}
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("acquire scheduled summary connection: %w", err)
-	}
-	var acquired bool
-	if err := conn.QueryRow(
-		ctx,
-		"SELECT pg_try_advisory_lock($1, $2)",
-		summaryLockNamespace,
-		int32(subscriptionID),
-	).Scan(&acquired); err != nil {
-		conn.Release()
-		return nil, false, fmt.Errorf("try scheduled summary lock: %w", err)
-	}
-	if !acquired {
-		conn.Release()
-		return nil, false, nil
-	}
-	return &SummaryLock{
-		conn:           conn,
-		subscriptionID: subscriptionID,
-	}, true, nil
-}
-
-func (lock *SummaryLock) Unlock(ctx context.Context) (err error) {
-	lock.once.Do(func() {
-		baseContext := context.Background()
-		if ctx != nil {
-			baseContext = context.WithoutCancel(ctx)
-		}
-		unlockContext, cancel := context.WithTimeout(baseContext, 5*time.Second)
-		defer cancel()
-
-		var unlocked bool
-		if scanErr := lock.conn.QueryRow(
-			unlockContext,
-			"SELECT pg_advisory_unlock($1, $2)",
-			summaryLockNamespace,
-			int32(lock.subscriptionID),
-		).Scan(&unlocked); scanErr != nil {
-			rawConn := lock.conn.Hijack()
-			closeContext, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			_ = rawConn.Close(closeContext)
-			err = fmt.Errorf("unlock scheduled summary: %w", scanErr)
-			return
-		}
-		lock.conn.Release()
-		if !unlocked {
-			err = fmt.Errorf("unlock scheduled summary: lock was not held")
-		}
-	})
-	return err
+	return lock.lock.Unlock(ctx)
 }
 
 func (s *Store) MarkScheduledPushSent(
@@ -349,9 +298,9 @@ func (s *Store) MarkScheduledPushSent(
 ) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE subscriptions
-		SET daily_summary_last_sent_date = $1,
+		SET daily_summary_last_sent_date = CASE WHEN daily_summary_last_period_end_at IS NULL OR daily_summary_last_period_end_at <= $2 THEN $1 ELSE daily_summary_last_sent_date END,
 		    scheduled_push_last_sent_at = NOW(),
-		    daily_summary_last_period_end_at = $2
+		    daily_summary_last_period_end_at = GREATEST(daily_summary_last_period_end_at,$2)
 		WHERE id = $3
 	`, sentDate, periodEnd, subscriptionID)
 	if err != nil {

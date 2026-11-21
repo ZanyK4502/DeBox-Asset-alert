@@ -2,21 +2,52 @@ package debox
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdelivery"
 	boxbotapi "github.com/debox-pro/debox-chat-go-sdk/boxbotapi"
 )
 
 const defaultBotTimeout = 20 * time.Second
 
 type Messenger struct {
-	bot *boxbotapi.BotAPI
+	mu        sync.RWMutex
+	bot       *boxbotapi.BotAPI
+	admission *notificationdelivery.Admission
+	sendScope string
+}
+
+// SetNotificationAdmission attaches once during startup, before any runners.
+// The public getMe identity is shared across keys; keys are never budget keys.
+func (m *Messenger) SetNotificationAdmission(admission *notificationdelivery.Admission) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if admission == nil || m.admission != nil || admission.BotID() != strings.TrimSpace(m.bot.Self.UserId) {
+		return fmt.Errorf("notification admission must match getMe bot identity and attach once")
+	}
+	m.bot.Client = notificationAdmissionHTTPClient{next: m.bot.Client, admission: admission, scopeHash: m.sendScope}
+	m.admission = admission
+	return nil
+}
+
+func (m *Messenger) NotificationAdmission() *notificationdelivery.Admission {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.admission
+}
+
+func (m *Messenger) botCopy() boxbotapi.BotAPI {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return *m.bot
 }
 
 func NewMessenger(
@@ -25,6 +56,9 @@ func NewMessenger(
 ) (*Messenger, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("DEBOX_BOT_API_KEY is required")
+	}
+	if strings.TrimSpace(apiSecret) == "" {
+		return nil, fmt.Errorf("DEBOX_BOT_API_SECRET is required for signed v2 sending")
 	}
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultOpenAPIBase
@@ -37,18 +71,24 @@ func NewMessenger(
 		strings.TrimSpace(apiKey),
 		strings.TrimSpace(apiSecret),
 		endpoint,
-		editMessageCompatClient{client: httpClient},
+		editMessageCompatClient{client: sendMessageV2Client{next: httpClient, secret: strings.TrimSpace(apiSecret)}},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialize DeBox bot: %w", err)
 	}
-	return &Messenger{bot: bot}, nil
+	return &Messenger{bot: bot, sendScope: sendMessageScope(strings.TrimSpace(apiKey))}, nil
 }
 
 func (m *Messenger) SendNotification(chatID, chatType, text string) (string, error) {
+	return m.SendNotificationContext(context.Background(), chatID, chatType, text)
+}
+
+func (m *Messenger) SendNotificationContext(ctx context.Context, chatID, chatType, text string) (string, error) {
 	message := boxbotapi.NewMessage(chatID, chatType, text)
 	message.ParseMode = boxbotapi.ModeHTML
-	sent, err := m.bot.Send(message)
+	bot := m.botCopy()
+	bot.Client = notificationHTTPClient{next: notificationAttemptClient(bot.Client), ctx: ctx}
+	sent, err := bot.Send(message)
 	if err != nil {
 		return "", fmt.Errorf("send DeBox notification: %w", err)
 	}
@@ -58,6 +98,10 @@ func (m *Messenger) SendNotification(chatID, chatType, text string) (string, err
 func (m *Messenger) SendNotificationWithAction(
 	chatID, chatType, text, actionText, actionURL string,
 ) (string, error) {
+	return m.SendNotificationWithActionContext(context.Background(), chatID, chatType, text, actionText, actionURL)
+}
+
+func (m *Messenger) SendNotificationWithActionContext(ctx context.Context, chatID, chatType, text, actionText, actionURL string) (string, error) {
 	message := boxbotapi.NewMessage(chatID, chatType, text)
 	message.ParseMode = boxbotapi.ModeHTML
 	message.ReplyMarkup = boxbotapi.NewInlineKeyboardMarkup(
@@ -65,7 +109,9 @@ func (m *Messenger) SendNotificationWithAction(
 			boxbotapi.NewInlineKeyboardButtonURL(actionText, actionURL),
 		),
 	)
-	sent, err := m.bot.Send(message)
+	bot := m.botCopy()
+	bot.Client = notificationHTTPClient{next: notificationAttemptClient(bot.Client), ctx: ctx}
+	sent, err := bot.Send(message)
 	if err != nil {
 		return "", fmt.Errorf("send DeBox notification with action: %w", err)
 	}
@@ -73,17 +119,19 @@ func (m *Messenger) SendNotificationWithAction(
 }
 
 func (m *Messenger) Send(config boxbotapi.Chattable) (boxbotapi.Message, error) {
-	return m.bot.Send(config)
+	bot := m.botCopy()
+	return bot.Send(config)
 }
 
 func (m *Messenger) GetUpdates(
 	config boxbotapi.UpdateConfig,
 ) ([]boxbotapi.Update, error) {
-	return m.bot.GetUpdates(config)
+	bot := m.botCopy()
+	return bot.GetUpdates(config)
 }
 
 func (m *Messenger) Self() boxbotapi.User {
-	return m.bot.Self
+	return m.botCopy().Self
 }
 
 // The pinned SDK uses the retired edit route and expects a Message result.

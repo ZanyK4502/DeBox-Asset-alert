@@ -23,7 +23,21 @@ type CreateOrderParams struct {
 }
 
 func (s *Store) ExpirePendingOrders(ctx context.Context) (int64, error) {
-	tag, err := s.db.Exec(ctx, `
+	if s.resourceCapacity == nil {
+		return expirePendingOrders(ctx, s.db)
+	}
+	return withTxValue(ctx, s.db, func(tx DBTX) (int64, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx)
+		if err != nil {
+			return 0, err
+		}
+		defer cancel()
+		return expirePendingOrders(ctx, tx)
+	})
+}
+
+func expirePendingOrders(ctx context.Context, db DBTX) (int64, error) {
+	tag, err := db.Exec(ctx, `
 		UPDATE orders
 		SET status = 'expired'
 		WHERE status = 'pending' AND expires_at < NOW()
@@ -36,6 +50,11 @@ func (s *Store) ExpirePendingOrders(ctx context.Context) (int64, error) {
 
 func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Order, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (Order, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+		if err != nil {
+			return Order{}, err
+		}
+		defer cancel()
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", params.DeBoxUserID); err != nil {
 			return Order{}, fmt.Errorf("lock payment orders: %w", err)
 		}
@@ -43,7 +62,7 @@ func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Orde
 		var activePlan string
 		var activePermanent int32
 		hasActivePlan := true
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 			SELECT plan_code, is_permanent
 			FROM subscriptions
 			WHERE debox_user_id = $1
@@ -77,6 +96,9 @@ func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Orde
 		}
 		if confirming {
 			return Order{}, ErrOrderConflict
+		}
+		if err := s.checkSubscriptionSeat(ctx, tx, params.DeBoxUserID, params.PlanCode); err != nil {
+			return Order{}, err
 		}
 
 		if _, err := tx.Exec(ctx, `
@@ -117,6 +139,9 @@ func (s *Store) CreateOrder(ctx context.Context, params CreateOrderParams) (Orde
 			}
 			return Order{}, fmt.Errorf("create order: %w", err)
 		}
+		if err := s.reserveResourceCapacityOrder(ctx, tx, order); err != nil {
+			return Order{}, err
+		}
 		return order, nil
 	})
 }
@@ -138,7 +163,21 @@ func (s *Store) ClaimOrderTransaction(
 	payerAddress string,
 	txHash string,
 ) (Order, error) {
-	order, err := collectOne[Order](ctx, s.db, `
+	if s.resourceCapacity == nil {
+		return claimOrderTransaction(ctx, s.db, orderID, deboxUserID, payerAddress, txHash)
+	}
+	return withTxValue(ctx, s.db, func(tx DBTX) (Order, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return Order{}, err
+		}
+		defer cancel()
+		return claimOrderTransaction(ctx, tx, orderID, deboxUserID, payerAddress, txHash)
+	})
+}
+
+func claimOrderTransaction(ctx context.Context, db DBTX, orderID int64, deboxUserID, payerAddress, txHash string) (Order, error) {
+	order, err := collectOne[Order](ctx, db, `
 		UPDATE orders
 		SET status = 'confirming',
 		    tx_hash = $1,
@@ -165,7 +204,7 @@ func (s *Store) ClaimOrderTransaction(
 		return Order{}, fmt.Errorf("claim order transaction: %w", err)
 	}
 
-	existing, err := collectOptional[Order](ctx, s.db, `
+	existing, err := collectOptional[Order](ctx, db, `
 		SELECT `+orderColumns+`
 		FROM orders
 		WHERE id = $1
@@ -195,14 +234,34 @@ func (s *Store) UpdateOrderVerification(
 	orderID int64,
 	params UpdateOrderVerificationParams,
 ) (Order, error) {
-	order, err := collectOne[Order](ctx, s.db, `
+	if s.resourceCapacity == nil {
+		return updateOrderVerification(ctx, s.db, orderID, params, "")
+	}
+	return withTxValue(ctx, s.db, func(tx DBTX) (Order, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx)
+		if err != nil {
+			return Order{}, err
+		}
+		defer cancel()
+		// A stale verifier must not resurrect a terminal order after its hold
+		// has become available to another buyer.
+		guard := ""
+		if params.Status == "confirming" {
+			guard = " AND status IN ('pending','confirming')"
+		}
+		return updateOrderVerification(ctx, tx, orderID, params, guard)
+	})
+}
+
+func updateOrderVerification(ctx context.Context, db DBTX, orderID int64, params UpdateOrderVerificationParams, transitionGuard string) (Order, error) {
+	order, err := collectOne[Order](ctx, db, `
 		UPDATE orders
 		SET status = $1,
 		    tx_block_number = $2,
 		    tx_confirmations = $3,
 		    verified_at = NOW(),
 		    verification_error = $4
-		WHERE id = $5 AND status <> 'paid'
+		WHERE id = $5 AND status <> 'paid'`+transitionGuard+`
 		RETURNING `+orderColumns,
 		params.Status,
 		params.BlockNumber,
@@ -216,7 +275,7 @@ func (s *Store) UpdateOrderVerification(
 	if !isNoRows(err) {
 		return Order{}, fmt.Errorf("update order verification: %w", err)
 	}
-	existing, err := s.GetOrder(ctx, orderID)
+	existing, err := collectOptional[Order](ctx, db, `SELECT `+orderColumns+` FROM orders WHERE id=$1`, orderID)
 	if err != nil {
 		return Order{}, err
 	}
@@ -253,6 +312,11 @@ func (s *Store) FinalizePaidOrder(
 	confirmations int,
 ) (FinalizedOrder, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (FinalizedOrder, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx)
+		if err != nil {
+			return FinalizedOrder{}, err
+		}
+		defer cancel()
 		order, err := collectOne[Order](ctx, tx, `
 			SELECT `+orderColumns+` FROM orders WHERE id = $1 FOR UPDATE
 		`, orderID)
@@ -286,7 +350,7 @@ func (s *Store) FinalizePaidOrder(
 			return FinalizedOrder{}, ErrOrderInvalid
 		}
 
-		subscription, err := activateSubscription(
+		subscription, err := s.activateSubscription(
 			ctx,
 			tx,
 			order.DeBoxUserID,
@@ -316,6 +380,9 @@ func (s *Store) FinalizePaidOrder(
 		}
 		if err != nil {
 			return FinalizedOrder{}, fmt.Errorf("finalize paid order: %w", err)
+		}
+		if err := s.linkResourceCapacityOrder(ctx, tx, paidOrder.ID, subscription.ID); err != nil {
+			return FinalizedOrder{}, err
 		}
 		return FinalizedOrder{Order: paidOrder, Subscription: &subscription}, nil
 	})

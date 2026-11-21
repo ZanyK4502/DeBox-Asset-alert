@@ -19,24 +19,7 @@ type tradeGroup struct {
 func aggregateTrades(receipt Receipt, legs []swapLeg, targets map[string]struct{}) []Event {
 	groups := make(map[string]*tradeGroup)
 	order := make([]string, 0)
-	for _, leg := range legs {
-		var target, direction, quote string
-		var tokenAmount, quoteAmount *big.Int
-		if _, exists := targets[leg.tokenOut.Address]; exists {
-			target = leg.tokenOut.Address
-			direction = EventBuy
-			quote = leg.tokenIn.Address
-			tokenAmount = leg.amountOut
-			quoteAmount = leg.amountIn
-		} else if _, exists := targets[leg.tokenIn.Address]; exists {
-			target = leg.tokenIn.Address
-			direction = EventSell
-			quote = leg.tokenOut.Address
-			tokenAmount = leg.amountIn
-			quoteAmount = leg.amountOut
-		} else {
-			continue
-		}
+	add := func(leg swapLeg, target, direction, quote string, tokenAmount, quoteAmount *big.Int) {
 		key := target + "|" + direction
 		group := groups[key]
 		if group == nil {
@@ -56,6 +39,14 @@ func aggregateTrades(receipt Receipt, legs []swapLeg, targets map[string]struct{
 		group.tokenTotal.Add(group.tokenTotal, tokenAmount)
 		if !group.mixedQuote {
 			group.quoteTotal.Add(group.quoteTotal, quoteAmount)
+		}
+	}
+	for _, leg := range legs {
+		if _, exists := targets[leg.tokenOut.Address]; exists {
+			add(leg, leg.tokenOut.Address, EventBuy, leg.tokenIn.Address, leg.amountOut, leg.amountIn)
+		}
+		if _, exists := targets[leg.tokenIn.Address]; exists {
+			add(leg, leg.tokenIn.Address, EventSell, leg.tokenOut.Address, leg.amountIn, leg.amountOut)
 		}
 	}
 
@@ -91,6 +82,24 @@ func aggregateTrades(receipt Receipt, legs []swapLeg, targets map[string]struct{
 		pools := map[string]struct{}{first.pool.PoolKey: {}}
 		indices := make([]uint64, 0, len(group.legs))
 		for _, leg := range group.legs {
+			tokenAmount, quoteAmount := leg.amountOut, leg.amountIn
+			quote := leg.tokenIn.Address
+			if group.direction == EventSell {
+				tokenAmount, quoteAmount = leg.amountIn, leg.amountOut
+				quote = leg.tokenOut.Address
+			}
+			wallet := receipt.From
+			if wallet == "" {
+				wallet = leg.sender
+			}
+			event.TradeLegs = append(event.TradeLegs, TradeLeg{
+				PoolID: leg.pool.ID, PoolKey: leg.pool.PoolKey, LogIndex: leg.log.LogIndex,
+				Protocol: leg.pool.Protocol, Version: leg.pool.Version, Adapter: leg.pool.Adapter,
+				QuoteAddress: quote, TokenAmountRaw: tokenAmount.String(), QuoteAmountRaw: quoteAmount.String(),
+				Amount0DeltaRaw: leg.amount0.String(), Amount1DeltaRaw: leg.amount1.String(),
+				WalletAddress: wallet, RecipientAddress: leg.recipient,
+				Metadata: map[string]string{},
+			})
 			protocols[leg.pool.Protocol] = struct{}{}
 			pools[leg.pool.PoolKey] = struct{}{}
 			indices = append(indices, leg.log.LogIndex)

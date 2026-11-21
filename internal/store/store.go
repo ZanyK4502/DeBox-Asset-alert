@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -50,6 +51,7 @@ var (
 	ErrPermanentEntitlement        = errors.New("permanent plan does not require payment")
 	ErrPoolRequired                = errors.New("a PostgreSQL pool is required for this operation")
 	ErrRuleLimitReached            = errors.New("watch rule limit reached")
+	ErrInteractionRuleLimitReached = errors.New("address interaction rule limit reached")
 	ErrRuleTypeDenied              = errors.New("watch rule type is not allowed")
 	ErrStageDeliveryRequired       = errors.New("watch rule is not configured for stage delivery")
 	ErrStageNotificationsDenied    = errors.New("stage notifications are not allowed")
@@ -66,13 +68,47 @@ type DBTX interface {
 }
 
 type Store struct {
-	db   DBTX
-	pool *pgxpool.Pool
+	db                  DBTX
+	pool                *pgxpool.Pool
+	taskLocks           *marketTaskLockPool
+	resourceCapacity    *ResourceCapacityPolicy
+	marketScopePolicies map[string]QuotaPolicy
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
+type openSettings struct {
+	marketTaskLockConnections int32
+	resourceCapacity          *ResourceCapacityPolicy
+	marketScopePolicies       map[string]QuotaPolicy
+}
+
+type OpenOption func(*openSettings)
+
+// WithMarketTaskLockConnections bounds the separate pool for long-lived
+// session locks. Task queries continue to use the original query pool.
+func WithMarketTaskLockConnections(limit int32) OpenOption {
+	return func(settings *openSettings) { settings.marketTaskLockConnections = limit }
+}
+
+func Open(ctx context.Context, databaseURL string, options ...OpenOption) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, errors.New("DATABASE_URL is required")
+	}
+	settings := openSettings{marketTaskLockConnections: 8}
+	for _, option := range options {
+		if option != nil {
+			option(&settings)
+		}
+	}
+	if settings.marketTaskLockConnections < 1 || settings.marketTaskLockConnections > 16 {
+		return nil, errors.New("market task lock connections must be between 1 and 16")
+	}
+	if settings.resourceCapacity != nil {
+		if err := validateResourceCapacityPolicy(*settings.resourceCapacity); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateMarketScopePolicies(settings.marketScopePolicies); err != nil {
+		return nil, err
 	}
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -86,7 +122,12 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
-	return &Store{db: pool, pool: pool}, nil
+	locks, err := newMarketTaskLockPool(ctx, cfg, settings.marketTaskLockConnections)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{db: pool, pool: pool, taskLocks: locks, resourceCapacity: settings.resourceCapacity, marketScopePolicies: settings.marketScopePolicies}, nil
 }
 
 func newWithDB(db DBTX) *Store {
@@ -94,6 +135,9 @@ func newWithDB(db DBTX) *Store {
 }
 
 func (s *Store) Close() {
+	if s.taskLocks != nil {
+		s.taskLocks.Close()
+	}
 	if s.pool != nil {
 		s.pool.Close()
 	}
@@ -111,9 +155,12 @@ func withTxValue[T any](ctx context.Context, db DBTX, fn func(DBTX) (T, error)) 
 	if err != nil {
 		return value, fmt.Errorf("begin transaction: %w", err)
 	}
+	committed := false
 	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
+		if !committed {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+			defer cancel()
+			_ = tx.Rollback(cleanupCtx)
 		}
 	}()
 
@@ -124,6 +171,7 @@ func withTxValue[T any](ctx context.Context, db DBTX, fn func(DBTX) (T, error)) 
 	if err = tx.Commit(ctx); err != nil {
 		return value, fmt.Errorf("commit transaction: %w", err)
 	}
+	committed = true
 	return value, nil
 }
 

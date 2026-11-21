@@ -10,14 +10,17 @@ import (
 const stageRecentEventLimit = 5
 
 type RecordStageTriggerParams struct {
-	WatchRuleID   int64
-	DeBoxUserID   string
-	PreviousValue *string
-	CurrentValue  *string
-	Note          string
-	TokenSymbol   string
-	EventKey      string
-	OccurredAt    *time.Time
+	WatchRuleID      int64
+	DeBoxUserID      string
+	PreviousValue    *string
+	CurrentValue     *string
+	Note             string
+	TokenSymbol      string
+	EventKey         string
+	OccurredAt       *time.Time
+	SourceOccurredAt *time.Time
+	SourceTimeBasis  string
+	ReadObservedAt   *time.Time
 }
 
 type stageRuleConfiguration struct {
@@ -38,11 +41,13 @@ type stageRuleConfiguration struct {
 }
 
 type stageEventValue struct {
-	PreviousValue *string   `db:"previous_value"`
-	CurrentValue  *string   `db:"current_value"`
-	TokenSymbol   string    `db:"token_symbol"`
-	Note          string    `db:"note"`
-	OccurredAt    time.Time `db:"occurred_at"`
+	PreviousValue    *string   `db:"previous_value"`
+	CurrentValue     *string   `db:"current_value"`
+	TokenSymbol      string    `db:"token_symbol"`
+	Note             string    `db:"note"`
+	OccurredAt       time.Time `db:"occurred_at"`
+	SourceOccurredAt *string   `db:"source_occurred_at"`
+	SourceTimeBasis  string    `db:"source_time_basis"`
 }
 
 func (s *Store) RecordStageTrigger(
@@ -50,6 +55,9 @@ func (s *Store) RecordStageTrigger(
 	params RecordStageTriggerParams,
 ) (StageTriggerResult, error) {
 	result, err := withTxValue(ctx, s.db, func(tx DBTX) (StageTriggerResult, error) {
+		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
+			return StageTriggerResult{}, err
+		}
 		config, err := collectOne[stageRuleConfiguration](ctx, tx, `
 			SELECT id, debox_user_id, rule_type, delivery_mode, cycle_type,
 			       cycle_minutes, trigger_count_threshold,
@@ -77,15 +85,35 @@ func (s *Store) RecordStageTrigger(
 		if err := tx.QueryRow(ctx, "SELECT NOW()").Scan(&now); err != nil {
 			return StageTriggerResult{}, fmt.Errorf("get aggregation time: %w", err)
 		}
+		occurredAt := now
+		if params.OccurredAt != nil {
+			occurredAt = *params.OccurredAt
+		}
+		if params.SourceOccurredAt != nil {
+			occurredAt = *params.SourceOccurredAt
+		}
+		if reason, err := walletTriggerRecoverySkip(ctx, tx, config.ID, config.DeBoxUserID, params.EventKey, occurredAt); err != nil {
+			return StageTriggerResult{}, err
+		} else if reason != "" {
+			return StageTriggerResult{SkippedReason: reason}, nil
+		}
 		window, err := currentStageWindow(ctx, tx, config, now)
 		if err != nil {
 			return StageTriggerResult{}, err
 		}
 
-		details, err := json.Marshal(map[string]string{
+		detailValues := map[string]any{
 			"note":         truncate(params.Note, 1000),
 			"token_symbol": truncate(params.TokenSymbol, 32),
-		})
+		}
+		if params.ReadObservedAt != nil {
+			detailValues["read_observed_at"] = params.ReadObservedAt
+		}
+		if params.SourceOccurredAt != nil {
+			detailValues["source_occurred_at"] = params.SourceOccurredAt
+			detailValues["source_time_basis"] = params.SourceTimeBasis
+		}
+		details, err := json.Marshal(detailValues)
 		if err != nil {
 			return StageTriggerResult{}, fmt.Errorf("encode stage trigger details: %w", err)
 		}
@@ -176,22 +204,29 @@ func (s *Store) RecordStageTrigger(
 				current_value,
 				COALESCE(details->>'token_symbol', '') AS token_symbol,
 				COALESCE(details->>'note', '') AS note,
+				details->>'source_occurred_at' AS source_occurred_at,
+				COALESCE(details->>'source_time_basis','') AS source_time_basis,
 				COALESCE(occurred_at, detected_at, created_at) AS occurred_at
 			FROM rule_trigger_events
 			WHERE aggregation_window_id = $1
 			ORDER BY COALESCE(occurred_at, detected_at, created_at), id
+			LIMIT 2001
 		`, window.ID)
 		if err != nil {
 			return StageTriggerResult{}, fmt.Errorf("list stage events: %w", err)
 		}
+		if len(stageEvents) > 2000 {
+			return StageTriggerResult{}, ErrWalletNotificationCapacity
+		}
 		result.Events = make([]StageTriggerEvent, 0, len(stageEvents))
 		for _, event := range stageEvents {
 			result.Events = append(result.Events, StageTriggerEvent{
-				PreviousValue: event.PreviousValue,
-				CurrentValue:  event.CurrentValue,
-				TokenSymbol:   event.TokenSymbol,
-				Note:          event.Note,
-				OccurredAt:    event.OccurredAt,
+				PreviousValue:    event.PreviousValue,
+				CurrentValue:     event.CurrentValue,
+				TokenSymbol:      event.TokenSymbol,
+				Note:             event.Note,
+				OccurredAt:       event.OccurredAt,
+				SourceOccurredAt: walletSourceTime(event.SourceOccurredAt), SourceTimeBasis: event.SourceTimeBasis,
 			})
 		}
 		for index := len(stageEvents) - 1; index >= 0 && len(result.RecentNotes) < stageRecentEventLimit; index-- {
@@ -213,6 +248,10 @@ func currentStageWindow(
 	config stageRuleConfiguration,
 	now time.Time,
 ) (AggregationWindow, error) {
+	cutoff, err := notificationSourceCutoff(ctx, tx)
+	if err != nil {
+		return AggregationWindow{}, err
+	}
 	window, err := collectOptional[AggregationWindow](ctx, tx, `
 		SELECT `+aggregationWindowColumns+`
 		FROM aggregation_windows
@@ -221,6 +260,15 @@ func currentStageWindow(
 	`, config.ID)
 	if err != nil {
 		return AggregationWindow{}, fmt.Errorf("get open stage window: %w", err)
+	}
+	if window != nil {
+		closed, err := closeWalletWindowBeforeRecovery(ctx, tx, *window, cutoff, now)
+		if err != nil {
+			return AggregationWindow{}, err
+		}
+		if closed {
+			window = nil
+		}
 	}
 	if window != nil && !now.Before(window.EndsAt) {
 		if _, err := tx.Exec(ctx, `
@@ -237,6 +285,9 @@ func currentStageWindow(
 	}
 
 	startsAt, endsAt := stageWindowBounds(config, now)
+	if cutoff != nil && startsAt.Before(*cutoff) {
+		startsAt = *cutoff
+	}
 	created, err := collectOne[AggregationWindow](ctx, tx, `
 		INSERT INTO aggregation_windows (
 			debox_user_id, source_type, watch_rule_id, starts_at, ends_at

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdelivery"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/notificationdetail"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
@@ -30,6 +32,7 @@ type Repository interface {
 	ListMarketAddressLabels(context.Context, int64, string) ([]store.MarketAddressLabel, error)
 	CreateMarketEvent(context.Context, store.CreateMarketEventParams) (store.MarketEvent, bool, error)
 	CreateMarketRuleEvent(context.Context, store.CreateMarketRuleEventParams) (store.MarketRuleEvent, bool, error)
+	CreateMarketRuleEventAndEnqueue(context.Context, store.CreateMarketRuleEventParams) (store.MarketRuleEvent, bool, error)
 	UpdateMarketRuleState(context.Context, int64, json.RawMessage, bool) (store.MarketRule, error)
 	RecordMarketStageTrigger(context.Context, int64) (store.MarketStageWindow, bool, error)
 	RecordMarketCombinationTrigger(context.Context, store.RecordMarketCombinationTriggerParams) (int64, error)
@@ -39,6 +42,10 @@ type Repository interface {
 	ClaimMarketDeliveries(context.Context, int) ([]store.MarketDeliveryClaim, error)
 	LoadMarketDelivery(context.Context, store.MarketDeliveryClaim) (store.MarketNotificationDelivery, error)
 	CompleteMarketDelivery(context.Context, store.MarketDeliveryClaim, *string, string) error
+	GetMarketDeliveryPayload(context.Context, store.MarketDeliveryClaim) (*store.MarketDeliveryPayload, error)
+	PrepareMarketDelivery(context.Context, store.MarketDeliveryClaim, store.MarketDeliveryPayload) (store.MarketDeliveryPayload, error)
+	BeginMarketDeliverySend(context.Context, store.MarketDeliveryClaim) error
+	CompleteMarketDeliveryResult(context.Context, store.MarketDeliveryClaim, *string, *notificationdelivery.Failure) error
 	CreateNotificationDetailSnapshot(
 		context.Context,
 		store.CreateNotificationDetailSnapshotParams,
@@ -97,6 +104,10 @@ type NotificationService interface {
 	SendNotification(chatID, chatType, text string) (string, error)
 }
 
+type marketRuleEvaluationDeferrer interface {
+	DeferMarketRuleEvaluation(context.Context, int64, time.Duration) error
+}
+
 type ActionNotificationService interface {
 	SendNotificationWithAction(
 		chatID, chatType, text, actionText, actionURL string,
@@ -128,7 +139,10 @@ type Dependencies struct {
 }
 
 type Settings struct {
+	// nil retains legacy adapters; production supplies an explicit product scope.
+	MonitoringChainKeys   []string
 	Enabled               bool
+	TradeFactsEnabled     bool
 	Interval              time.Duration
 	Batch                 int
 	HolderRefreshInterval time.Duration
@@ -142,11 +156,13 @@ type Service struct {
 	settings             Settings
 	now                  func() time.Time
 	lastEntitlementCheck time.Time
-	lastHolderCheck      time.Time
 	publicAppURL         string
 }
 
 func New(dependencies Dependencies, settings Settings) *Service {
+	if settings.MonitoringChainKeys != nil {
+		settings.MonitoringChainKeys = append([]string{}, settings.MonitoringChainKeys...)
+	}
 	if settings.Interval <= 0 {
 		settings.Interval = DefaultInterval
 	}
@@ -175,16 +191,37 @@ func (service *Service) Enabled() bool {
 }
 
 type CycleResult struct {
-	RulesEvaluated          int64 `json:"rules_evaluated"`
-	TriggersCreated         int64 `json:"triggers_created"`
-	CombinationInputs       int64 `json:"combination_inputs"`
-	DeliveriesAttempted     int64 `json:"deliveries_attempted"`
-	DeliveriesSent          int64 `json:"deliveries_sent"`
-	DeliveriesFailed        int64 `json:"deliveries_failed"`
-	StaleDeliveriesReset    int64 `json:"stale_deliveries_reset"`
-	HolderProjectsRefreshed int64 `json:"holder_projects_refreshed"`
-	ExpiredUsersPaused      int64 `json:"expired_users_paused"`
+	LockSkipped                     bool                                 `json:"lock_skipped"`
+	RulesEvaluated                  int64                                `json:"rules_evaluated"`
+	RulesUnsupportedParameters      int64                                `json:"rules_unsupported_parameters"`
+	TradeRulesAwaitingActivation    int64                                `json:"trade_rules_awaiting_activation"`
+	TradeRulesIncompleteWindow      int64                                `json:"trade_rules_incomplete_window"`
+	TriggersCreated                 int64                                `json:"triggers_created"`
+	CombinationInputs               int64                                `json:"combination_inputs"`
+	DeliveriesClaimed               int64                                `json:"deliveries_claimed"`
+	DeliveriesAttempted             int64                                `json:"deliveries_attempted"`
+	DeliveriesSent                  int64                                `json:"deliveries_sent"`
+	DeliveriesFailed                int64                                `json:"deliveries_failed"`
+	StaleDeliveriesReset            int64                                `json:"stale_deliveries_reset"`
+	HolderProjectsRefreshed         int64                                `json:"holder_projects_refreshed"`
+	ExpiredUsersPaused              int64                                `json:"expired_users_paused"`
+	UnacknowledgedDeliveries        []MarketDeliveryAcknowledgementError `json:"unacknowledged_deliveries,omitempty"`
+	NotificationMaintenanceDeferred bool                                 `json:"notification_maintenance_deferred"`
+	NextDeliveryAt                  *time.Time                           `json:"next_delivery_at,omitempty"`
 }
+
+type MarketDeliveryAcknowledgementError struct {
+	Kind              string `json:"kind"`
+	SourceID          int64  `json:"source_id"`
+	LeaseToken        int64  `json:"lease_token"`
+	AcceptedMessageID string `json:"accepted_message_id"`
+	Cause             error  `json:"-"`
+}
+
+func (e *MarketDeliveryAcknowledgementError) Error() string {
+	return fmt.Sprintf("market delivery acknowledgement failed: kind=%s source=%d token=%d accepted_message_id=%s: %v", e.Kind, e.SourceID, e.LeaseToken, e.AcceptedMessageID, e.Cause)
+}
+func (e *MarketDeliveryAcknowledgementError) Unwrap() error { return e.Cause }
 
 func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 	if !service.Enabled() {
@@ -199,7 +236,7 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 			return CycleResult{}, err
 		}
 		if !acquired {
-			return CycleResult{}, nil
+			return CycleResult{LockSkipped: true}, nil
 		}
 		defer func() { _ = lock.Unlock(context.WithoutCancel(ctx)) }()
 	}
@@ -215,23 +252,20 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 		result.ExpiredUsersPaused = paused
 		service.lastEntitlementCheck = now
 	}
-	var holderRefreshErr error
-	if service.holders != nil &&
-		(service.lastHolderCheck.IsZero() ||
-			now.Sub(service.lastHolderCheck) >= time.Minute) {
-		service.lastHolderCheck = now
-		refreshed, err := service.RefreshDueHolders(ctx)
-		result.HolderProjectsRefreshed = refreshed
-		if err != nil {
-			holderRefreshErr = fmt.Errorf("refresh market holders: %w", err)
-		}
-	}
 	if err := service.repository.ReconcileMarketNotificationSources(ctx); err != nil {
-		return result, err
+		if marketDeliveryMaintenanceDeferred(err) {
+			result.NotificationMaintenanceDeferred = true
+		} else {
+			return result, err
+		}
 	}
 	recovered, err := service.repository.RecoverStaleMarketDeliveries(ctx, 5*time.Minute)
 	if err != nil {
-		return result, err
+		if marketDeliveryMaintenanceDeferred(err) {
+			result.NotificationMaintenanceDeferred = true
+		} else {
+			return result, err
+		}
 	}
 	result.StaleDeliveriesReset = recovered
 	combinationInputs, err := service.repository.ProcessPendingWatchCombinationTriggers(
@@ -239,7 +273,11 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 		service.settings.Batch,
 	)
 	if err != nil {
-		return result, err
+		if marketDeliveryMaintenanceDeferred(err) {
+			result.NotificationMaintenanceDeferred = true
+		} else {
+			return result, err
+		}
 	}
 	result.CombinationInputs += combinationInputs
 
@@ -247,10 +285,33 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 	if err != nil {
 		return result, err
 	}
+	var evaluationErr error
 	for _, rule := range rules {
 		created, err := service.evaluateRule(ctx, rule)
 		if err != nil {
-			return result, fmt.Errorf("evaluate market rule %d: %w", rule.ID, err)
+			if errors.Is(err, store.ErrMarketRuleEvaluationInactive) || errors.Is(err, store.ErrMarketRuleEvaluationStale) {
+				continue
+			}
+			if errors.Is(err, marketwindow.ErrUnsupported) {
+				result.RulesUnsupportedParameters++
+				continue
+			}
+			if errors.Is(err, ErrTradeRuleStateUninitialized) {
+				if deferErr := service.deferIncompleteRule(ctx, rule.ID); deferErr != nil {
+					return result, deferErr
+				}
+				result.TradeRulesAwaitingActivation++
+				continue
+			}
+			if errors.Is(err, ErrTradeWindowContextIncomplete) {
+				if deferErr := service.deferIncompleteRule(ctx, rule.ID); deferErr != nil {
+					return result, deferErr
+				}
+				result.TradeRulesIncompleteWindow++
+				continue
+			}
+			evaluationErr = errors.Join(evaluationErr, fmt.Errorf("evaluate market rule %d: %w", rule.ID, err))
+			continue
 		}
 		result.RulesEvaluated++
 		result.TriggersCreated += created
@@ -261,17 +322,73 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 		service.settings.Batch,
 	)
 	if err != nil {
-		return result, err
+		if marketDeliveryMaintenanceDeferred(err) {
+			result.NotificationMaintenanceDeferred = true
+		} else {
+			return result, err
+		}
 	}
 	result.CombinationInputs += combinationInputs
-	claims, err := service.repository.ClaimMarketDeliveries(ctx, service.settings.Batch)
-	if err != nil {
-		return result, err
+	return service.drainDeliveries(ctx, result, evaluationErr)
+}
+
+// RunDeliveryCycle only drains already-created notifications. It deliberately
+// does not evaluate rules, advance their progress, or run entitlement sweeps.
+func (service *Service) RunDeliveryCycle(ctx context.Context) (CycleResult, error) {
+	if !service.Enabled() {
+		return CycleResult{}, nil
 	}
-	for _, claim := range claims {
-		result.DeliveriesAttempted++
-		sent, err := service.deliver(ctx, claim)
+	if service.repository == nil || service.notifications == nil {
+		return CycleResult{}, errors.New("market rule engine dependencies are incomplete")
+	}
+	if service.tryLock != nil {
+		lock, acquired, err := service.tryLock(ctx, "rule-engine")
 		if err != nil {
+			return CycleResult{}, err
+		}
+		if !acquired {
+			return CycleResult{LockSkipped: true}, nil
+		}
+		defer func() { _ = lock.Unlock(context.WithoutCancel(ctx)) }()
+	}
+	return service.drainDeliveries(ctx, CycleResult{}, nil)
+}
+
+func (service *Service) drainDeliveries(ctx context.Context, result CycleResult, evaluationErr error) (CycleResult, error) {
+	if at := notificationdelivery.NextAdmissionAt(service.notifications); at.After(service.now()) {
+		result.NextDeliveryAt = &at
+		return result, evaluationErr
+	}
+	drainCtx, cancelDrain := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelDrain()
+	for remaining := service.settings.Batch; remaining > 0 && drainCtx.Err() == nil; remaining-- {
+		claims, err := service.repository.ClaimMarketDeliveries(drainCtx, 1)
+		if err != nil {
+			if marketDeliveryMaintenanceDeferred(err) || drainCtx.Err() != nil {
+				result.NotificationMaintenanceDeferred = true
+				break
+			}
+			return result, err
+		}
+		if len(claims) == 0 {
+			break
+		}
+		claim := claims[0]
+		result.DeliveriesClaimed++
+		var retryAt time.Time
+		sent, attempted, err := service.deliverWithAttemptNext(drainCtx, claim, &retryAt)
+		if !retryAt.IsZero() && err == nil {
+			result.NextDeliveryAt = &retryAt
+			break
+		}
+		if attempted {
+			result.DeliveriesAttempted++
+		}
+		if err != nil {
+			var acknowledgement *MarketDeliveryAcknowledgementError
+			if errors.As(err, &acknowledgement) {
+				result.UnacknowledgedDeliveries = append(result.UnacknowledgedDeliveries, *acknowledgement)
+			}
 			result.DeliveriesFailed++
 			continue
 		}
@@ -279,13 +396,46 @@ func (service *Service) RunCycle(ctx context.Context) (CycleResult, error) {
 			result.DeliveriesSent++
 		}
 	}
-	return result, holderRefreshErr
+	return result, evaluationErr
+}
+
+func marketDeliveryMaintenanceDeferred(err error) bool {
+	return errors.Is(err, store.ErrMarketDeliveryBudget) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (service *Service) marketRuleNotificationSourceAfter(ctx context.Context, ruleID int64) (*time.Time, error) {
+	if repo, ok := service.repository.(interface {
+		GetMarketRuleNotificationSourceAfter(context.Context, int64) (*time.Time, error)
+	}); ok {
+		return repo.GetMarketRuleNotificationSourceAfter(ctx, ruleID)
+	}
+	return nil, nil
+}
+
+func (service *Service) marketRuleNotificationEventDecisions(ctx context.Context, ruleID int64, events []store.MarketEvent) (map[int64]bool, error) {
+	if repo, ok := service.repository.(interface {
+		ListMarketRuleNotificationEventDecisions(context.Context, int64, []int64) (map[int64]bool, error)
+	}); ok {
+		ids := make([]int64, 0, len(events))
+		for _, event := range events {
+			ids = append(ids, event.ID)
+		}
+		return repo.ListMarketRuleNotificationEventDecisions(ctx, ruleID, ids)
+	}
+	return nil, nil
 }
 
 func (service *Service) evaluateRule(
 	ctx context.Context,
 	rule store.MarketRule,
 ) (int64, error) {
+	if issues := marketwindow.RuntimeIssues(rule.RuleType, rule.WindowMinutes, rule.ThresholdValue); len(issues) > 0 {
+		return 0, fmt.Errorf("%w: %s", marketwindow.ErrUnsupported, issues[0].Message)
+	}
+	sourceAfter, err := service.marketRuleNotificationSourceAfter(ctx, rule.ID)
+	if err != nil {
+		return 0, err
+	}
 	project, err := service.repository.GetMarketProject(
 		ctx,
 		rule.MarketProjectID,
@@ -297,19 +447,39 @@ func (service *Service) evaluateRule(
 	if project == nil || project.Status != "active" {
 		return 0, nil
 	}
-	if repository, ok := service.repository.(multiChainRuleRepository); ok {
-		return service.evaluateMultiChainRule(ctx, repository, rule, *project)
+	if service.settings.TradeFactsEnabled && isTradeFactsRule(rule.RuleType) {
+		tradeRepository, ok := service.repository.(tradeFactsRepository)
+		if !ok {
+			return 0, errors.New("market trade facts repository is unavailable")
+		}
+		return service.evaluateTradeFactsRule(ctx, tradeRepository, rule, *project, sourceAfter)
 	}
-	snapshots, err := service.repository.ListMarketSnapshots(
-		ctx,
-		project.ID,
-		rule.DeBoxUserID,
-		1000,
-	)
+	if repository, ok := service.repository.(multiChainRuleRepository); ok {
+		return service.evaluateMultiChainRule(ctx, repository, rule, *project, sourceAfter)
+	}
+	if !service.marketChainAllowed(project.ChainKey, project.ChainID) {
+		return 0, nil
+	}
+	legacyPoolID := rule.MarketPoolID
+	if legacyPoolID == nil {
+		legacyPoolID = project.MainPoolID
+	}
+	snapshots, err := service.loadRuleSnapshots(ctx, rule, store.MarketRuleTarget{
+		ChainID: project.ChainID, TokenAddress: project.TokenAddress, MarketPoolID: legacyPoolID,
+	}, func(limit int) ([]store.MarketSnapshot, error) {
+		// Legacy adapters cannot filter a pool in SQL. Retain their original
+		// bounded read so another pool's latest row cannot hide this target.
+		// Store uses the indexed multi-chain target path below.
+		if legacyPoolID != nil {
+			limit = 1000
+		}
+		return service.repository.ListMarketSnapshots(ctx, project.ID, rule.DeBoxUserID, limit)
+	})
 	if err != nil {
 		return 0, err
 	}
 	var events []store.MarketEvent
+	var decisions map[int64]bool
 	if !isSnapshotRule(rule.RuleType) {
 		historicalEvents, err := service.repository.ListMarketEvents(
 			ctx,
@@ -330,8 +500,12 @@ func (service *Service) evaluateRule(
 			project.ID,
 			rule.DeBoxUserID,
 			state.LastEventID,
-			2000,
+			store.MarketRuleCurrentEventLimit,
 		)
+		if err != nil {
+			return 0, err
+		}
+		decisions, err = service.marketRuleNotificationEventDecisions(ctx, rule.ID, newEvents)
 		if err != nil {
 			return 0, err
 		}
@@ -360,107 +534,60 @@ func (service *Service) evaluateRule(
 		}
 	}
 	evaluation, err := Evaluate(EvaluationInput{
-		Rule:      rule,
-		Project:   *project,
-		Snapshots: snapshots,
-		Events:    events,
-		Holders:   holders,
-		Labels:    labels,
-		Now:       service.now(),
+		Rule:                       rule,
+		Project:                    *project,
+		Snapshots:                  snapshots,
+		Events:                     events,
+		Holders:                    holders,
+		Labels:                     labels,
+		Now:                        service.now(),
+		NotificationSourceAfter:    sourceAfter,
+		NotificationEventDecisions: decisions,
 	})
 	if err != nil {
 		return 0, err
 	}
 
 	var createdCount int64
-	for _, trigger := range evaluation.Triggers {
-		event := trigger.Event
-		if event == nil {
-			poolID := rule.MarketPoolID
-			if poolID == nil {
-				poolID = project.MainPoolID
-			}
-			rawPayload, _ := json.Marshal(map[string]any{
-				"rule_type": rule.RuleType,
-				"current":   trigger.CurrentValue,
-				"previous":  trigger.PreviousValue,
-			})
-			value, _, createErr := service.repository.CreateMarketEvent(
-				ctx,
-				store.CreateMarketEventParams{
-					MarketPoolID: poolID,
-					ChainKey:     project.ChainKey,
-					ChainID:      project.ChainID,
-					TokenAddress: project.TokenAddress,
-					EventType:    trigger.EventType,
-					EventKey:     trigger.EventKey,
-					PriceUSD:     snapshotPrice(snapshots),
-					Source:       "market_rule_engine",
-					Confidence:   "1.0000",
-					Confirmed:    true,
-					OccurredAt:   trigger.OccurredAt,
-					RawPayload:   rawPayload,
-					Metadata:     trigger.Details,
-				},
-			)
-			if createErr != nil {
-				return createdCount, createErr
-			}
-			event = &value
-		}
-		status := "pending"
-		if rule.RuleScope == "combination" {
-			status = "combined"
-		} else if rule.DeliveryMode == "stage" {
-			status = "staged"
-		}
-		ruleEvent, inserted, err := service.repository.CreateMarketRuleEvent(
-			ctx,
-			store.CreateMarketRuleEventParams{
-				MarketRuleID:       rule.ID,
-				MarketEventID:      event.ID,
-				TriggerKey:         trigger.EventKey,
-				PreviousValue:      trigger.PreviousValue,
-				CurrentValue:       trigger.CurrentValue,
-				Note:               trigger.Note,
-				Details:            trigger.Details,
-				NotificationStatus: status,
-			},
-		)
+	writeRule := rule
+	if writeRule.MarketPoolID == nil {
+		writeRule.MarketPoolID = project.MainPoolID
+	}
+	err = service.withEvaluationWrite(ctx, rule.ID, sourceAfter, func(writer *Service) error {
+		created, err := writer.persistEvaluation(ctx, writeRule, *project, snapshots, evaluation)
 		if err != nil {
-			return createdCount, err
+			return err
 		}
-		if !inserted {
-			continue
-		}
-		createdCount++
-		if status == "staged" {
-			if _, _, err := service.repository.RecordMarketStageTrigger(ctx, ruleEvent.ID); err != nil {
-				return createdCount, err
+		createdCount = created
+		_, err = writer.repository.UpdateMarketRuleState(ctx, rule.ID, evaluation.State, created > 0)
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	return createdCount, nil
+}
+
+// Real Store adapters use a short database transaction. In-memory repositories
+// used by pure service tests retain their existing deterministic behavior.
+func (service *Service) withEvaluationWrite(ctx context.Context, ruleID int64, expectedSourceAfter *time.Time, write func(*Service) error) error {
+	if repo, ok := service.repository.(interface {
+		WithMarketRuleEvaluationWrite(context.Context, int64, func(*store.Store) error) error
+	}); ok {
+		return repo.WithMarketRuleEvaluationWrite(ctx, ruleID, func(txStore *store.Store) error {
+			actual, err := txStore.GetMarketRuleNotificationSourceAfter(ctx, ruleID)
+			if err != nil {
+				return err
 			}
-		}
-		if _, err := service.repository.RecordMarketCombinationTrigger(
-			ctx,
-			store.RecordMarketCombinationTriggerParams{
-				SourceType:        "market",
-				MarketRuleEventID: &ruleEvent.ID,
-				OccurredAt:        trigger.OccurredAt,
-				Note:              trigger.Note,
-			},
-		); err != nil {
-			return createdCount, err
-		}
+			if (actual == nil) != (expectedSourceAfter == nil) || (actual != nil && !actual.Equal(*expectedSourceAfter)) {
+				return store.ErrMarketRuleEvaluationStale
+			}
+			writer := *service
+			writer.repository = txStore
+			return write(&writer)
+		})
 	}
-	if err := service.persistSuppressedTriggers(ctx, rule, evaluation.Suppressed); err != nil {
-		return createdCount, err
-	}
-	_, err = service.repository.UpdateMarketRuleState(
-		ctx,
-		rule.ID,
-		evaluation.State,
-		createdCount > 0,
-	)
-	return createdCount, err
+	return write(service)
 }
 
 func (service *Service) evaluateMultiChainRule(
@@ -468,6 +595,7 @@ func (service *Service) evaluateMultiChainRule(
 	repository multiChainRuleRepository,
 	rule store.MarketRule,
 	project store.MarketProject,
+	sourceAfter *time.Time,
 ) (int64, error) {
 	targets, err := repository.ListMarketRuleTargets(ctx, rule, project)
 	if err != nil {
@@ -476,6 +604,9 @@ func (service *Service) evaluateMultiChainRule(
 	var total int64
 	projectLastTriggeredAt := rule.LastTriggeredAt
 	for _, unresolved := range targets {
+		if !service.marketChainAllowed(unresolved.ChainKey, unresolved.ChainID) {
+			continue
+		}
 		target, exists, err := repository.LoadMarketRuleTargetState(
 			ctx, rule.ID, unresolved,
 		)
@@ -497,9 +628,12 @@ func (service *Service) evaluateMultiChainRule(
 		targetProject.TokenName = target.TokenName
 		targetProject.TokenSymbol = target.TokenSymbol
 		targetProject.TokenDecimals = target.TokenDecimals
+		targetProject.TotalSupplyRaw = target.TotalSupplyRaw
 		targetProject.MainPoolID = target.MarketPoolID
 
-		snapshots, err := repository.ListMarketSnapshotsForTarget(ctx, target, 1000)
+		snapshots, err := service.loadRuleSnapshots(ctx, targetRule, target, func(limit int) ([]store.MarketSnapshot, error) {
+			return repository.ListMarketSnapshotsForTarget(ctx, target, limit)
+		})
 		if err != nil {
 			return total, err
 		}
@@ -508,6 +642,7 @@ func (service *Service) evaluateMultiChainRule(
 			_ = json.Unmarshal(targetRule.State, &state)
 		}
 		var events []store.MarketEvent
+		var decisions map[int64]bool
 		if !isSnapshotRule(targetRule.RuleType) {
 			if !exists {
 				latest, err := repository.ListMarketEventsForTarget(
@@ -528,8 +663,12 @@ func (service *Service) evaluateMultiChainRule(
 					return total, err
 				}
 				current, err := repository.ListMarketEventsForTarget(
-					ctx, target, state.LastEventID, true, 2000,
+					ctx, target, state.LastEventID, true, store.MarketRuleCurrentEventLimit,
 				)
+				if err != nil {
+					return total, err
+				}
+				decisions, err = service.marketRuleNotificationEventDecisions(ctx, rule.ID, current)
 				if err != nil {
 					return total, err
 				}
@@ -551,20 +690,36 @@ func (service *Service) evaluateMultiChainRule(
 			}
 		}
 		evaluation, err := Evaluate(EvaluationInput{
-			Rule:      targetRule,
-			Project:   targetProject,
-			Snapshots: snapshots,
-			Events:    events,
-			Holders:   holders,
-			Labels:    labels,
-			Now:       service.now(),
+			Rule:                       targetRule,
+			Project:                    targetProject,
+			Snapshots:                  snapshots,
+			Events:                     events,
+			Holders:                    holders,
+			Labels:                     labels,
+			Now:                        service.now(),
+			NotificationSourceAfter:    sourceAfter,
+			NotificationEventDecisions: decisions,
 		})
 		if err != nil {
 			return total, err
 		}
-		created, err := service.persistEvaluation(
-			ctx, targetRule, targetProject, snapshots, evaluation,
-		)
+		var created int64
+		err = service.withEvaluationWrite(ctx, rule.ID, sourceAfter, func(writer *Service) error {
+			count, err := writer.persistEvaluation(ctx, targetRule, targetProject, snapshots, evaluation)
+			if err != nil {
+				return err
+			}
+			created = count
+			targetWriter, ok := writer.repository.(multiChainRuleRepository)
+			if !ok {
+				return errors.New("market target persistence repository is unavailable")
+			}
+			if err := targetWriter.UpdateMarketRuleTargetState(ctx, rule.ID, target, evaluation.State, count > 0); err != nil {
+				return err
+			}
+			_, err = writer.repository.UpdateMarketRuleState(ctx, rule.ID, rule.State, count > 0)
+			return err
+		})
 		if err != nil {
 			return total, err
 		}
@@ -573,14 +728,9 @@ func (service *Service) evaluateMultiChainRule(
 			triggeredAt := service.now()
 			projectLastTriggeredAt = &triggeredAt
 		}
-		if err := repository.UpdateMarketRuleTargetState(
-			ctx, rule.ID, target, evaluation.State, created > 0,
-		); err != nil {
-			return total, err
-		}
 	}
 	_, err = service.repository.UpdateMarketRuleState(
-		ctx, rule.ID, rule.State, total > 0,
+		ctx, rule.ID, rule.State, false,
 	)
 	return total, err
 }
@@ -625,7 +775,7 @@ func (service *Service) persistEvaluation(
 		} else if rule.DeliveryMode == "stage" {
 			status = "staged"
 		}
-		ruleEvent, inserted, err := service.repository.CreateMarketRuleEvent(
+		ruleEvent, inserted, err := service.repository.CreateMarketRuleEventAndEnqueue(
 			ctx,
 			store.CreateMarketRuleEventParams{
 				MarketRuleID: rule.ID, MarketEventID: event.ID,
@@ -639,23 +789,14 @@ func (service *Service) persistEvaluation(
 		if err != nil {
 			return createdCount, err
 		}
-		if !inserted {
-			continue
+		if inserted && ruleEvent.NotificationStatus == "skipped" && ruleEvent.NotificationError == "source window expired or precedes recorded recovery cutoff" {
+			// The stage-age boundary may pass between pure evaluation and the
+			// short write transaction. Re-evaluate the entire batch rather than
+			// commit a cursor after its discarded event consumed private cooldown.
+			return 0, store.ErrMarketRuleEvaluationStale
 		}
-		createdCount++
-		if status == "staged" {
-			if _, _, err := service.repository.RecordMarketStageTrigger(ctx, ruleEvent.ID); err != nil {
-				return createdCount, err
-			}
-		}
-		if _, err := service.repository.RecordMarketCombinationTrigger(
-			ctx,
-			store.RecordMarketCombinationTriggerParams{
-				SourceType: "market", MarketRuleEventID: &ruleEvent.ID,
-				OccurredAt: trigger.OccurredAt, Note: trigger.Note,
-			},
-		); err != nil {
-			return createdCount, err
+		if inserted && ruleEvent.NotificationStatus != "skipped" {
+			createdCount++
 		}
 	}
 	if err := service.persistSuppressedTriggers(ctx, rule, evaluation.Suppressed); err != nil {
@@ -734,35 +875,141 @@ func snapshotPrice(snapshots []store.MarketSnapshot) *string {
 	return snapshots[0].PriceUSD
 }
 
-func (service *Service) deliver(
-	ctx context.Context,
-	claim store.MarketDeliveryClaim,
-) (bool, error) {
-	delivery, err := service.repository.LoadMarketDelivery(ctx, claim)
-	if err != nil {
-		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, err.Error())
-		return false, err
+func (service *Service) deliver(ctx context.Context, claim store.MarketDeliveryClaim) (bool, error) {
+	sent, _, err := service.deliverWithAttempt(ctx, claim)
+	return sent, err
+}
+
+func (service *Service) deliverWithAttempt(ctx context.Context, claim store.MarketDeliveryClaim) (bool, bool, error) {
+	return service.deliverWithAttemptNext(ctx, claim, nil)
+}
+
+func (service *Service) deliverWithAttemptNext(ctx context.Context, claim store.MarketDeliveryClaim, next *time.Time) (bool, bool, error) {
+	failBeforeSend := func(err error) error {
+		kind := notificationdelivery.Retryable
+		if errors.Is(err, notificationdelivery.ErrCapacity) {
+			kind = notificationdelivery.Rejected
+		}
+		failure := &notificationdelivery.Failure{Kind: kind, Code: "market_delivery_preparation_failed", Cause: err}
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, service.repository.CompleteMarketDeliveryResult(saveCtx, claim, nil, failure))
 	}
-	text := MarketNotificationText(delivery)
-	snapshot, err := service.createMarketNotificationSnapshot(ctx, delivery, text)
+	frozen, err := service.repository.GetMarketDeliveryPayload(ctx, claim)
 	if err != nil {
-		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, err.Error())
-		return false, err
+		if errors.Is(err, store.ErrMarketDeliveryLeaseLost) {
+			return false, false, err
+		}
+		return false, false, failBeforeSend(err)
 	}
-	messageID, sendErr := service.sendMarketNotification(delivery, text, snapshot.PublicID)
+	if frozen == nil {
+		delivery, err := service.repository.LoadMarketDelivery(ctx, claim)
+		if err != nil {
+			return false, false, failBeforeSend(err)
+		}
+		text := marketNotificationTextAt(delivery, service.now())
+		snapshot, err := service.createMarketNotificationSnapshot(ctx, delivery, text)
+		if err != nil {
+			return false, false, failBeforeSend(err)
+		}
+		payload := store.MarketDeliveryPayload{SnapshotID: snapshot.ID, SnapshotPublicID: snapshot.PublicID,
+			Payload: notificationdelivery.Payload{ChatID: snapshot.NotificationChatID, ChatType: snapshot.NotificationChatType, Text: snapshot.NotificationText}}
+		actionURL := notificationdetail.NotificationURL(service.publicAppURL, snapshot.PublicID)
+		if _, ok := service.notifications.(ActionNotificationService); ok && actionURL != "" {
+			payload.Payload.ActionURL = actionURL
+			english := notificationLanguage(snapshot.NotificationLanguage) == "en"
+			switch claim.Kind {
+			case "stage":
+				payload.Payload.ActionText = "查看全部事件"
+				if english {
+					payload.Payload.ActionText = "View all events"
+				}
+			case "combination":
+				payload.Payload.ActionText = "查看完整分析"
+				if english {
+					payload.Payload.ActionText = "View full analysis"
+				}
+			default:
+				payload.Payload.ActionText = "查看详情"
+				if english {
+					payload.Payload.ActionText = "View details"
+				}
+			}
+		}
+		value, err := service.repository.PrepareMarketDelivery(ctx, claim, payload)
+		if err != nil {
+			return false, false, failBeforeSend(err)
+		}
+		frozen = &value
+	}
+	if err := ctx.Err(); err != nil {
+		return false, false, failBeforeSend(err)
+	}
+	sendCtx, reservation, err := notificationdelivery.Acquire(ctx, service.notifications)
+	if err != nil {
+		if retryAt, waiting := notificationdelivery.AdmissionRetryAt(err); waiting {
+			if next != nil {
+				*next = retryAt
+			}
+			return false, false, service.deferMarketAdmission(ctx, claim, retryAt, false)
+		}
+		return false, false, failBeforeSend(err)
+	}
+	if reservation != nil {
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			defer cancel()
+			_ = reservation.Release(cleanupCtx)
+		}()
+	}
+	if err := service.repository.BeginMarketDeliverySend(ctx, claim); err != nil {
+		if errors.Is(err, store.ErrMarketDeliveryLeaseLost) {
+			return false, false, err
+		}
+		return false, false, failBeforeSend(err)
+	}
+	messageID, sendErr := notificationdelivery.Send(sendCtx, service.notifications, frozen.Payload)
+	if retryAt, waiting := notificationdelivery.AdmissionRetryAt(sendErr); waiting {
+		if next != nil {
+			*next = retryAt
+		}
+		// The innermost transport gate proves that Do was never called. Only
+		// this typed result may refund the just-started durable attempt.
+		return false, false, service.deferMarketAdmission(ctx, claim, retryAt, true)
+	}
+	attempted := true
+	var failure *notificationdelivery.Failure
 	if sendErr != nil {
-		_ = service.repository.CompleteMarketDelivery(ctx, claim, nil, sendErr.Error())
-		return false, sendErr
+		value := notificationdelivery.Classify(sendErr)
+		failure = &value
+		if value.Code == "cancelled_before_send" || value.Code == "invalid_frozen_payload" {
+			attempted = false
+		}
 	}
-	if err := service.repository.CompleteMarketDelivery(
-		ctx,
-		claim,
-		&messageID,
-		"",
-	); err != nil {
-		return false, err
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := service.repository.CompleteMarketDeliveryResult(saveCtx, claim, &messageID, failure); err != nil {
+		if sendErr == nil && strings.TrimSpace(messageID) != "" {
+			return false, attempted, &MarketDeliveryAcknowledgementError{Kind: claim.Kind, SourceID: claim.ID, LeaseToken: claim.LeaseToken, AcceptedMessageID: messageID, Cause: err}
+		}
+		return false, attempted, errors.Join(sendErr, err)
 	}
-	return true, nil
+	if sendErr != nil {
+		return false, attempted, sendErr
+	}
+	return true, attempted, nil
+}
+
+func (service *Service) deferMarketAdmission(ctx context.Context, claim store.MarketDeliveryClaim, retryAt time.Time, sendStarted bool) error {
+	repository, ok := service.repository.(interface {
+		DeferMarketDeliveryAdmission(context.Context, store.MarketDeliveryClaim, time.Time, bool) error
+	})
+	if !ok {
+		return errors.New("market admission deferral repository is unavailable")
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	return repository.DeferMarketDeliveryAdmission(cleanupCtx, claim, retryAt, sendStarted)
 }
 
 func (service *Service) sendMarketNotification(
@@ -805,7 +1052,13 @@ func (service *Service) sendMarketNotification(
 }
 
 type Runner struct {
-	service *Service
+	service                        *Service
+	nextNormalDue                  time.Time
+	lastActivationWarning          time.Time
+	lastActivationCount            int64
+	lastWindowWarning              time.Time
+	lastWindowCount                int64
+	lastDeliveryMaintenanceWarning time.Time
 }
 
 func NewRunner(service *Service) *Runner {
@@ -819,12 +1072,29 @@ func (runner *Runner) Run(ctx context.Context, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	run := func() {
-		result, err := runner.service.RunCycle(ctx)
+	run := func() time.Duration {
+		now := time.Now()
+		normal := runner.nextNormalDue.IsZero() || !now.Before(runner.nextNormalDue)
+		var result CycleResult
+		var err error
+		if normal {
+			runner.nextNormalDue = now.Add(runner.service.settings.Interval)
+			result, err = runner.service.RunCycle(ctx)
+		} else {
+			result, err = runner.service.RunDeliveryCycle(ctx)
+		}
+		for _, accepted := range result.UnacknowledgedDeliveries {
+			logger.Warn("market notification accepted but database acknowledgement failed", "kind", accepted.Kind, "source_id", accepted.SourceID, "claim_token", accepted.LeaseToken, "accepted_message_id", accepted.AcceptedMessageID)
+		}
+		if result.NotificationMaintenanceDeferred && (runner.lastDeliveryMaintenanceWarning.IsZero() || time.Since(runner.lastDeliveryMaintenanceWarning) >= time.Minute) {
+			logger.Warn("market notification maintenance deferred after database budget; remaining sources will resume next cycle")
+			runner.lastDeliveryMaintenanceWarning = time.Now()
+		}
 		if err != nil {
 			logger.Error("market rule cycle failed", "error", err)
-			return
 		}
+		runner.reportTradeActivation(logger, result, time.Now())
+		runner.reportTradeWindow(logger, result, time.Now())
 		if result.TriggersCreated > 0 || result.DeliveriesAttempted > 0 {
 			logger.Info(
 				"market rule cycle completed",
@@ -834,16 +1104,76 @@ func (runner *Runner) Run(ctx context.Context, logger *slog.Logger) {
 				"failed", result.DeliveriesFailed,
 			)
 		}
+		return runner.nextDelay(ctx, result, err, time.Now())
 	}
-	run()
-	ticker := time.NewTicker(runner.service.settings.Interval)
-	defer ticker.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		timer := time.NewTimer(run())
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-			run()
+		case <-timer.C:
 		}
 	}
+}
+
+func (runner *Runner) nextDelay(ctx context.Context, result CycleResult, cycleErr error, now time.Time) time.Duration {
+	at := runner.nextNormalDue
+	if cycleErr == nil && !result.LockSkipped {
+		if repository, ok := runner.service.repository.(interface {
+			NextMarketDeliveryAt(context.Context) (*time.Time, error)
+		}); ok {
+			next, err := repository.NextMarketDeliveryAt(ctx)
+			if err == nil && next != nil {
+				candidate := *next
+				if result.NextDeliveryAt != nil && result.NextDeliveryAt.After(candidate) {
+					candidate = *result.NextDeliveryAt
+				}
+				if hint := notificationdelivery.NextAdmissionAt(runner.service.notifications); hint.After(candidate) {
+					candidate = hint
+				}
+				if !candidate.After(now) && (result.NotificationMaintenanceDeferred || result.DeliveriesSent == 0 && result.DeliveriesFailed > 0) {
+					candidate = now.Add(min(5*time.Second, runner.service.settings.Interval))
+				}
+				if candidate.Before(at) {
+					at = candidate
+				}
+			}
+		}
+	}
+	minimum := min(time.Second, runner.service.settings.Interval)
+	return max(minimum, at.Sub(now))
+}
+
+func (runner *Runner) reportTradeActivation(logger *slog.Logger, result CycleResult, now time.Time) {
+	if result.LockSkipped {
+		return
+	}
+	count := result.TradeRulesAwaitingActivation
+	changed := count != runner.lastActivationCount
+	if count > 0 && (changed || runner.lastActivationWarning.IsZero() || now.Sub(runner.lastActivationWarning) >= time.Minute) {
+		logger.Warn("market trade rules await explicit activation", "awaiting_activation", count)
+		runner.lastActivationWarning = now
+	} else if changed && count == 0 {
+		logger.Info("market trade activation backlog cleared")
+	}
+	runner.lastActivationCount = count
+}
+
+func (runner *Runner) reportTradeWindow(logger *slog.Logger, result CycleResult, now time.Time) {
+	if result.LockSkipped {
+		return
+	}
+	count := result.TradeRulesIncompleteWindow
+	changed := count != runner.lastWindowCount
+	if count > 0 && (changed || runner.lastWindowWarning.IsZero() || now.Sub(runner.lastWindowWarning) >= time.Minute) {
+		logger.Warn("market trade rules require complete window context", "incomplete_window", count)
+		runner.lastWindowWarning = now
+	} else if changed && count == 0 {
+		logger.Info("market trade window context backlog cleared")
+	}
+	runner.lastWindowCount = count
 }

@@ -130,7 +130,7 @@ func (s *Service) handleMessage(ctx context.Context, message *boxbotapi.Message)
 	}
 	if s.deps.Settings.PrivateStartMaintenance && text == "/start" &&
 		strings.EqualFold(strings.TrimSpace(message.Chat.Type), "private") {
-		response := boxbotapi.NewMessage(message.Chat.ID, message.Chat.Type, "服务升级中 2026.11.16 恢复")
+		response := boxbotapi.NewMessage(message.Chat.ID, message.Chat.Type, "服务维护中，具体进度咨询：\nhttps://m.debox.pro/card?id=trxuvgm9&invite_code=trxuvgm9")
 		_, err := s.deps.Client.Send(response)
 		return err
 	}

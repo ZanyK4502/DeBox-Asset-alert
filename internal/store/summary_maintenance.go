@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DisableDailySummarySettings changes only enabled flags on the owner's exact
@@ -42,6 +43,9 @@ func (s *Store) DisableDailySummarySettings(
 			  )
 		`, subscriptionID, deboxUserID); err != nil {
 			return Subscription{}, fmt.Errorf("disable existing daily summary targets: %w", err)
+		}
+		if _, err := cancelInvalidDailySummaryDispatches(ctx, tx, deboxUserID, time.Now().UTC()); err != nil {
+			return Subscription{}, fmt.Errorf("invalidate stopped daily summaries: %w", err)
 		}
 		return subscription, nil
 	})

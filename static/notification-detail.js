@@ -327,6 +327,12 @@
     const event = object(delivery.event);
     const pool = object(delivery.pool);
     const snapshot = object(delivery.snapshot);
+    const hasQuoteEvidence = Object.prototype.hasOwnProperty.call(snapshot, "quote_quality");
+    const quote = object(snapshot.quote_quality);
+    const quoteTimes = hasQuoteEvidence ? [
+      present(quote.fetched_at) ? t("marketQuoteFetchedTime", { time: dateText(quote.fetched_at, options.language) }) : "",
+      present(quote.source_timestamp) ? t("marketQuoteSourceTime", { time: dateText(quote.source_timestamp, options.language) }) : "",
+    ].filter(present) : [];
     const currentMetricValue = localizedValue(
       delivery.current_value ?? detail.actual_value,
       options,
@@ -344,7 +350,9 @@
           [t("detailRequiredCount"), object(delivery.rule).trigger_count_threshold],
         ] : []),
         [t("marketPrice"), event.price_usd || snapshot.price_usd],
-        [t("marketLiquidity"), snapshot.liquidity_usd || pool.liquidity_usd],
+        [t("marketLiquidity"), hasQuoteEvidence
+          ? (present(snapshot.liquidity_usd) ? snapshot.liquidity_usd : t("detailValueUnknown"))
+          : snapshot.liquidity_usd || pool.liquidity_usd],
       ]),
       section(t("detailContext"), facts([
         [t("marketToken"), [project.token_name, project.token_symbol].filter(present).join(" · ")],
@@ -354,6 +362,11 @@
         [t("detailPeriod"), present(delivery.starts_at) && present(delivery.ends_at)
           ? `${dateText(delivery.starts_at, options.language)} – ${dateText(delivery.ends_at, options.language)}`
           : ""],
+        ...(hasQuoteEvidence ? [[t("detailHistoricalQuote"), [
+          ...quoteTimes,
+          ...(!quoteTimes.length ? [t("marketQuoteUnknown")] : []),
+          t("detailHistoricalQuoteReference"),
+        ].join(" · ")]] : []),
       ])),
       section(t("detailTimeline"), marketTimeline(events, delivery, options)),
     ].join("");
@@ -394,10 +407,35 @@
     ].join("");
   }
 
+  function summaryTradeValuation(record, prefix = "") {
+    const count = (field) => {
+      const raw = record[`${prefix}${field}`];
+      const value = present(raw) ? Number(raw) : NaN;
+      return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    };
+    const buys = count("buy_count"), sells = count("sell_count");
+    const valuedBuys = count("buy_valued_count"), valuedSells = count("sell_valued_count");
+    const total = buys === null || sells === null ? null : buys + sells;
+    const valued = valuedBuys === null || valuedSells === null ? null : valuedBuys + valuedSells;
+    if (!Number.isSafeInteger(total) || !Number.isSafeInteger(valued) || valuedBuys > buys || valuedSells > sells) {
+      return { kind: "unknown", total, valued: null };
+    }
+    return { kind: valued === total ? "complete" : valued > 0 ? "partial" : "unknown", total, valued };
+  }
+
+  function summaryValuationGap(coverage, t) {
+    if (coverage.kind === "complete") return "";
+    if (coverage.total === null || coverage.valued === null) return t("detailValuationUnavailable");
+    if (coverage.valued === 0) return t("detailValuationAllGap", { total: coverage.total });
+    return t("detailValuationPartialGap", { missing: coverage.total - coverage.valued, total: coverage.total });
+  }
+
   function dailySummary(detail, options) {
     const t = options.t;
     const data = object(detail.data);
     const statistics = object(data.statistics);
+    const qualitySchema = Number(data.schema_version) >= 2;
+    const statisticsGap = qualitySchema ? summaryValuationGap(summaryTradeValuation(statistics, "market_"), t) : "";
     const metricDefinitions = [
       ["event_count", t("detailAddressEvents")],
       ["market_event_count", t("detailMarketEvents")],
@@ -424,24 +462,35 @@
       time: event.occurred_at,
     }));
     const marketSummaries = list(data.market_project_chain_summaries);
-    const marketSummaryContent = marketSummaries.length ? `<div class="notification-market-summary-list">${marketSummaries.map((summary) => `
+    const marketSummaryContent = marketSummaries.length ? `<div class="notification-market-summary-list">${marketSummaries.map((summary) => {
+      const coverage = qualitySchema ? summaryTradeValuation(summary) : null;
+      const volumeLabel = coverage?.kind === "partial" ? t("detailTradeVolumePartial") : t("detailTradeVolume");
+      const volumeValue = coverage?.kind === "unknown" ? t("detailValuationUnavailable") : summary.trade_volume_usd;
+      const quoteGaps = Number(summary.quote_unavailable_count);
+      return `
       <article class="notification-market-summary-card">
         <div><strong>${escapeHtml([summary.token_name, summary.token_symbol].filter(present).join(" · "))}</strong><span>${escapeHtml(options.chainName?.(summary.chain_key) || summary.chain_key)}</span></div>
         ${facts([
           [t("detailPriceRange"), present(summary.start_price_usd) || present(summary.end_price_usd)
             ? `${summary.start_price_usd || "-"} → ${summary.end_price_usd || "-"}` : ""],
-          [t("detailTradeVolume"), summary.trade_volume_usd],
+          [volumeLabel, volumeValue],
           [t("detailBuySellCount"), `${summary.buy_count || 0} / ${summary.sell_count || 0}`],
           [t("detailLargeTrades"), summary.large_trade_count],
+          ...(qualitySchema ? [
+            [t("detailReliableValuations"), coverage.total !== null && coverage.valued !== null ? `${coverage.valued} / ${coverage.total}` : ""],
+            [t("detailValuationGap"), summaryValuationGap(coverage, t)],
+            [t("detailQuoteGap"), Number.isSafeInteger(quoteGaps) && quoteGaps > 0 ? t("detailQuoteGapCount", { count: quoteGaps }) : ""],
+          ] : []),
         ])}
       </article>
-    `).join("")}</div>` : `<p class="notification-detail-empty">${escapeHtml(t("detailNoMarketSummary"))}</p>`;
+    `;
+    }).join("")}</div>` : `<p class="notification-detail-empty">${escapeHtml(t("detailNoMarketSummary"))}</p>`;
     return [
       metrics([
         [t("detailPeriodStart"), dateText(data.period_start, options.language)],
         [t("detailPeriodEnd"), dateText(data.period_end, options.language)],
       ]),
-      section(t("detailSummaryNumbers"), metrics(summaryMetrics), "nested"),
+      section(t("detailSummaryNumbers"), metrics(summaryMetrics) + (qualitySchema ? facts([[t("detailValuationGap"), statisticsGap]]) : ""), "nested"),
       section(t("detailMarketOverview"), marketSummaryContent),
       section(t("detailImportantEvents"), timeline(
         [...addressEvents, ...marketEvents]

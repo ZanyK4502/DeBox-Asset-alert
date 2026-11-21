@@ -10,14 +10,9 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
-const dailySummarySnapshotSchemaVersion = 1
+const dailySummarySnapshotSchemaVersion = 2
 
-type dailySummaryContent struct {
-	Statistics      store.SummaryStatistics           `json:"statistics"`
-	AddressEvents   []store.SummaryEvent              `json:"address_events"`
-	MarketEvents    []store.MarketSummaryEvent        `json:"market_events"`
-	MarketSummaries []store.MarketProjectChainSummary `json:"market_project_chain_summaries"`
-}
+type dailySummaryContent = store.DailySummaryReportContent
 
 type dailySummarySnapshotDetails struct {
 	SchemaVersion int                      `json:"schema_version"`
@@ -33,6 +28,15 @@ func (e *Executor) loadDailySummaryContent(
 	periodStart time.Time,
 	periodEnd time.Time,
 ) (dailySummaryContent, error) {
+	if repository, ok := e.deps.Repository.(interface {
+		LoadDailySummaryReportContent(context.Context, string, time.Time, time.Time, int) (store.DailySummaryReportContent, error)
+	}); ok {
+		return repository.LoadDailySummaryReportContent(ctx, subscription.DeBoxUserID, periodStart, periodEnd, recentEventLimit)
+	}
+	// Compatibility for pure in-memory readers. Store implements the consistent,
+	// server-budgeted path above; no production database query uses this branch.
+	ctx, cancel := context.WithTimeout(ctx, store.DailySummaryReadTimeout)
+	defer cancel()
 	statistics, err := e.deps.Repository.DailySummaryStatistics(
 		ctx,
 		subscription.DeBoxUserID,
@@ -97,6 +101,14 @@ func (e *Executor) createDailySummarySnapshot(
 	text string,
 	content dailySummaryContent,
 ) (store.NotificationDetailSnapshot, error) {
+	params, err := dailySummarySnapshotParams(subscription, target, periodStart, periodEnd, text, content)
+	if err != nil {
+		return store.NotificationDetailSnapshot{}, err
+	}
+	return e.deps.Repository.CreateNotificationDetailSnapshot(ctx, params)
+}
+
+func dailySummarySnapshotParams(subscription store.Subscription, target store.DailySummaryTarget, periodStart, periodEnd time.Time, text string, content dailySummaryContent) (store.CreateNotificationDetailSnapshotParams, error) {
 	details, err := json.Marshal(dailySummarySnapshotDetails{
 		SchemaVersion:       dailySummarySnapshotSchemaVersion,
 		Target:              target,
@@ -105,7 +117,7 @@ func (e *Executor) createDailySummarySnapshot(
 		dailySummaryContent: content,
 	})
 	if err != nil {
-		return store.NotificationDetailSnapshot{}, fmt.Errorf(
+		return store.CreateNotificationDetailSnapshotParams{}, fmt.Errorf(
 			"marshal daily summary notification snapshot: %w",
 			err,
 		)
@@ -115,38 +127,35 @@ func (e *Executor) createDailySummarySnapshot(
 		ruleName = "Daily summary"
 	}
 	sourceID := optionalPositiveInt64(target.ID)
-	return e.deps.Repository.CreateNotificationDetailSnapshot(
-		ctx,
-		store.CreateNotificationDetailSnapshotParams{
-			SourceKey: fmt.Sprintf(
-				"daily_summary:%d:%d:%s:%s:%d",
-				subscription.ID,
-				target.ID,
-				strings.TrimSpace(target.ChatType),
-				strings.TrimSpace(target.ChatID),
-				periodEnd.UTC().UnixNano(),
-			),
-			NotificationKind: store.NotificationKindDailySummary,
-			SourceType:       "daily_summary_target",
-			SourceID:         sourceID,
-			DeBoxUserID:      subscription.DeBoxUserID,
-			RuleType:         "daily_summary",
-			RuleName:         ruleName,
-			RuleThreshold:    fmt.Sprintf("push_time=%s;timezone=%s", target.PushTime, target.Timezone),
-			ActualValue: fmt.Sprintf(
-				"address_events=%d;market_events=%d;market_anomalies=%d",
-				content.Statistics.EventCount,
-				content.Statistics.MarketEventCount,
-				content.Statistics.MarketAnomalyCount,
-			),
-			NotificationChatID:   target.ChatID,
-			NotificationChatType: target.ChatType,
-			NotificationLanguage: target.Language,
-			NotificationLabel:    target.Label,
-			NotificationText:     text,
-			Details:              details,
-		},
-	)
+	return store.CreateNotificationDetailSnapshotParams{
+		SourceKey: fmt.Sprintf(
+			"daily_summary:%d:%d:%s:%s:%d",
+			subscription.ID,
+			target.ID,
+			strings.TrimSpace(target.ChatType),
+			strings.TrimSpace(target.ChatID),
+			periodEnd.UTC().UnixNano(),
+		),
+		NotificationKind: store.NotificationKindDailySummary,
+		SourceType:       "daily_summary_target",
+		SourceID:         sourceID,
+		DeBoxUserID:      subscription.DeBoxUserID,
+		RuleType:         "daily_summary",
+		RuleName:         ruleName,
+		RuleThreshold:    fmt.Sprintf("push_time=%s;timezone=%s", target.PushTime, target.Timezone),
+		ActualValue: fmt.Sprintf(
+			"address_events=%d;market_events=%d;market_anomalies=%d",
+			content.Statistics.EventCount,
+			content.Statistics.MarketEventCount,
+			content.Statistics.MarketAnomalyCount,
+		),
+		NotificationChatID:   target.ChatID,
+		NotificationChatType: target.ChatType,
+		NotificationLanguage: target.Language,
+		NotificationLabel:    target.Label,
+		NotificationText:     text,
+		Details:              details,
+	}, nil
 }
 
 func optionalPositiveInt64(value int64) *int64 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,6 +37,11 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_asset_identity_evidence",
 		"market_assets",
 		"market_chain_cursors",
+		"market_chain_collection_states",
+		"market_collection_idle_intervals",
+		"market_collection_gaps",
+		"market_collection_history_ranges",
+		"market_collection_history_reviews",
 		"market_combination_members",
 		"market_combination_rule_projects",
 		"market_combination_rules",
@@ -43,6 +49,7 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_combination_window_members",
 		"market_combination_windows",
 		"market_events",
+		"market_four_meme_states",
 		"market_holder_snapshots",
 		"market_holders",
 		"market_pools",
@@ -60,6 +67,37 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"market_snapshots",
 		"market_stage_window_events",
 		"market_stage_windows",
+		"market_trade_legs",
+		"market_trade_parents",
+		"market_trade_ready_events",
+		"market_trade_scopes",
+		"market_trade_parent_summaries",
+		"market_trade_pool_summaries",
+		"market_scan_coverage",
+		"market_holder_refresh_states",
+		"market_holder_refresh_scheduler",
+		"market_holder_snapshot_refs",
+		"market_holder_history_cleanup_cursor",
+		"wallet_notification_outbox",
+		"wallet_balance_read_states",
+		"wallet_balance_source_transitions",
+		"wallet_trigger_recovery_decisions",
+		"wallet_notification_unknown_resolutions",
+		"market_combination_source_decisions",
+		"market_delivery_unknown_resolutions",
+		"notification_recovery_boundaries",
+		"notification_recovery_boundary_history",
+		"notification_recovery_gaps",
+		"notification_send_admission",
+		"notification_send_path_admission",
+		"market_trade_rule_readiness",
+		"market_trade_warmup_periods",
+		"market_project_trade_scope_changes",
+		"daily_summary_dispatches",
+		"daily_summary_unknown_resolutions",
+		"daily_summary_legacy_reviews",
+		"market_transaction_events",
+		"market_transaction_receipts",
 		"nodit_webhook_subscriptions",
 		"notification_detail_snapshots",
 		"notification_groups",
@@ -67,11 +105,13 @@ func TestPostgresMigrationContract(t *testing.T) {
 		"permanent_plan_allowlist",
 		"rule_trigger_events",
 		"schema_migrations",
+		"resource_capacity_holds",
 		"subscriptions",
 		"user_preferences",
 		"watch_rules",
 		"webhook_inbox",
 	}
+	sort.Strings(expected)
 	rows, err := pool.Query(context.Background(), `
 		SELECT table_name
 		FROM information_schema.tables
@@ -102,8 +142,8 @@ func TestPostgresMigrationContract(t *testing.T) {
 	`).Scan(&latestVersion, &latestName); err != nil {
 		t.Fatalf("read latest migration: %v", err)
 	}
-	if latestVersion != 16 ||
-		latestName != "0016_chain_scoped_market_address_labels.sql" {
+	if latestVersion != 41 ||
+		latestName != "0041_holder_refresh_rolling_budget.sql" {
 		t.Fatalf("latest migration = %d/%s", latestVersion, latestName)
 	}
 }
@@ -561,6 +601,7 @@ func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
 	}
 
 	marketPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 		ChainKey:        "bsc",
 		ChainID:         56,
 		Protocol:        "pancakeswap",
@@ -579,6 +620,7 @@ func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
 		t.Fatalf("upsert shared market pool: %v", err)
 	}
 	fourMemePool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 		ChainKey:        "bsc",
 		ChainID:         56,
 		Protocol:        "fourmeme",
@@ -611,6 +653,7 @@ func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
 	}
 	secondPoolAddress := "0x5555555555555555555555555555555555555555"
 	secondPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 		ChainKey:        "bsc",
 		ChainID:         56,
 		Protocol:        "pancakeswap",
@@ -705,6 +748,7 @@ func TestPostgresMarketObservationsAreSharedAcrossUsers(t *testing.T) {
 		USDValue:     pointerOf("2500"),
 		Source:       "integration",
 		Confidence:   "1",
+		Confirmed:    true,
 		OccurredAt:   time.Now().UTC(),
 	})
 	if err != nil || !created {
@@ -995,17 +1039,21 @@ func TestPostgresConcurrentFreeRuleQuota(t *testing.T) {
 	var successes atomic.Int32
 	errorsSeen := make(chan error, attempts)
 	var workers sync.WaitGroup
-	for range attempts {
+	for attempt := range attempts {
 		workers.Add(1)
-		go func() {
+		go func(attempt int) {
 			defer workers.Done()
-			_, err := store.CreateWatchRuleWithinQuota(context.Background(), params, policy)
+			// Distinct configurations test the quota race. Identical requests
+			// correctly hit duplicate protection before quota validation.
+			candidate := params
+			candidate.Threshold = fmt.Sprintf("%d", attempt+1)
+			_, err := store.CreateWatchRuleWithinQuota(context.Background(), candidate, policy)
 			if err == nil {
 				successes.Add(1)
 				return
 			}
 			errorsSeen <- err
-		}()
+		}(attempt)
 	}
 	workers.Wait()
 	close(errorsSeen)
@@ -1649,7 +1697,8 @@ func TestPostgresNotificationDetailSnapshotsAreImmutableAndIndependent(t *testin
 
 	if _, err := pool.Exec(ctx, `
 		UPDATE notification_detail_snapshots
-		SET expires_at = NOW() - INTERVAL '4 days'
+		SET created_at = NOW() - INTERVAL '34 days',
+		    expires_at = NOW() - INTERVAL '4 days'
 		WHERE id = $1
 	`, first.ID); err != nil {
 		t.Fatalf("age snapshot within cleanup grace: %v", err)
@@ -1660,7 +1709,8 @@ func TestPostgresNotificationDetailSnapshotsAreImmutableAndIndependent(t *testin
 	}
 	if _, err := pool.Exec(ctx, `
 		UPDATE notification_detail_snapshots
-		SET expires_at = NOW() - INTERVAL '6 days'
+		SET created_at = NOW() - INTERVAL '36 days',
+		    expires_at = NOW() - INTERVAL '6 days'
 		WHERE id = $1
 	`, first.ID); err != nil {
 		t.Fatalf("age snapshot past cleanup grace: %v", err)

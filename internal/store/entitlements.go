@@ -3,14 +3,18 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 type QuotaPolicy struct {
 	PlanCode               string
 	WalletLimit            int
 	RuleLimit              int
+	InteractionRuleLimit   int
 	GroupLimit             int
 	MarketProjectLimit     int
+	MarketPoolLimit        int
+	AllowedMarketChainKeys []string
 	AllowedRuleTypes       []string
 	AllowedMarketRuleTypes []string
 	GroupNotification      bool
@@ -240,7 +244,7 @@ func pauseExpiredUserResources(
 ) error {
 	query := `
 		UPDATE watch_rules
-		SET run_status = 'paused', pause_reason = 'subscription_expired'
+		SET run_status = 'paused', pause_reason = 'subscription_expired',notification_generation=notification_generation+1
 		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 	`
 	args := []any{deboxUserID}
@@ -258,44 +262,14 @@ func pauseExpiredUserResources(
 	`, deboxUserID); err != nil {
 		return fmt.Errorf("pause expired combination rules: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE market_rule_events mre
-		SET notification_status = 'skipped',
-		    notification_error = 'subscription expired before delivery'
-		FROM market_rules mr
-		WHERE mr.id = mre.market_rule_id
-		  AND mr.debox_user_id = $1
-		  AND mre.notification_status IN (
-			'pending', 'sending', 'failed', 'staged', 'combined'
-		  )
-	`, deboxUserID); err != nil {
-		return fmt.Errorf("skip expired market rule deliveries: %w", err)
+	if err := closePausedWalletWindows(ctx, tx, deboxUserID); err != nil {
+		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE market_stage_windows msw
-		SET notification_status = 'skipped',
-		    notification_error = 'subscription expired before delivery',
-		    closed_at = COALESCE(closed_at, NOW()),
-		    updated_at = NOW()
-		FROM market_rules mr
-		WHERE mr.id = msw.market_rule_id
-		  AND mr.debox_user_id = $1
-		  AND msw.notification_status NOT IN ('sent', 'skipped')
-	`, deboxUserID); err != nil {
-		return fmt.Errorf("close expired market stage windows: %w", err)
+	if _, err := cancelInvalidWalletNotifications(ctx, tx, deboxUserID, "wallet rule paused after subscription expired"); err != nil {
+		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE market_combination_windows mcw
-		SET notification_status = 'skipped',
-		    notification_error = 'subscription expired before delivery',
-		    closed_at = COALESCE(closed_at, NOW()),
-		    updated_at = NOW()
-		FROM market_combination_rules mcr
-		WHERE mcr.id = mcw.market_combination_rule_id
-		  AND mcr.debox_user_id = $1
-		  AND mcw.notification_status NOT IN ('sent', 'skipped')
-	`, deboxUserID); err != nil {
-		return fmt.Errorf("close expired market combination windows: %w", err)
+	if err := cancelMarketDeliveriesForUser(ctx, tx, deboxUserID, "subscription expired before delivery"); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE market_rules
@@ -325,6 +299,13 @@ func pauseExpiredUserResources(
 	`, deboxUserID); err != nil {
 		return fmt.Errorf("pause expired market projects: %w", err)
 	}
+	var lifecycleAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT NOW()`).Scan(&lifecycleAt); err != nil {
+		return err
+	}
+	if _, err := cancelInvalidDailySummaryDispatches(ctx, tx, deboxUserID, lifecycleAt); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -334,6 +315,11 @@ func (s *Store) CreateWatchRuleWithinQuota(
 	policy QuotaPolicy,
 ) (WatchRule, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+		if err != nil {
+			return WatchRule{}, err
+		}
+		defer cancel()
 		if normalizeRuleScope(params.RuleScope) == "combination" {
 			return WatchRule{}, ErrCombinationMemberManaged
 		}
@@ -363,6 +349,11 @@ func (s *Store) CreateWatchRuleWithinQuota(
 		}
 		if ruleCount >= int64(policy.RuleLimit) {
 			return WatchRule{}, ErrRuleLimitReached
+		}
+		if params.RuleType == addressInteractionRuleType {
+			if err := requireInteractionRuleQuota(ctx, tx, params.DeBoxUserID, 1, policy.InteractionRuleLimit); err != nil {
+				return WatchRule{}, err
+			}
 		}
 
 		var walletMonitored bool
@@ -400,6 +391,9 @@ func (s *Store) CreateWatchRuleWithinQuota(
 				return WatchRule{}, err
 			}
 		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return WatchRule{}, err
+		}
 		return rule, nil
 	})
 }
@@ -411,6 +405,11 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 	policy QuotaPolicy,
 ) (WatchRule, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return WatchRule{}, err
+		}
+		defer cancel()
 		if err := lockUser(ctx, tx, deboxUserID); err != nil {
 			return WatchRule{}, err
 		}
@@ -451,6 +450,11 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 		}
 		if ruleCount >= int64(policy.RuleLimit) {
 			return WatchRule{}, ErrRuleLimitReached
+		}
+		if rule.RuleType == addressInteractionRuleType {
+			if err := requireInteractionRuleQuota(ctx, tx, deboxUserID, 1, policy.InteractionRuleLimit); err != nil {
+				return WatchRule{}, err
+			}
 		}
 		var walletMonitored bool
 		if err := tx.QueryRow(ctx, `
@@ -501,6 +505,9 @@ func (s *Store) RestoreWatchRuleWithinQuota(
 			WHERE watch_rule_id = $1 AND closed_at IS NULL
 		`, ruleID); err != nil {
 			return WatchRule{}, fmt.Errorf("reset restored watch rule aggregation: %w", err)
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return WatchRule{}, err
 		}
 		return restored, nil
 	})

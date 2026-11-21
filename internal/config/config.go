@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 )
 
 const (
@@ -31,6 +32,7 @@ const (
 	defaultDexScreenerAPI         = "https://api.dexscreener.com"
 	defaultCoinGeckoAPITier       = "demo"
 	defaultNoditCUPerSecond int64 = 400
+	defaultNoditMonthlyCU   int64 = 300_000_000
 )
 
 type Config struct {
@@ -53,15 +55,22 @@ type Config struct {
 	NoditAPIKey                 string
 	NoditBaseURL                string
 	NoditCUPerSecond            int64
+	MarketRPCFallbackURLs       map[string][]string
+	DeBoxSendPerMinute          int
+	MarketTaskLockConnections   int32
+	MarketHydrationConcurrency  int
 	SubscriptionTokenAddress    string
 	SubscriptionTokenSymbol     string
 	SubscriptionTokenDecimals   int
 	SubscriptionPrice           string
 	SubscriptionDays            int
+	QuotaLimits                 plans.QuotaLimits
+	ResourceCapacity            ResourceCapacitySettings
 	PaymentRecipientAddress     string
 	PaymentMode                 string
 	MarketCollectorEnabled      bool
 	MarketChainKeys             []string
+	MarketMonitoringChainKeys   []string
 	MarketRuleEngineEnabled     bool
 	MarketRuleInterval          time.Duration
 	MarketHolderRefreshInterval time.Duration
@@ -69,6 +78,7 @@ type Config struct {
 	CoinGeckoAPIKey             string
 	CoinGeckoAPITier            string
 	CoinGeckoBaseURL            string
+	NoditWebhookWrappingKey     string
 	NoditWebhookSigningKey      string
 	NoditWebhookSigningKeys     map[string]string
 	MarketWebhookAutoRepair     bool
@@ -87,6 +97,18 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	quotaLimits, err := loadQuotaLimits()
+	if err != nil {
+		return Config{}, err
+	}
+	marketMonitoringChainKeys, err := parseMarketMonitoringChainKeys(os.Getenv("MARKET_MONITORING_CHAIN_KEYS"))
+	if err != nil {
+		return Config{}, err
+	}
+	resourceCapacity, err := loadResourceCapacitySettings()
+	if err != nil {
+		return Config{}, err
+	}
 	portValue := firstNonEmpty(os.Getenv("APP_PORT"), os.Getenv("PORT"), strconv.Itoa(defaultPort))
 	port, err := strconv.Atoi(portValue)
 	if err != nil {
@@ -141,7 +163,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	scanBatchSize, err := parseInt64Env("MARKET_SCAN_BATCH_SIZE", 100)
+	scanBatchSize, err := parseInt64Env("MARKET_SCAN_BATCH_SIZE", 500)
 	if err != nil {
 		return Config{}, err
 	}
@@ -153,7 +175,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	monthlyCULimit, err := parseInt64Env("NODIT_MONTHLY_CU_LIMIT", 100_000_000)
+	monthlyCULimit, err := parseInt64Env("NODIT_MONTHLY_CU_LIMIT", defaultNoditMonthlyCU)
 	if err != nil {
 		return Config{}, err
 	}
@@ -193,6 +215,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	performance, err := loadPerformanceSettings()
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		AppName:                     firstNonEmpty(os.Getenv("APP_NAME"), defaultAppName),
@@ -214,15 +240,22 @@ func Load() (Config, error) {
 		NoditAPIKey:                 strings.TrimSpace(os.Getenv("NODIT_API_KEY")),
 		NoditBaseURL:                firstNonEmpty(os.Getenv("NODIT_BASE_URL"), defaultNoditAPI),
 		NoditCUPerSecond:            cuPerSecond,
+		MarketRPCFallbackURLs:       performance.fallbacks,
+		DeBoxSendPerMinute:          performance.sendLimit,
+		MarketTaskLockConnections:   int32(performance.lockConnections),
+		MarketHydrationConcurrency:  performance.hydrationConcurrency,
 		SubscriptionTokenAddress:    strings.TrimSpace(os.Getenv("SUBSCRIPTION_TOKEN_ADDRESS")),
 		SubscriptionTokenSymbol:     firstNonEmpty(os.Getenv("SUBSCRIPTION_TOKEN_SYMBOL"), defaultTokenSymbol),
 		SubscriptionTokenDecimals:   decimals,
 		SubscriptionPrice:           firstNonEmpty(os.Getenv("SUBSCRIPTION_PRICE"), defaultPlanPrice),
 		SubscriptionDays:            days,
+		QuotaLimits:                 quotaLimits,
+		ResourceCapacity:            resourceCapacity,
 		PaymentRecipientAddress:     strings.TrimSpace(os.Getenv("PAYMENT_RECIPIENT_ADDRESS")),
 		PaymentMode:                 strings.ToLower(firstNonEmpty(os.Getenv("PAYMENT_MODE"), defaultPaymentMode)),
 		MarketCollectorEnabled:      collectorEnabled,
 		MarketChainKeys:             marketChainKeys,
+		MarketMonitoringChainKeys:   marketMonitoringChainKeys,
 		MarketRuleEngineEnabled:     ruleEngineEnabled,
 		MarketRuleInterval:          ruleInterval,
 		MarketHolderRefreshInterval: holderRefreshInterval,
@@ -232,6 +265,7 @@ func Load() (Config, error) {
 		CoinGeckoBaseURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("COINGECKO_BASE_URL")), "/"),
 		NoditWebhookSigningKey:      strings.TrimSpace(os.Getenv("NODIT_WEBHOOK_SIGNING_KEY")),
 		NoditWebhookSigningKeys:     webhookSigningKeys,
+		NoditWebhookWrappingKey:     strings.TrimSpace(os.Getenv("NODIT_WEBHOOK_WRAPPING_KEY")),
 		MarketWebhookAutoRepair:     webhookAutoRepair,
 		MarketConfirmationDepth:     confirmationDepth,
 		MarketConfirmationDepths:    confirmationDepths,
@@ -253,6 +287,18 @@ func Load() (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if _, err := c.EffectiveMarketMonitoringChainKeys(); err != nil {
+		return err
+	}
+	if _, err := c.EffectiveResourceCapacitySettings(); err != nil {
+		return err
+	}
+	if _, err := c.EffectiveQuotaLimits(); err != nil {
+		return err
+	}
+	if err := c.validatePerformanceSettings(); err != nil {
+		return err
+	}
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("APP_PORT/PORT must be between 1 and 65535: %d", c.Port)
 	}

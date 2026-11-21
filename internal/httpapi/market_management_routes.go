@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,6 +11,13 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketview"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
+
+// Optional extension preserves older adapters while the production service
+// returns the exact quote provenance used for each recommendation response.
+type marketRecommendationQualityService interface {
+	RecommendationsWithQuote(context.Context, string, int64) (marketview.RecommendationResult, error)
+	PreviewRecommendationsWithQuote(context.Context, string, marketview.RecommendationPreviewInput) (marketview.RecommendationResult, error)
+}
 
 func (h handler) getMarketCatalog(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.requireMarketSession(w, r)
@@ -180,6 +188,15 @@ func (h handler) getMarketRecommendations(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	if service, supportsQuality := h.deps.Market.(marketRecommendationQualityService); supportsQuality {
+		result, err := service.RecommendationsWithQuote(r.Context(), session.DeBoxUserID, projectID)
+		if err != nil {
+			writeMarketError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
 	recommendations, err := h.deps.Market.Recommendations(
 		r.Context(), session.DeBoxUserID, projectID,
 	)
@@ -201,6 +218,15 @@ func (h handler) postMarketRecommendationPreview(w http.ResponseWriter, r *http.
 	var input marketview.RecommendationPreviewInput
 	if err := decodeJSON(r, &input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if service, supportsQuality := h.deps.Market.(marketRecommendationQualityService); supportsQuality {
+		result, err := service.PreviewRecommendationsWithQuote(r.Context(), session.DeBoxUserID, input)
+		if err != nil {
+			writeMarketError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 		return
 	}
 	recommendations, err := h.deps.Market.PreviewRecommendations(
@@ -456,6 +482,16 @@ func (h handler) marketResourceRequest(
 }
 
 func writeMarketError(w http.ResponseWriter, err error) {
+	if writeResourceCapacityError(w, err) {
+		return
+	}
+	if writeMarketScopeError(w, err) {
+		return
+	}
+	if errors.Is(err, marketview.ErrQuoteUnavailable) {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "quote_unavailable", "detail": err.Error()})
+		return
+	}
 	status := http.StatusBadRequest
 	if errors.Is(err, marketview.ErrPaidMarketAccessRequired) {
 		status = http.StatusForbidden

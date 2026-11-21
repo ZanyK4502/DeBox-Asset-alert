@@ -43,7 +43,8 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 	english := featuresText("en")
 
 	for _, text := range []string{
-		"EVM 多链代币监控",
+		"行情持续监控范围：BNB Chain (BSC), Ethereum, Base, Polygon, Arbitrum, Optimism",
+		"各链按监控面板标记的已支持协议和交易池提供监控；Four.meme 仅限 BNB Chain",
 		"低余额阈值",
 		"高余额阈值",
 		"阶段提醒（标准版、专业版）",
@@ -57,7 +58,8 @@ func TestMonitoringCopyExplainsRulesAggregationAndSummaryBehavior(t *testing.T) 
 		}
 	}
 	for _, text := range []string{
-		"EVM multi-chain token monitoring",
+		"Persistent token monitoring: BNB Chain (BSC), Ethereum, Base, Polygon, Arbitrum, Optimism",
+		"Protocols vary by network; monitor the pools marked as supported in the dashboard. Four.meme is available on BNB Chain only.",
 		"Low balance threshold",
 		"High balance threshold",
 		"Stage alert (Standard and Professional)",
@@ -237,14 +239,14 @@ func TestMenuDoesNotIncludeSummaryDetailsEntry(t *testing.T) {
 	}
 }
 
-func TestMenuUsesAddressMonitoringAndEVMMultiChainCopy(t *testing.T) {
+func TestMenuKeepsMultiChainAddressesAndDoesNotOverstateMarketScope(t *testing.T) {
 	chinese := menuText("zh")
 	english := menuText("en")
-	if !strings.Contains(chinese, "监控链上地址与 EVM 多链代币行情，通过 Monitor Bot 接收通知。") ||
+	if !strings.Contains(chinese, "监控链上地址与代币行情，通过 Monitor Bot 接收通知。") || !strings.Contains(chinese, "多链地址监控") ||
 		!strings.Contains(chinese, "📍 <b>地址监控：</b>跟踪地址余额、资金转入转出、授权变化和指定地址交互") {
 		t.Fatalf("Chinese menu copy = %q", chinese)
 	}
-	if !strings.Contains(english, "Monitor on-chain addresses and EVM multi-chain token markets, and receive notifications through Monitor Bot.") ||
+	if !strings.Contains(english, "Monitor on-chain addresses and token markets, and receive notifications through Monitor Bot.") || !strings.Contains(english, "Multi-chain Address Monitoring") ||
 		!strings.Contains(english, "📍 <b>Address Monitoring:</b> Track balances, incoming and outgoing transfers, approval changes, and interactions with specified addresses") {
 		t.Fatalf("English menu copy = %q", english)
 	}

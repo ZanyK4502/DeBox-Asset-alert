@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 )
 
 const (
@@ -32,10 +33,25 @@ const (
 	maxDexScreenerBatchSize        = 30
 	maxDexScreenerCacheEntries     = 2048
 	maxDexScreenerErrorBody        = 500
+	maxDexScreenerResponseBytes    = 16 << 20
+	maxDexScreenerCacheBytes       = 32 << 20 // encoded retained pair payload, not process RSS
 )
 
 type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
+}
+
+var ErrDexScreenerResponseTooLarge = errors.New("DexScreener response exceeds 16 MiB")
+
+func readDexScreenerBody(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, maxDexScreenerResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDexScreenerResponseBytes {
+		return nil, ErrDexScreenerResponseTooLarge
+	}
+	return data, nil
 }
 
 type Limiter interface {
@@ -85,15 +101,17 @@ type DexScreenerClient struct {
 
 	mu                sync.Mutex
 	cache             map[string]cachedPairs
+	cacheBytes        int
 	inflight          map[string]*pairCall
 	cooldownUntil     time.Time
 	rateLimitFailures int
 }
 
 type cachedPairs struct {
-	pairs      []Pair
-	expiresAt  time.Time
-	staleUntil time.Time
+	pairs        []Pair
+	expiresAt    time.Time
+	staleUntil   time.Time
+	encodedBytes int
 }
 
 type pairCall struct {
@@ -318,7 +336,7 @@ func (c *DexScreenerClient) getPairsOnce(
 			Body:       strings.TrimSpace(string(body)),
 		}
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := readDexScreenerBody(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read DexScreener response: %w", err)
 	}
@@ -415,7 +433,7 @@ func (c *DexScreenerClient) getSearchPairsOnce(
 			Body:       strings.TrimSpace(string(body)),
 		}
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := readDexScreenerBody(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read DexScreener response: %w", err)
 	}
@@ -449,20 +467,24 @@ func (c *DexScreenerClient) cachedFetch(
 ) ([]Pair, error) {
 	now := time.Now()
 	var stale []Pair
+	var staleUntil time.Time
 	c.mu.Lock()
 	if item, ok := c.cache[key]; ok && now.Before(item.expiresAt) {
 		pairs := clonePairs(item.pairs)
+		setPairQuoteStatus(pairs, marketquality.StatusCached)
 		c.mu.Unlock()
 		return pairs, nil
 	} else if ok {
 		if now.Before(item.staleUntil) {
 			stale = clonePairs(item.pairs)
+			staleUntil = item.staleUntil
+			setPairQuoteStatus(stale, marketquality.StatusStaleFallback)
 			if now.Before(c.cooldownUntil) {
 				c.mu.Unlock()
 				return stale, nil
 			}
 		} else {
-			delete(c.cache, key)
+			c.removeCacheEntry(key)
 		}
 	}
 	if active, ok := c.inflight[key]; ok {
@@ -480,10 +502,23 @@ func (c *DexScreenerClient) cachedFetch(
 
 	pairs, err := fetch(ctx)
 	cacheFresh := err == nil
-	if err != nil && stale != nil && IsTemporaryError(err) {
+	if cacheFresh {
+		// Provider payloads cannot supply our local retrieval provenance. Every
+		// successful response gets one observation time, retained across cache
+		// hits; an upstream quote timestamp is unknown for this API model.
+		fetchedAt := time.Now().UTC().Truncate(time.Microsecond)
+		for index := range pairs {
+			pairs[index].QuoteQuality = marketquality.Quote{Status: marketquality.StatusLive, FetchedAt: &fetchedAt}.Clone()
+		}
+	}
+	if err != nil && stale != nil && IsTemporaryError(err) && time.Now().Before(staleUntil) {
 		pairs = stale
 		err = nil
 		cacheFresh = false
+	}
+	encodedBytes, retain := 0, false
+	if cacheFresh && ttl > 0 {
+		encodedBytes, retain = retainedPairBytes(pairs)
 	}
 
 	c.mu.Lock()
@@ -491,17 +526,54 @@ func (c *DexScreenerClient) cachedFetch(
 	active.err = err
 	if cacheFresh && ttl > 0 {
 		cachedAt := time.Now()
-		c.evictCacheEntries(cachedAt)
-		c.cache[key] = cachedPairs{
-			pairs:      clonePairs(pairs),
-			expiresAt:  cachedAt.Add(ttl),
-			staleUntil: cachedAt.Add(ttl).Add(staleTTL),
+		c.removeCacheEntry(key)
+		if retain {
+			c.evictCacheEntries(cachedAt, encodedBytes)
+			c.cache[key] = cachedPairs{
+				pairs:        clonePairs(pairs),
+				expiresAt:    cachedAt.Add(ttl),
+				staleUntil:   cachedAt.Add(ttl).Add(staleTTL),
+				encodedBytes: encodedBytes,
+			}
+			c.cacheBytes += encodedBytes
 		}
 	}
 	delete(c.inflight, key)
 	close(active.done)
 	c.mu.Unlock()
 	return pairs, err
+}
+
+// Account once per newly fetched response, never by re-encoding the entire
+// cache or on a cache hit. One pair at a time avoids another full-response
+// buffer. Wire input is independently limited to 16 MiB.
+func retainedPairBytes(pairs []Pair) (int, bool) {
+	size := 2 // JSON array brackets
+	for index, pair := range pairs {
+		// Cheap lower bound for large opaque fields before allocating a JSON
+		// buffer. Actual HTTP payloads already have the smaller wire limit.
+		if len(pair.URL)+len(pair.Info)+len(pair.Boosts) > maxDexScreenerCacheBytes {
+			return maxDexScreenerCacheBytes + 1, false
+		}
+		encoded, err := json.Marshal(pair)
+		if err != nil {
+			return 0, false
+		}
+		if index > 0 {
+			size++
+		}
+		size += len(encoded)
+		if size > maxDexScreenerCacheBytes {
+			return size, false
+		}
+	}
+	return size, true
+}
+
+func setPairQuoteStatus(pairs []Pair, status string) {
+	for index := range pairs {
+		pairs[index].QuoteQuality.Status = status
+	}
 }
 
 // IsTemporaryError reports failures that callers may safely retry or satisfy
@@ -595,16 +667,16 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 
 // evictCacheEntries is called with c.mu held. It keeps a long-running worker
 // from accumulating an entry for every token batch it has ever observed.
-func (c *DexScreenerClient) evictCacheEntries(now time.Time) {
-	if len(c.cache) < maxDexScreenerCacheEntries {
+func (c *DexScreenerClient) evictCacheEntries(now time.Time, incomingBytes int) {
+	if len(c.cache) < maxDexScreenerCacheEntries && c.cacheBytes+incomingBytes <= maxDexScreenerCacheBytes {
 		return
 	}
 	for key, item := range c.cache {
 		if !now.Before(item.staleUntil) {
-			delete(c.cache, key)
+			c.removeCacheEntry(key)
 		}
 	}
-	for len(c.cache) >= maxDexScreenerCacheEntries {
+	for len(c.cache) >= maxDexScreenerCacheEntries || c.cacheBytes+incomingBytes > maxDexScreenerCacheBytes {
 		var oldestKey string
 		var oldestExpiry time.Time
 		for key, item := range c.cache {
@@ -616,7 +688,15 @@ func (c *DexScreenerClient) evictCacheEntries(now time.Time) {
 		if oldestKey == "" {
 			return
 		}
-		delete(c.cache, oldestKey)
+		c.removeCacheEntry(oldestKey)
+	}
+}
+
+// Caller holds c.mu, including expiry, replacement and capacity eviction.
+func (c *DexScreenerClient) removeCacheEntry(key string) {
+	if item, ok := c.cache[key]; ok {
+		c.cacheBytes -= item.encodedBytes
+		delete(c.cache, key)
 	}
 }
 
@@ -758,6 +838,7 @@ func clonePairs(pairs []Pair) []Pair {
 	result := make([]Pair, len(pairs))
 	for index, pair := range pairs {
 		result[index] = pair
+		result[index].QuoteQuality = pair.QuoteQuality.Clone()
 		result[index].Labels = append([]string(nil), pair.Labels...)
 		result[index].Transactions = cloneMap(pair.Transactions)
 		result[index].Volume = cloneMap(pair.Volume)

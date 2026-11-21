@@ -3,6 +3,8 @@ package plans
 import (
 	"fmt"
 	"strings"
+
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 )
 
 const (
@@ -100,29 +102,32 @@ type RuleType struct {
 }
 
 type Plan struct {
-	Code                string          `json:"code"`
-	Name                string          `json:"name"`
-	Price               string          `json:"price"`
-	Asset               string          `json:"asset"`
-	Days                int             `json:"days"`
-	BillingOptions      []BillingOption `json:"billing_options"`
-	WalletLimit         int             `json:"wallet_limit"`
-	RuleLimit           int             `json:"rule_limit"`
-	GroupLimit          int             `json:"group_limit"`
-	MarketProjectLimit  int             `json:"market_project_limit"`
-	DailyAlertLimit     *int            `json:"daily_alert_limit"`
-	AllowedRuleTypes    []string        `json:"allowed_rule_types"`
-	AllowedMarketRules  []string        `json:"allowed_market_rule_types"`
-	AllowedRules        []RuleType      `json:"allowed_rules"`
-	PrivateNotification bool            `json:"private_notification"`
-	GroupNotification   bool            `json:"group_notification"`
-	DailySummary        bool            `json:"daily_summary"`
-	SummaryTargets      []string        `json:"summary_targets"`
-	MarketQuery         bool            `json:"market_query"`
-	MarketPoolMode      string          `json:"market_pool_mode"`
-	FourMemeMode        string          `json:"four_meme_mode"`
-	MarketCombination   bool            `json:"market_combination"`
-	Description         string          `json:"description"`
+	Code                   string          `json:"code"`
+	Name                   string          `json:"name"`
+	Price                  string          `json:"price"`
+	Asset                  string          `json:"asset"`
+	Days                   int             `json:"days"`
+	BillingOptions         []BillingOption `json:"billing_options"`
+	WalletLimit            int             `json:"wallet_limit"`
+	RuleLimit              int             `json:"rule_limit"`
+	InteractionRuleLimit   int             `json:"interaction_rule_limit"`
+	GroupLimit             int             `json:"group_limit"`
+	MarketProjectLimit     int             `json:"market_project_limit"`
+	MarketPoolLimit        int             `json:"market_pool_limit"`
+	AllowedMarketChainKeys []string        `json:"allowed_market_chain_keys"`
+	DailyAlertLimit        *int            `json:"daily_alert_limit"`
+	AllowedRuleTypes       []string        `json:"allowed_rule_types"`
+	AllowedMarketRules     []string        `json:"allowed_market_rule_types"`
+	AllowedRules           []RuleType      `json:"allowed_rules"`
+	PrivateNotification    bool            `json:"private_notification"`
+	GroupNotification      bool            `json:"group_notification"`
+	DailySummary           bool            `json:"daily_summary"`
+	SummaryTargets         []string        `json:"summary_targets"`
+	MarketQuery            bool            `json:"market_query"`
+	MarketPoolMode         string          `json:"market_pool_mode"`
+	FourMemeMode           string          `json:"four_meme_mode"`
+	MarketCombination      bool            `json:"market_combination"`
+	Description            string          `json:"description"`
 }
 
 type BillingOption struct {
@@ -187,7 +192,126 @@ type Catalog struct {
 	plans map[string]Plan
 }
 
+// MarketChainCUCost is the monthly admission envelope for one token deployment
+// and each pool selected on that deployment.
+type MarketChainCUCost struct {
+	Deployment int64 `json:"deployment"`
+	Pool       int64 `json:"pool"`
+}
+
+// QuotaLimits changes capacities only. Prices, durations and capabilities are
+// still defined by the catalog, including permanent members' plan identity.
+type QuotaLimits struct {
+	FreeRuleLimit                    int
+	StandardRuleLimit                int
+	ProfessionalRuleLimit            int
+	ProfessionalInteractionRuleLimit int
+	ProfessionalMarketProjectLimit   int
+	StandardMarketPoolLimit          int
+	ProfessionalMarketPoolLimit      int
+}
+
+func DefaultQuotaLimits() QuotaLimits {
+	return QuotaLimits{FreeRuleLimit: 1, StandardRuleLimit: 3, ProfessionalRuleLimit: 10,
+		ProfessionalInteractionRuleLimit: 1, ProfessionalMarketProjectLimit: 5,
+		StandardMarketPoolLimit: 1, ProfessionalMarketPoolLimit: 5}
+}
+
+// A wholly omitted limits value preserves direct Config/catalog construction.
+// A partially populated value is validated rather than silently completed.
+func NormalizeQuotaLimits(limits QuotaLimits) (QuotaLimits, error) {
+	defaults := DefaultQuotaLimits()
+	if limits == (QuotaLimits{}) {
+		limits = defaults
+	}
+	// These two fields were added after custom shared-rule configurations.
+	// Omitted pool capacities use catalog defaults; explicit env 0 is rejected
+	// by configuration loading before reaching this compatibility path.
+	if limits.StandardMarketPoolLimit == 0 {
+		limits.StandardMarketPoolLimit = defaults.StandardMarketPoolLimit
+	}
+	if limits.ProfessionalMarketPoolLimit == 0 {
+		limits.ProfessionalMarketPoolLimit = defaults.ProfessionalMarketPoolLimit
+	}
+	if limits.FreeRuleLimit < 1 || limits.StandardRuleLimit < 1 || limits.ProfessionalRuleLimit < 1 {
+		return QuotaLimits{}, fmt.Errorf("free, standard and professional shared rule limits must be greater than zero")
+	}
+	// The existing free-selection and paid-expiry paths retain one selected
+	// rule. Raising this capacity requires changing those paths together.
+	if limits.FreeRuleLimit != 1 {
+		return QuotaLimits{}, fmt.Errorf("free shared rule limit must remain 1 while single-rule free selection is in use")
+	}
+	if limits.ProfessionalInteractionRuleLimit < 1 || limits.ProfessionalInteractionRuleLimit > limits.ProfessionalRuleLimit {
+		return QuotaLimits{}, fmt.Errorf("professional interaction rule limit must be between 1 and the professional shared rule limit")
+	}
+	if limits.ProfessionalMarketProjectLimit < 1 {
+		return QuotaLimits{}, fmt.Errorf("professional market project limit must be greater than zero")
+	}
+	if limits.StandardMarketPoolLimit != 1 {
+		return QuotaLimits{}, fmt.Errorf("standard market pool limit must remain 1 while primary-pool monitoring is in use")
+	}
+	if limits.ProfessionalMarketPoolLimit < 1 {
+		return QuotaLimits{}, fmt.Errorf("professional market pool limit must be greater than zero")
+	}
+	return limits, nil
+}
+
 func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog, error) {
+	return NewCatalogWithQuotaLimits(standardPrice, standardDays, asset, QuotaLimits{})
+}
+
+func NewCatalogWithQuotaLimits(standardPrice string, standardDays int, asset string, limits QuotaLimits) (*Catalog, error) {
+	return NewCatalogWithMarketScope(standardPrice, standardDays, asset, limits, nil)
+}
+
+// DefaultMarketMonitoringChainKeys returns the supported market networks in
+// their stable display order. Each caller owns its returned slice.
+func DefaultMarketMonitoringChainKeys() []string {
+	profiles := chain.SupportedChains()
+	keys := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		keys = append(keys, profile.Key)
+	}
+	return keys
+}
+
+// NormalizeMarketMonitoringChainKeys validates persistent market monitoring
+// scope only. Wallet chains, payment networks and historical queries retain
+// their independent capabilities.
+func NormalizeMarketMonitoringChainKeys(keys []string) ([]string, error) {
+	if keys == nil {
+		keys = DefaultMarketMonitoringChainKeys()
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("market monitoring chain list must not be empty")
+	}
+	result := make([]string, 0, len(keys))
+	seen := map[string]bool{}
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("market monitoring chain list contains an empty chain")
+		}
+		profile, err := chain.ChainProfile(key, "")
+		if err != nil {
+			return nil, err
+		}
+		if !seen[profile.Key] {
+			seen[profile.Key] = true
+			result = append(result, profile.Key)
+		}
+	}
+	return result, nil
+}
+
+func NewCatalogWithMarketScope(standardPrice string, standardDays int, asset string, limits QuotaLimits, monitoringChainKeys []string) (*Catalog, error) {
+	limits, err := NormalizeQuotaLimits(limits)
+	if err != nil {
+		return nil, err
+	}
+	monitoringChainKeys, err = NormalizeMarketMonitoringChainKeys(monitoringChainKeys)
+	if err != nil {
+		return nil, err
+	}
 	standardPrice = strings.TrimSpace(standardPrice)
 	asset = strings.TrimSpace(asset)
 	if standardPrice == "" {
@@ -209,14 +333,14 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			asset,
 			0,
 			1,
-			1,
+			limits.FreeRuleLimit,
 			0,
 			&dailyLimit,
 			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold},
 			false,
 			false,
 			nil,
-			"1 个钱包、1 条基础规则，每日最多 5 次提醒，仅支持私聊通知。",
+			fmt.Sprintf("1 个钱包、%d 条共享规则，每日最多 5 次提醒，仅支持私聊通知。", limits.FreeRuleLimit),
 		),
 		Standard: makePlan(
 			Standard,
@@ -225,14 +349,14 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			asset,
 			standardDays,
 			3,
-			10,
+			limits.StandardRuleLimit,
 			0,
 			nil,
 			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold, ApprovalChange},
 			false,
 			true,
 			[]string{"private"},
-			"适合个人监控：3 个钱包、10 条规则，支持资产变化、Approve 监控、私聊通知和每日摘要。",
+			fmt.Sprintf("适合个人监控：3 个钱包、%d 条共享规则，支持资产变化、Approve 监控、私聊通知和每日摘要。", limits.StandardRuleLimit),
 		),
 		Professional: makePlan(
 			Professional,
@@ -241,24 +365,27 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 			asset,
 			30,
 			20,
-			100,
+			limits.ProfessionalRuleLimit,
 			5,
 			nil,
 			[]string{BalanceChange, Incoming, Outgoing, BalanceThreshold, HighBalanceThreshold, ApprovalChange, AddressInteraction},
 			true,
 			true,
 			[]string{"private", "group"},
-			"适合项目方和社群：20 个地址、100 条规则，支持 5 个群通知、指定地址交互提醒，以及本人私聊与多群每日摘要。",
+			fmt.Sprintf("适合项目方和社群：20 个地址、%d 条共享规则，其中指定地址交互最多 %d 条，支持 5 个群通知，以及本人私聊与多群每日摘要。", limits.ProfessionalRuleLimit, limits.ProfessionalInteractionRuleLimit),
 		),
 	}}
 	free := catalog.plans[Free]
 	free.MarketQuery = false
 	free.MarketPoolMode = "none"
+	free.AllowedMarketChainKeys = []string{}
 	free.FourMemeMode = "none"
 	catalog.plans[Free] = free
 
 	standard := catalog.plans[Standard]
 	standard.MarketProjectLimit = 1
+	standard.MarketPoolLimit = limits.StandardMarketPoolLimit
+	standard.AllowedMarketChainKeys = append([]string(nil), monitoringChainKeys...)
 	standard.AllowedMarketRules = append([]string(nil), standardMarketRuleTypes...)
 	standard.MarketQuery = true
 	standard.MarketPoolMode = "main"
@@ -271,7 +398,10 @@ func NewCatalog(standardPrice string, standardDays int, asset string) (*Catalog,
 	catalog.plans[Standard] = standard
 
 	professional := catalog.plans[Professional]
-	professional.MarketProjectLimit = 5
+	professional.InteractionRuleLimit = limits.ProfessionalInteractionRuleLimit
+	professional.MarketProjectLimit = limits.ProfessionalMarketProjectLimit
+	professional.MarketPoolLimit = limits.ProfessionalMarketPoolLimit
+	professional.AllowedMarketChainKeys = append([]string(nil), monitoringChainKeys...)
 	professional.AllowedMarketRules = append([]string(nil), professionalMarketRuleTypes...)
 	professional.MarketQuery = true
 	professional.MarketPoolMode = "multiple"
@@ -358,6 +488,7 @@ func makePlan(
 }
 
 func clonePlan(plan Plan) Plan {
+	plan.AllowedMarketChainKeys = append(make([]string, 0, len(plan.AllowedMarketChainKeys)), plan.AllowedMarketChainKeys...)
 	plan.AllowedRuleTypes = append([]string(nil), plan.AllowedRuleTypes...)
 	plan.AllowedMarketRules = append([]string(nil), plan.AllowedMarketRules...)
 	plan.AllowedRules = append([]RuleType(nil), plan.AllowedRules...)

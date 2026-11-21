@@ -10,6 +10,7 @@ import (
 
 	boxbotapi "github.com/debox-pro/debox-chat-go-sdk/boxbotapi"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
 )
@@ -17,9 +18,9 @@ import (
 func menuText(language string) string {
 	if normalizeLanguage(language) == "en" {
 		return "🤖 <b>DeBox Asset Alert</b><br/>" +
-			"Monitor on-chain addresses and EVM multi-chain token markets, and receive notifications through Monitor Bot.<br/><br/>" +
+			"Monitor on-chain addresses and token markets, and receive notifications through Monitor Bot.<br/><br/>" +
 			"✨ <b>Core Features:</b><br/><br/>" +
-			"🌐 <b>Multi-chain Monitoring:</b> Covers major blockchains and L2 networks<br/><br/>" +
+			"🌐 <b>Multi-chain Address Monitoring:</b> Covers major blockchains and L2 networks<br/><br/>" +
 			"📍 <b>Address Monitoring:</b> Track balances, incoming and outgoing transfers, approval changes, and interactions with specified addresses<br/><br/>" +
 			"📈 <b>Token Monitoring:</b> Track price, liquidity, volume, large trades, holders, and Four.meme activity<br/><br/>" +
 			"⚡ <b>Real-time Alerts:</b> Key changes delivered in seconds, with stage alerts<br/><br/>" +
@@ -29,9 +30,9 @@ func menuText(language string) string {
 			"Open the personal monitoring dashboard and securely sign in with your wallet signature 🔐"
 	}
 	return "🤖 <b>DeBox Asset Alert</b><br/>" +
-		"监控链上地址与 EVM 多链代币行情，通过 Monitor Bot 接收通知。<br/><br/>" +
+		"监控链上地址与代币行情，通过 Monitor Bot 接收通知。<br/><br/>" +
 		"✨ <b>核心功能支持：</b><br/><br/>" +
-		"🌐 <b>多链监控：</b>覆盖主流公链与 L2<br/><br/>" +
+		"🌐 <b>多链地址监控：</b>覆盖主流公链与 L2<br/><br/>" +
 		"📍 <b>地址监控：</b>跟踪地址余额、资金转入转出、授权变化和指定地址交互<br/><br/>" +
 		"📈 <b>代币监控：</b>价格、流动性、成交量、大额买卖、大户与 Four.meme 动态<br/><br/>" +
 		"⚡ <b>实时提醒：</b>关键变动秒级推送与阶段提醒<br/><br/>" +
@@ -41,10 +42,30 @@ func menuText(language string) string {
 		"打开个人监控面板后，通过钱包签名完成安全登录 🔐"
 }
 
-func featuresText(language string) string {
+func marketMonitoringNames(plan plans.Plan) string {
+	names := make([]string, 0, len(plan.AllowedMarketChainKeys))
+	for _, key := range plan.AllowedMarketChainKeys {
+		if profile, err := chain.ChainProfile(key, ""); err == nil {
+			name := profile.Name
+			if profile.Key == "bsc" {
+				name += " (BSC)"
+			}
+			names = append(names, html.EscapeString(name))
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+func featuresText(language string, scope ...plans.Plan) string {
+	limits := plans.DefaultQuotaLimits()
+	standard := plans.Plan{MarketPoolLimit: limits.StandardMarketPoolLimit, AllowedMarketChainKeys: plans.DefaultMarketMonitoringChainKeys()}
+	professional := plans.Plan{MarketPoolLimit: limits.ProfessionalMarketPoolLimit, AllowedMarketChainKeys: plans.DefaultMarketMonitoringChainKeys()}
+	if len(scope) == 2 {
+		standard, professional = scope[0], scope[1]
+	}
 	if normalizeLanguage(language) == "en" {
 		return "<b>Monitoring</b><br/><br/>" +
-			"Supported networks: BNB Chain, Ethereum, Base, Polygon, Arbitrum, and Optimism.<br/><br/>" +
+			"Supported networks for address monitoring: BNB Chain, Ethereum, Base, Polygon, Arbitrum, and Optimism.<br/><br/>" +
 			"Monitor native asset balances, or enter an ERC-20 contract to monitor a token balance.<br/><br/>" +
 			"- Rule types:<br/>" +
 			"• Balance change: alerts when the change reaches the configured amount<br/>" +
@@ -53,21 +74,22 @@ func featuresText(language string) string {
 			"• High balance threshold: alerts once when the balance reaches or rises above the threshold; it alerts again only after falling below it and another rise<br/>" +
 			"• Approval change<br/>" +
 			"• Specified address interaction (Professional)<br/><br/>" +
-			"- EVM multi-chain token monitoring:<br/>" +
+			fmt.Sprintf("- Persistent token monitoring: %s<br/>", marketMonitoringNames(professional)) +
 			"• Free users can search basic token information; identity verification and pool discovery require Standard or Professional<br/>" +
-			"• Standard supports one token, its primary pool, and price/liquidity/volume rules<br/>" +
-			"• Professional supports five tokens, multiple pools, large trades, holder changes, Four.meme, group alerts, and combination rules<br/>" +
-			"• Supported protocols: PancakeSwap V2/V3/Infinity and Four.meme<br/><br/>" +
+			fmt.Sprintf("• Standard supports token projects within its plan quota, up to %d primary pool, and price/liquidity/volume rules<br/>", standard.MarketPoolLimit) +
+			fmt.Sprintf("• Professional supports token projects within its plan quota, up to %d selected pools, large trades, holder changes, Four.meme, group alerts, and combination rules<br/>", professional.MarketPoolLimit) +
+			"• Protocols vary by network; monitor the pools marked as supported in the dashboard. Four.meme is available on BNB Chain only.<br/><br/>" +
 			"- Delivery modes:<br/>" +
 			"• Real-time: sends after each trigger<br/>" +
 			"• Stage alert (Standard and Professional): counts events in a user-defined cycle, sends once when the configured count is reached, then resets for the next cycle<br/>" +
 			"• Combination rule (Professional): uses at least two dedicated member rules; it sends one combined alert after every member reaches its own count in the same cycle. Members do not send individual alerts.<br/><br/>" +
+			"Address and token rules share one total quota, including standalone rules and combination members. Address interactions also have a separate limit within that total; see Plans for the current limits.<br/><br/>" +
 			"Stage and combination events remain available in the dashboard for 30 days.<br/><br/>" +
 			"Each summary covers the previous scheduled cutoff through the current cutoff; the first covers the previous 24 hours.<br/><br/>" +
 			"If a summary group is unbound, only that group is removed from the delivery targets. The daily summary is turned off if no targets remain."
 	}
 	return "<b>监控能力</b><br/><br/>" +
-		"支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>" +
+		"地址监控支持 BNB Chain、Ethereum、Base、Polygon、Arbitrum、Optimism。<br/><br/>" +
 		"可监控原生资产余额，也可填写 ERC20 合约监控代币余额。<br/><br/>" +
 		"- 规则包括：<br/>" +
 		"• 余额变化：变化量达到设定金额时提醒<br/>" +
@@ -76,21 +98,23 @@ func featuresText(language string) string {
 		"• 高余额阈值：余额达到或高于阈值时提醒一次；持续高于不重复，回落至阈值以下后再次突破才重新提醒<br/>" +
 		"• 授权变化<br/>" +
 		"• 指定地址交互（专业版）<br/><br/>" +
-		"- EVM 多链代币监控：<br/>" +
+		fmt.Sprintf("- 行情持续监控范围：%s<br/>", marketMonitoringNames(professional)) +
 		"• 免费版可搜索代币基础信息；同币验证与交易池查询需标准版或专业版<br/>" +
-		"• 标准版可持续监控 1 个代币、主交易池及价格/流动性/成交量规则<br/>" +
-		"• 专业版可监控 5 个代币、多交易池、大额买卖、大户变化、Four.meme、群通知和组合规则<br/>" +
-		"• 支持 PancakeSwap V2/V3/Infinity 与 Four.meme<br/><br/>" +
+		fmt.Sprintf("• 标准版按套餐额度持续监控代币项目，最多 %d 个主交易池，支持价格/流动性/成交量规则<br/>", standard.MarketPoolLimit) +
+		fmt.Sprintf("• 专业版按套餐额度监控代币项目，最多 %d 个已选交易池，支持大额买卖、大户变化、Four.meme、群通知和组合规则<br/>", professional.MarketPoolLimit) +
+		"• 各链按监控面板标记的已支持协议和交易池提供监控；Four.meme 仅限 BNB Chain。<br/><br/>" +
 		"- 通知模式：<br/>" +
 		"• 实时提醒：每次触发后发送<br/>" +
 		"• 阶段提醒（标准版、专业版）：按用户设置的周期累计事件，达到设定次数后发送一次，进入下一周期后重新计数<br/>" +
 		"• 组合规则（专业版）：至少包含两条专用成员规则；同一周期内所有成员分别达到设定次数后发送一条总通知，成员不会单独通知<br/><br/>" +
+		"地址与行情规则共用总额度，独立规则和组合成员一并计入；指定地址交互另有子上限，且仍计入总额。具体数量见订阅方案。<br/><br/>" +
 		"阶段提醒和组合规则事件会在个人监控面板保留 30 天。<br/><br/>" +
 		"每期摘要统计上一次计划推送时间至本次计划推送时间；首次统计此前 24 小时。<br/><br/>" +
 		"解绑摘要群后，只会从推送对象中移除该群；如果没有剩余推送对象，每日摘要会自动关闭。"
 }
 
 func (s *Service) plansText(language string) string {
+	free, _ := s.deps.Catalog.Get(plans.Free)
 	standard, _ := s.deps.Catalog.Get(plans.Standard)
 	professional, _ := s.deps.Catalog.Get(plans.Professional)
 	standardMonthly, _ := standard.BillingOption(plans.Monthly)
@@ -99,63 +123,29 @@ func (s *Service) plansText(language string) string {
 	professionalMonthly, _ := professional.BillingOption(plans.Monthly)
 	professionalQuarterly, _ := professional.BillingOption(plans.Quarterly)
 	professionalAnnual, _ := professional.BillingOption(plans.Annual)
+	dailyLimit := "-"
+	if free.DailyAlertLimit != nil {
+		dailyLimit = fmt.Sprint(*free.DailyAlertLimit)
+	}
 	if normalizeLanguage(language) == "en" {
 		return "<b>Plans</b><br/><br/>" +
-			"Free: 1 address, 1 basic real-time rule, no expiration, up to 5 alerts per day, private alerts only.<br/><br/>" +
-			fmt.Sprintf(
-				"Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 3 addresses, 10 total rules, real-time or stage alerts, 1 token with primary-pool price/liquidity/volume monitoring, private delivery, and a unified private daily summary.<br/><br/>",
-				standardMonthly.Price,
-				standard.Asset,
-				standardMonthly.Days,
-				standardQuarterly.Price,
-				standard.Asset,
-				standardQuarterly.Days,
-				standardAnnual.Price,
-				standard.Asset,
-				standardAnnual.Days,
-			) +
-			fmt.Sprintf(
-				"Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; 20 addresses, 100 total rules, 5 tokens, multi-pool monitoring, large trades, holders and Four.meme, combination rules, alerts to 5 groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
-				professionalMonthly.Price,
-				professional.Asset,
-				professionalMonthly.Days,
-				professionalQuarterly.Price,
-				professional.Asset,
-				professionalQuarterly.Days,
-				professionalAnnual.Price,
-				professional.Asset,
-				professionalAnnual.Days,
-			) +
+			fmt.Sprintf("Free: %d address, %d basic shared real-time rule, no expiration, up to %s alerts per day, private alerts only.<br/><br/>", free.WalletLimit, free.RuleLimit, dailyLimit) +
+			fmt.Sprintf("Standard: %s %s / %d days, %s %s / %d days, or %s %s / %d days; %d addresses, %d total shared rules, token project limit %d; persistent market monitoring on %s, up to %d primary pool for price/liquidity/volume rules, real-time or stage alerts, private delivery, and a unified private daily summary.<br/><br/>",
+				standardMonthly.Price, standard.Asset, standardMonthly.Days, standardQuarterly.Price, standard.Asset, standardQuarterly.Days, standardAnnual.Price, standard.Asset, standardAnnual.Days, standard.WalletLimit, standard.RuleLimit, standard.MarketProjectLimit, marketMonitoringNames(standard), standard.MarketPoolLimit) +
+			fmt.Sprintf("Professional: %s %s / %d days, %s %s / %d days, or %s %s / %d days; %d addresses, %d total shared rules, token project limit %d, address interaction limit %d within the total; persistent market monitoring on %s, up to %d selected pools, large trades, holders and Four.meme, real-time or stage alerts, combination rules, alerts to %d groups, and unified daily summaries. Combination members use the rule quota.<br/><br/>",
+				professionalMonthly.Price, professional.Asset, professionalMonthly.Days, professionalQuarterly.Price, professional.Asset, professionalQuarterly.Days, professionalAnnual.Price, professional.Asset, professionalAnnual.Days, professional.WalletLimit, professional.RuleLimit, professional.MarketProjectLimit, professional.InteractionRuleLimit, marketMonitoringNames(professional), professional.MarketPoolLimit, professional.GroupLimit) +
+			"Address and market rules share the total quota; standalone rules and combination members count together. Permanent plans use the same limits.<br/><br/>" +
 			"While a paid plan is active, only the same plan can be renewed, with any billing period; choose another plan after it expires.<br/><br/>" +
 			"Pay with USDT on BNB Chain. The subscription activates after 3 block confirmations; failed verification does not activate it.<br/><br/>" +
 			"Subscriptions take effect immediately. Digital service purchases are non-refundable, so please review the plan before purchase."
 	}
 	return "<b>订阅方案</b><br/><br/>" +
-		"免费版：1 个地址，1 条基础实时规则，永久有效，每日最多 5 次提醒，仅私聊通知。<br/><br/>" +
-		fmt.Sprintf(
-			"标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；3 个地址，10 条总规则，支持实时或阶段提醒、1 个代币及主交易池的价格/流动性/成交量监控、私聊通知和统一每日摘要。<br/><br/>",
-			standardMonthly.Price,
-			standard.Asset,
-			standardMonthly.Days,
-			standardQuarterly.Price,
-			standard.Asset,
-			standardQuarterly.Days,
-			standardAnnual.Price,
-			standard.Asset,
-			standardAnnual.Days,
-		) +
-		fmt.Sprintf(
-			"专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；20 个地址，100 条总规则，支持 5 个代币、多交易池、大额买卖、大户与 Four.meme、组合规则、5 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
-			professionalMonthly.Price,
-			professional.Asset,
-			professionalMonthly.Days,
-			professionalQuarterly.Price,
-			professional.Asset,
-			professionalQuarterly.Days,
-			professionalAnnual.Price,
-			professional.Asset,
-			professionalAnnual.Days,
-		) +
+		fmt.Sprintf("免费版：%d 个地址，%d 条基础共享实时规则，永久有效，每日最多 %s 次提醒，仅私聊通知。<br/><br/>", free.WalletLimit, free.RuleLimit, dailyLimit) +
+		fmt.Sprintf("标准版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；%d 个地址，%d 条共享总规则，%d 个代币监控项目，行情持续监控 %s，最多 %d 个主交易池，支持价格/流动性/成交量监控、实时或阶段提醒、私聊通知和统一每日摘要。<br/><br/>",
+			standardMonthly.Price, standard.Asset, standardMonthly.Days, standardQuarterly.Price, standard.Asset, standardQuarterly.Days, standardAnnual.Price, standard.Asset, standardAnnual.Days, standard.WalletLimit, standard.RuleLimit, standard.MarketProjectLimit, marketMonitoringNames(standard), standard.MarketPoolLimit) +
+		fmt.Sprintf("专业版：%s %s / %d 天、%s %s / %d 天或 %s %s / %d 天；%d 个地址，%d 条共享总规则，%d 个代币监控项目；指定地址交互最多 %d 条且计入总额。行情持续监控 %s，最多 %d 个已选交易池，支持大额买卖、大户与 Four.meme、实时或阶段提醒、组合规则、%d 个群通知和统一每日摘要；组合成员会占用规则额度。<br/><br/>",
+			professionalMonthly.Price, professional.Asset, professionalMonthly.Days, professionalQuarterly.Price, professional.Asset, professionalQuarterly.Days, professionalAnnual.Price, professional.Asset, professionalAnnual.Days, professional.WalletLimit, professional.RuleLimit, professional.MarketProjectLimit, professional.InteractionRuleLimit, marketMonitoringNames(professional), professional.MarketPoolLimit, professional.GroupLimit) +
+		"地址与行情共用总规则额度，独立规则和组合成员一并计入；永久套餐也使用对应套餐额度。<br/><br/>" +
 		"付费套餐有效期内只能续费同一套餐，可选择任意付费周期并顺延到期时间；套餐到期后才能选择其他套餐。<br/><br/>" +
 		"使用 BNB Chain USDT 支付，交易达到 3 个区块确认后开通订阅；支付验证失败不会开通。<br/><br/>" +
 		"订阅开通后立即生效，虚拟服务类权益不支持退款，请确认套餐内容后再购买。"
@@ -209,7 +199,7 @@ func (s *Service) subscriptionText(
 				current.Plan.GroupLimit,
 				current.MarketProjectCount,
 				current.Plan.MarketProjectLimit,
-			), nil
+			) + subscriptionRuleQuotaText(current, english), nil
 		}
 		return fmt.Sprintf(
 			"<b>订阅有效期</b><br/>"+
@@ -225,7 +215,7 @@ func (s *Service) subscriptionText(
 			current.Plan.GroupLimit,
 			current.MarketProjectCount,
 			current.Plan.MarketProjectLimit,
-		), nil
+		) + subscriptionRuleQuotaText(current, english), nil
 	}
 	if current.Permanent {
 		if english {
@@ -243,7 +233,7 @@ func (s *Service) subscriptionText(
 				current.Plan.GroupLimit,
 				current.MarketProjectCount,
 				current.Plan.MarketProjectLimit,
-			), nil
+			) + subscriptionRuleQuotaText(current, english), nil
 		}
 		return fmt.Sprintf(
 			"<b>订阅状态</b><br/>"+
@@ -259,7 +249,7 @@ func (s *Service) subscriptionText(
 			current.Plan.GroupLimit,
 			current.MarketProjectCount,
 			current.Plan.MarketProjectLimit,
-		), nil
+		) + subscriptionRuleQuotaText(current, english), nil
 	}
 
 	expiresAt := "-"
@@ -284,7 +274,7 @@ func (s *Service) subscriptionText(
 			current.Plan.GroupLimit,
 			current.MarketProjectCount,
 			current.Plan.MarketProjectLimit,
-		), nil
+		) + subscriptionRuleQuotaText(current, english), nil
 	}
 	return fmt.Sprintf(
 		"<b>订阅有效期</b><br/>"+
@@ -303,7 +293,14 @@ func (s *Service) subscriptionText(
 		current.Plan.GroupLimit,
 		current.MarketProjectCount,
 		current.Plan.MarketProjectLimit,
-	), nil
+	) + subscriptionRuleQuotaText(current, english), nil
+}
+
+func subscriptionRuleQuotaText(current subscription.Entitlement, english bool) string {
+	if english {
+		return fmt.Sprintf("<br/>Address interactions: %d / %d (within shared rules)<br/>Address and token rules, standalone rules and combination members share the total quota. Permanent plans use the same limits.", current.InteractionRuleCount, current.Plan.InteractionRuleLimit)
+	}
+	return fmt.Sprintf("<br/>指定地址交互：%d / %d（计入共享总规则）<br/>地址与行情规则、独立规则与组合成员共用总额度；永久套餐也使用对应额度。", current.InteractionRuleCount, current.Plan.InteractionRuleLimit)
 }
 
 func formatUTCDateTime(value time.Time, english bool) string {
@@ -419,6 +416,11 @@ func (s *Service) callbackText(
 	case data == "alert:intro", strings.HasPrefix(data, "alert:language:"):
 		return menuText(language), nil
 	case data == "alert:features":
+		if s.deps.Catalog != nil {
+			standard, _ := s.deps.Catalog.Get(plans.Standard)
+			professional, _ := s.deps.Catalog.Get(plans.Professional)
+			return featuresText(language, standard, professional), nil
+		}
 		return featuresText(language), nil
 	case data == "alert:plans":
 		return s.plansText(language), nil
@@ -432,10 +434,15 @@ func (s *Service) callbackText(
 		}
 		return "<b>汇总类通知详情</b><br/><br/>单条规则的阶段提醒事件与组合规则中的更多事件详情。", nil
 	case data == "alert:market":
-		if normalizeLanguage(language) == "en" {
-			return "<b>Token Monitoring</b><br/><br/>Query a BNB Chain token, choose its pools, and create price, liquidity, volume, large-trade, holder, or Four.meme rules in the dashboard.", nil
+		plan := plans.Plan{AllowedMarketChainKeys: plans.DefaultMarketMonitoringChainKeys()}
+		if s.deps.Catalog != nil {
+			plan, _ = s.deps.Catalog.Get(plans.Professional)
 		}
-		return "<b>代币监控</b><br/><br/>在监控面板输入 BNB Chain 代币合约，选择交易池后即可创建价格、流动性、成交量、大额买卖、大户或 Four.meme 规则。", nil
+		networks := marketMonitoringNames(plan)
+		if normalizeLanguage(language) == "en" {
+			return fmt.Sprintf("<b>Token Monitoring</b><br/><br/>Query a token on %s, choose its pools, and create price, liquidity, volume, large-trade, holder, or Four.meme rules in the dashboard.", networks), nil
+		}
+		return fmt.Sprintf("<b>代币监控</b><br/><br/>在监控面板输入 %s 代币合约，选择交易池后即可创建价格、流动性、成交量、大额买卖、大户或 Four.meme 规则。", networks), nil
 	case data == "alert:swap":
 		if normalizeLanguage(language) == "en" {
 			return "<b>Swap</b><br/>Swap assets for USDT on BSC", nil

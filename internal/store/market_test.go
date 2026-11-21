@@ -298,6 +298,7 @@ func TestDeletePausedMarketCombinationDeletesOwnedRule(t *testing.T) {
 	const userID = "delete-market-combination-user"
 	const combinationID int64 = 51
 	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL statement_timeout").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("SELECT\\s+mcr.run_status").
 		WithArgs(combinationID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"run_status", "frozen"}).AddRow("paused", false))
@@ -328,6 +329,7 @@ func TestDeletePausedMarketCombinationRejectsActiveRule(t *testing.T) {
 	const userID = "active-market-combination-user"
 	const combinationID int64 = 52
 	mock.ExpectBegin()
+	mock.ExpectExec("SET LOCAL statement_timeout").WillReturnResult(pgxmock.NewResult("SET", 0))
 	mock.ExpectQuery("SELECT\\s+mcr.run_status").
 		WithArgs(combinationID, userID).
 		WillReturnRows(pgxmock.NewRows([]string{"run_status", "frozen"}).AddRow("active", false))

@@ -1,10 +1,12 @@
 package monitor
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
@@ -295,16 +297,14 @@ func TestThresholdRealtimeNotificationsDescribeEqualityAccurately(t *testing.T) 
 
 func TestRealtimeNotificationEnglishActionUsesExistingAddressSummary(t *testing.T) {
 	notifier := &fakeNotifier{}
-	executor := newTestExecutor(t, &fakeRepository{}, &fakeChain{}, notifier)
-	rule := testRule(plans.Incoming, nil, plans.Standard)
+	executor := newTestExecutor(t, &fakeRepository{}, &fakeChain{balance: chain.BalanceResult{Value: "12", Symbol: "USDT"}}, notifier)
+	previous := "10"
+	rule := testRule(plans.Incoming, &previous, plans.Standard)
+	rule.Threshold = "0"
 	rule.NotificationLanguage = "en"
 
-	if _, err := executor.sendRealtimeNotification(
-		rule,
-		"message",
-		"nd_0123456789abcdef0123456789abcdef01234567",
-	); err != nil {
-		t.Fatalf("sendRealtimeNotification() error = %v", err)
+	if result := executor.checkRule(context.Background(), rule, plans.Standard); result.Status != "alerted" {
+		t.Fatalf("checkRule() = %+v", result)
 	}
 	if notifier.actionText != "View details" ||
 		notifier.actionURL != "https://example.test?notification_id=nd_0123456789abcdef0123456789abcdef01234567" {

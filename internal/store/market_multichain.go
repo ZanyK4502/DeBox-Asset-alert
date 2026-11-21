@@ -87,11 +87,25 @@ func (s *Store) CreateMultiChainMarketProjectWithinQuota(
 		return MarketProject{}, err
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProject, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+		if err != nil {
+			return MarketProject{}, err
+		}
+		defer cancel()
 		if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
 			return MarketProject{}, err
 		}
 		if err := requirePolicyPlan(ctx, tx, params.DeBoxUserID, policy); err != nil {
 			return MarketProject{}, err
+		}
+		policy, err = s.marketScopePolicy(ctx, tx, params.DeBoxUserID, policy)
+		if err != nil {
+			return MarketProject{}, err
+		}
+		for _, deployment := range params.Deployments {
+			if err := validateMarketScopeChain(policy, deployment.ChainKey, deployment.ChainID); err != nil {
+				return MarketProject{}, err
+			}
 		}
 		if policy.MarketProjectLimit <= 0 {
 			return MarketProject{}, ErrMarketMonitoringDenied
@@ -213,6 +227,12 @@ func (s *Store) CreateMultiChainMarketProjectWithinQuota(
 					"set compatibility main market pool: %w", err,
 				)
 			}
+		}
+		if err := validateMarketProjectScope(ctx, tx, project.ID, params.DeBoxUserID, policy); err != nil {
+			return MarketProject{}, err
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return MarketProject{}, err
 		}
 		return project, nil
 	})
@@ -798,7 +818,7 @@ func (s *Store) ListLatestMarketProjectSnapshots(
 			ms.volume_24h_usd::text AS volume_24h_usd,
 			ms.buys_5m, ms.sells_5m, ms.buys_1h, ms.sells_1h,
 			ms.buys_24h, ms.sells_24h,
-			ms.source, ms.source_timestamp, ms.captured_at, ms.raw_payload
+			ms.source, ms.source_timestamp, ms.quote_quality, ms.captured_at, ms.raw_payload
 		FROM market_project_deployments mpd
 		JOIN market_projects mp ON mp.id = mpd.market_project_id
 		JOIN market_asset_deployments mad

@@ -22,6 +22,7 @@ type Repository interface {
 	ListUserWatchRules(context.Context, string) ([]store.WatchRule, error)
 	ListNotificationGroups(context.Context, string) ([]store.NotificationGroup, error)
 	CountUserWatchRules(context.Context, string) (int64, error)
+	CountUserInteractionRules(context.Context, string) (int64, error)
 	CountUserWallets(context.Context, string) (int64, error)
 	CountNotificationGroups(context.Context, string) (int64, error)
 	CountMarketProjects(context.Context, string) (int64, error)
@@ -68,23 +69,24 @@ type SummarySettings struct {
 }
 
 type Entitlement struct {
-	DeBoxUserID        string                    `json:"debox_user_id"`
-	Subscription       *store.Subscription       `json:"subscription"`
-	Plan               plans.Plan                `json:"plan"`
-	Permanent          bool                      `json:"permanent"`
-	PaidHistory        bool                      `json:"paid_history"`
-	FallbackFree       bool                      `json:"fallback_free"`
-	Preferences        store.UserPreference      `json:"preferences"`
-	DaysRemaining      int                       `json:"days_remaining"`
-	RuleCount          int64                     `json:"rule_count"`
-	WalletCount        int64                     `json:"wallet_count"`
-	GroupCount         int64                     `json:"group_count"`
-	MarketProjectCount int64                     `json:"market_project_count"`
-	Rules              []store.WatchRule         `json:"rules"`
-	ActiveRules        []RuleView                `json:"active_rules"`
-	PausedRules        []RuleView                `json:"paused_rules"`
-	Groups             []store.NotificationGroup `json:"groups"`
-	SummarySettings    SummarySettings           `json:"summary_settings"`
+	DeBoxUserID          string                    `json:"debox_user_id"`
+	Subscription         *store.Subscription       `json:"subscription"`
+	Plan                 plans.Plan                `json:"plan"`
+	Permanent            bool                      `json:"permanent"`
+	PaidHistory          bool                      `json:"paid_history"`
+	FallbackFree         bool                      `json:"fallback_free"`
+	Preferences          store.UserPreference      `json:"preferences"`
+	DaysRemaining        int                       `json:"days_remaining"`
+	RuleCount            int64                     `json:"rule_count"`
+	InteractionRuleCount int64                     `json:"interaction_rule_count"`
+	WalletCount          int64                     `json:"wallet_count"`
+	GroupCount           int64                     `json:"group_count"`
+	MarketProjectCount   int64                     `json:"market_project_count"`
+	Rules                []store.WatchRule         `json:"rules"`
+	ActiveRules          []RuleView                `json:"active_rules"`
+	PausedRules          []RuleView                `json:"paused_rules"`
+	Groups               []store.NotificationGroup `json:"groups"`
+	SummarySettings      SummarySettings           `json:"summary_settings"`
 }
 
 func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlement, error) {
@@ -119,6 +121,10 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 	}
 
 	rules, err := s.repository.ListUserWatchRules(ctx, deboxUserID)
+	if err != nil {
+		return Entitlement{}, err
+	}
+	interactionRuleCount, err := s.repository.CountUserInteractionRules(ctx, deboxUserID)
 	if err != nil {
 		return Entitlement{}, err
 	}
@@ -158,23 +164,24 @@ func (s *Service) Entitlement(ctx context.Context, deboxUserID string) (Entitlem
 	}
 
 	return Entitlement{
-		DeBoxUserID:        deboxUserID,
-		Subscription:       activeSubscription,
-		Plan:               plan,
-		Permanent:          activeSubscription != nil && activeSubscription.IsPermanent == 1,
-		PaidHistory:        paidHistory,
-		FallbackFree:       fallbackFree,
-		Preferences:        preferences,
-		DaysRemaining:      daysRemaining(activeSubscription, s.now()),
-		RuleCount:          ruleCount,
-		WalletCount:        walletCount,
-		GroupCount:         groupCount,
-		MarketProjectCount: marketProjectCount,
-		Rules:              rules,
-		ActiveRules:        activeRules,
-		PausedRules:        pausedRules,
-		Groups:             groups,
-		SummarySettings:    summarySettings(activeSubscription, summaryTargets),
+		DeBoxUserID:          deboxUserID,
+		Subscription:         activeSubscription,
+		Plan:                 plan,
+		Permanent:            activeSubscription != nil && activeSubscription.IsPermanent == 1,
+		PaidHistory:          paidHistory,
+		FallbackFree:         fallbackFree,
+		Preferences:          preferences,
+		DaysRemaining:        daysRemaining(activeSubscription, s.now()),
+		RuleCount:            ruleCount,
+		InteractionRuleCount: interactionRuleCount,
+		WalletCount:          walletCount,
+		GroupCount:           groupCount,
+		MarketProjectCount:   marketProjectCount,
+		Rules:                rules,
+		ActiveRules:          activeRules,
+		PausedRules:          pausedRules,
+		Groups:               groups,
+		SummarySettings:      summarySettings(activeSubscription, summaryTargets),
 	}, nil
 }
 
@@ -556,8 +563,11 @@ func quotaPolicy(plan plans.Plan) store.QuotaPolicy {
 		PlanCode:               plan.Code,
 		WalletLimit:            plan.WalletLimit,
 		RuleLimit:              plan.RuleLimit,
+		InteractionRuleLimit:   plan.InteractionRuleLimit,
 		GroupLimit:             plan.GroupLimit,
 		MarketProjectLimit:     plan.MarketProjectLimit,
+		MarketPoolLimit:        plan.MarketPoolLimit,
+		AllowedMarketChainKeys: append(make([]string, 0, len(plan.AllowedMarketChainKeys)), plan.AllowedMarketChainKeys...),
 		AllowedRuleTypes:       append([]string(nil), plan.AllowedRuleTypes...),
 		AllowedMarketRuleTypes: append([]string(nil), plan.AllowedMarketRules...),
 		GroupNotification:      plan.GroupNotification,
@@ -569,6 +579,13 @@ func quotaPolicy(plan plans.Plan) store.QuotaPolicy {
 
 func quotaError(err error, plan plans.Plan, restoring bool) error {
 	switch {
+	case errors.Is(err, store.ErrResourceCapacityUnavailable), errors.Is(err, store.ErrResourceCapacityReached), errors.Is(err, store.ErrResourceCapacityState), errors.Is(err, store.ErrMarketHolderTargetsReached):
+		// Keep admission/state identity through the public error mapping. These
+		// are account capacity outcomes, not the user's purchased plan quota.
+		return err
+	case errors.Is(err, store.ErrMarketChainNotAllowed), errors.Is(err, store.ErrMarketPoolLimitReached):
+		// Preserve typed scope outcomes for the HTTP boundary's localized reply.
+		return err
 	case errors.Is(err, store.ErrRuleTypeDenied):
 		return errors.New("当前套餐不支持该规则类型。")
 	case errors.Is(err, store.ErrGroupNotificationDenied):
@@ -605,6 +622,8 @@ func quotaError(err error, plan plans.Plan, restoring bool) error {
 			noun = "运行规则"
 		}
 		return fmt.Errorf("当前套餐最多支持 %d 条%s。", plan.RuleLimit, noun)
+	case errors.Is(err, store.ErrInteractionRuleLimitReached):
+		return fmt.Errorf("当前套餐最多支持 %d 条指定地址交互规则，独立规则和组合成员合计，并计入总规则额度。", plan.InteractionRuleLimit)
 	case errors.Is(err, store.ErrWalletLimitReached):
 		noun := "钱包"
 		if restoring {

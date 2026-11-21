@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type CreateWatchRuleParams struct {
@@ -26,12 +27,45 @@ type CreateWatchRuleParams struct {
 	CycleMinutes          int32
 	TriggerCountThreshold int64
 	LastValue             *string
+	BalanceReadSource     string
+	BalanceReadDecimals   *int
+	BalanceReadObservedAt *time.Time
 }
 
 func (s *Store) CreateWatchRule(
 	ctx context.Context,
 	params CreateWatchRuleParams,
 ) (WatchRule, error) {
+	if s.resourceCapacity != nil {
+		return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+			ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+			if err != nil {
+				return WatchRule{}, err
+			}
+			defer cancel()
+			if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
+				return WatchRule{}, err
+			}
+			rule, err := createWatchRule(ctx, tx, params)
+			if err != nil {
+				return WatchRule{}, err
+			}
+			if err := s.checkResourceCapacity(ctx, tx); err != nil {
+				return WatchRule{}, err
+			}
+			return rule, nil
+		})
+	}
+	if params.BalanceReadSource != "" || params.BalanceReadDecimals != nil || params.BalanceReadObservedAt != nil {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+			if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '2s'`); err != nil {
+				return WatchRule{}, err
+			}
+			return createWatchRule(ctx, tx, params)
+		})
+	}
 	return createWatchRule(ctx, s.db, params)
 }
 
@@ -89,6 +123,31 @@ func createWatchRule(
 	)
 	if err != nil {
 		return WatchRule{}, fmt.Errorf("create watch rule: %w", err)
+	}
+	if params.BalanceReadSource != "" || params.BalanceReadDecimals != nil || params.BalanceReadObservedAt != nil {
+		value := "0"
+		if params.LastValue != nil {
+			value = *params.LastValue
+		}
+		if !walletBalanceEvidenceValid(rule, params.BalanceReadSource, params.BalanceReadDecimals, params.BalanceReadObservedAt, value) {
+			return WatchRule{}, ErrWalletBalanceSourceUnavailable
+		}
+		var now time.Time
+		if err := db.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return WatchRule{}, err
+		}
+		if params.BalanceReadObservedAt.After(now) {
+			return WatchRule{}, ErrWalletBalanceSourceUnavailable
+		}
+		if params.LastValue != nil {
+			if rule.LastCheckedAt == nil {
+				return WatchRule{}, ErrWalletBalanceSourceUnavailable
+			}
+			observation := RecordWalletObservationParams{BalanceReadSource: params.BalanceReadSource, BalanceReadDecimals: params.BalanceReadDecimals, ReadObservedAt: params.BalanceReadObservedAt, CurrentValue: *params.LastValue}
+			if err := commitWalletBalanceSource(ctx, db, rule, observation, *rule.LastCheckedAt); err != nil {
+				return WatchRule{}, err
+			}
+		}
 	}
 	return rule, nil
 }
@@ -183,6 +242,16 @@ func (s *Store) RestoreWatchRule(
 	deboxUserID string,
 ) (WatchRule, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (WatchRule, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return WatchRule{}, err
+		}
+		defer cancel()
+		if s.resourceCapacity != nil {
+			if err := lockUser(ctx, tx, deboxUserID); err != nil {
+				return WatchRule{}, err
+			}
+		}
 		rule, err := collectOne[WatchRule](ctx, tx, `
 			UPDATE watch_rules
 			SET run_status = 'active',
@@ -211,6 +280,9 @@ func (s *Store) RestoreWatchRule(
 			WHERE watch_rule_id = $1 AND closed_at IS NULL
 		`, ruleID); err != nil {
 			return WatchRule{}, fmt.Errorf("reset restored watch rule aggregation: %w", err)
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return WatchRule{}, err
 		}
 		return rule, nil
 	})
@@ -308,6 +380,11 @@ func (s *Store) SetFreeWatchRule(
 	ruleID int64,
 ) (UserPreference, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (UserPreference, error) {
+		ctx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, deboxUserID)
+		if err != nil {
+			return UserPreference{}, err
+		}
+		defer cancel()
 		if err := lockUser(ctx, tx, deboxUserID); err != nil {
 			return UserPreference{}, err
 		}
@@ -318,7 +395,14 @@ func (s *Store) SetFreeWatchRule(
 		if planCode != "free" {
 			return UserPreference{}, ErrSubscriptionChanged
 		}
-		return setFreeWatchRule(ctx, tx, deboxUserID, ruleID)
+		preferences, err := setFreeWatchRule(ctx, tx, deboxUserID, ruleID)
+		if err != nil {
+			return UserPreference{}, err
+		}
+		if err := s.checkResourceCapacity(ctx, tx); err != nil {
+			return UserPreference{}, err
+		}
+		return preferences, nil
 	})
 }
 
@@ -353,7 +437,8 @@ func setFreeWatchRule(
 	if _, err := db.Exec(ctx, `
 			UPDATE watch_rules
 			SET run_status = CASE WHEN id = $1 THEN 'active' ELSE 'paused' END,
-			    pause_reason = CASE WHEN id = $1 THEN '' ELSE 'free_plan' END
+			    pause_reason = CASE WHEN id = $1 THEN '' ELSE 'free_plan' END,
+			    notification_generation = CASE WHEN id <> $1 AND run_status='active' THEN notification_generation+1 ELSE notification_generation END
 			WHERE debox_user_id = $2 AND enabled = 1
 	`, ruleID, deboxUserID); err != nil {
 		return UserPreference{}, fmt.Errorf("activate free watch rule: %w", err)
@@ -364,6 +449,22 @@ func setFreeWatchRule(
 		WHERE debox_user_id = $1 AND enabled = 1 AND run_status = 'active'
 	`, deboxUserID); err != nil {
 		return UserPreference{}, fmt.Errorf("pause free plan combination rules: %w", err)
+	}
+	if err := closePausedWalletWindows(ctx, db, deboxUserID); err != nil {
+		return UserPreference{}, err
+	}
+	if _, err := cancelInvalidWalletNotifications(ctx, db, deboxUserID, "wallet rule paused after free rule selection changed"); err != nil {
+		return UserPreference{}, err
+	}
+	if err := cancelMarketDeliveriesForUser(ctx, db, deboxUserID, "free rule selection changed before delivery"); err != nil {
+		return UserPreference{}, err
+	}
+	var lifecycleAt time.Time
+	if err := db.QueryRow(ctx, `SELECT NOW()`).Scan(&lifecycleAt); err != nil {
+		return UserPreference{}, err
+	}
+	if _, err := cancelInvalidDailySummaryDispatches(ctx, db, deboxUserID, lifecycleAt); err != nil {
+		return UserPreference{}, err
 	}
 	preferences, err := collectOne[UserPreference](ctx, db, `
 			INSERT INTO user_preferences (debox_user_id, free_watch_rule_id, updated_at)
@@ -410,50 +511,7 @@ func (s *Store) PauseUserWatchRules(
 }
 
 func (s *Store) ListEnabledWatchRules(ctx context.Context, limit int) ([]WatchRule, error) {
-	rules, err := collectMany[WatchRule](ctx, s.db, `
-		SELECT `+watchRuleColumnsQualified+`,
-		       COALESCE(active_subscription.plan_code, 'free') AS effective_plan_code
-		FROM watch_rules wr
-		LEFT JOIN LATERAL (
-			SELECT sub.plan_code
-			FROM subscriptions sub
-			WHERE sub.debox_user_id = wr.debox_user_id
-			  AND sub.status = 'active'
-			  AND (sub.is_permanent = 1 OR sub.expires_at > NOW())
-			ORDER BY CASE sub.plan_code WHEN 'professional' THEN 2 WHEN 'standard' THEN 1 ELSE 0 END DESC,
-			         sub.is_permanent DESC,
-			         sub.expires_at DESC
-			LIMIT 1
-		) active_subscription ON TRUE
-		WHERE wr.enabled = 1
-		  AND wr.run_status = 'active'
-		  AND (
-			active_subscription.plan_code <> 'free'
-			OR (
-			  (
-				active_subscription.plan_code = 'free'
-				OR NOT EXISTS (
-				  SELECT 1 FROM subscriptions history
-				  WHERE history.debox_user_id = wr.debox_user_id
-				    AND history.plan_code <> 'free'
-				    AND history.is_permanent = 0
-				)
-			  )
-			  AND EXISTS (
-				SELECT 1
-				FROM user_preferences up
-				WHERE up.debox_user_id = wr.debox_user_id
-				  AND up.free_watch_rule_id = wr.id
-			  )
-			)
-		  )
-		ORDER BY wr.last_checked_at NULLS FIRST, wr.id ASC
-		LIMIT $1
-	`, clamp(limit, 1, 1000))
-	if err != nil {
-		return nil, fmt.Errorf("list enabled watch rules: %w", err)
-	}
-	return rules, nil
+	return s.listScheduledWatchRules(ctx, limit, 0)
 }
 
 func (s *Store) UpdateWatchRuleValue(
@@ -463,7 +521,7 @@ func (s *Store) UpdateWatchRuleValue(
 ) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE watch_rules
-		SET last_value = $1, last_checked_at = NOW()
+		SET last_value = $1, last_checked_at = NOW(), next_observation_at = NULL
 		WHERE id = $2
 	`, value, ruleID)
 	if err != nil {

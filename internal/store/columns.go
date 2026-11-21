@@ -15,7 +15,7 @@ const watchRuleColumns = `
 	notification_chat_id, notification_chat_type, notification_label,
 	notification_language, rule_scope, delivery_mode, cycle_type, cycle_minutes,
 	trigger_count_threshold, aggregation_anchor_at,
-	enabled, run_status, pause_reason, last_value, last_checked_at, created_at
+	enabled, run_status, pause_reason, last_value, last_checked_at, created_at, notification_generation
 `
 
 const watchRuleColumnsQualified = `
@@ -24,7 +24,7 @@ const watchRuleColumnsQualified = `
 	wr.notification_chat_id, wr.notification_chat_type, wr.notification_label,
 	wr.notification_language, wr.rule_scope, wr.delivery_mode, wr.cycle_type, wr.cycle_minutes,
 	wr.trigger_count_threshold, wr.aggregation_anchor_at,
-	wr.enabled, wr.run_status, wr.pause_reason, wr.last_value, wr.last_checked_at, wr.created_at
+	wr.enabled, wr.run_status, wr.pause_reason, wr.last_value, wr.last_checked_at, wr.created_at, wr.notification_generation
 `
 
 const aggregationWindowColumns = `

@@ -2,8 +2,8 @@ package marketrules
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -12,13 +12,12 @@ import (
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketparse"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 )
 
-const (
-	defaultHolderRankLimit = 20
-	holderFetchLimit       = 100
-)
+const defaultHolderRankLimit = 20
 
 var commonHolderExclusions = map[string]string{
 	"0x0000000000000000000000000000000000000000": "zero_address",
@@ -34,81 +33,67 @@ var bscHolderExclusions = map[string]string{
 	marketparse.BSCPancakeV3Factory:     "factory",
 }
 
+// RefreshDueHolders performs one bounded leased job. The independent runner
+// schedules additional work; rule evaluation never calls the old full sweep.
 func (service *Service) RefreshDueHolders(ctx context.Context) (int64, error) {
-	cutoff := service.now().Add(-service.settings.HolderRefreshInterval)
-	var refreshed int64
-	var refreshErrors []error
-	for _, profile := range chain.SupportedChains() {
-		projects, err := service.repository.ListMarketProjectsDueHolderRefresh(
-			ctx,
-			profile.ChainID,
-			cutoff,
-			10,
-		)
-		if err != nil {
-			refreshErrors = append(
-				refreshErrors,
-				fmt.Errorf("list %s holder refresh targets: %w", profile.Key, err),
-			)
-			continue
-		}
-		for _, project := range projects {
-			if err := service.refreshProjectHolders(ctx, project); err != nil {
-				refreshErrors = append(
-					refreshErrors,
-					fmt.Errorf(
-						"refresh %s holders for %s: %w",
-						profile.Key,
-						project.TokenAddress,
-						err,
-					),
-				)
-				continue
-			}
-			refreshed++
-		}
+	runner, err := NewHolderRefreshRunner(service, HolderRefreshSettings{Workers: 1})
+	if err != nil {
+		return 0, err
 	}
-	return refreshed, errors.Join(refreshErrors...)
+	result, err := runner.RunOnce(ctx)
+	return result.Refreshed, err
 }
 
-func (service *Service) refreshProjectHolders(
-	ctx context.Context,
-	project store.MarketProject,
-) error {
-	page, err := service.holders.TokenHoldersByContract(
-		ctx,
-		project.TokenAddress,
-		project.ChainKey,
-		"bsc",
-		chain.TokenHoldersOptions{RPP: holderFetchLimit, WithCount: true},
-	)
+type atomicHolderRepository interface {
+	GetMarketHolderRefreshState(context.Context, int64, string) (*store.MarketHolderRefreshState, error)
+	RecordMarketHolderRefreshAttempt(context.Context, int64, string, string, time.Time) error
+	ListMarketHolderPoolAddresses(context.Context, int64, string) ([]string, error)
+	ApplyMarketHolderRefresh(context.Context, store.MarketHolderRefreshParams) (store.MarketHolderRefreshResult, error)
+}
+
+func (service *Service) refreshProjectHolders(ctx context.Context, project store.MarketProject) error {
+	budget := store.MarketHolderRefreshMaxPages
+	return service.refreshProjectHoldersWithBudget(ctx, project, &budget)
+}
+
+func (service *Service) refreshProjectHoldersWithBudget(ctx context.Context, project store.MarketProject, budget *int) error {
+	repository, ok := service.repository.(atomicHolderRepository)
+	if !ok {
+		return fmt.Errorf("atomic holder observation repository is unavailable")
+	}
+	previous, err := repository.GetMarketHolderRefreshState(ctx, project.ChainID, project.TokenAddress)
 	if err != nil {
 		return err
 	}
-	oldHolders, snapshots, err := service.projectHolderBaseline(ctx, project)
+	var expectedPreviousAt *time.Time
+	if previous != nil && previous.LastSuccessAt != nil {
+		value := *previous.LastSuccessAt
+		expectedPreviousAt = &value
+	}
+	if err := repository.RecordMarketHolderRefreshAttempt(ctx, project.ChainID, project.ChainKey, project.TokenAddress, service.now()); err != nil {
+		return err
+	}
+	params, err := service.prepareMarketHolderRefresh(ctx, project, budget, expectedPreviousAt)
 	if err != nil {
 		return err
 	}
-	oldByAddress := make(map[string]store.MarketHolder, len(oldHolders))
-	for _, holder := range oldHolders {
-		oldByAddress[strings.ToLower(holder.HolderAddress)] = holder
+	_, err = repository.ApplyMarketHolderRefresh(ctx, params)
+	return err
+}
+
+// Sampling and preparation contain no write transaction. A scheduled job uses
+// the lease's pre-HTTP expected baseline; manual local tests retain the legacy
+// helper above, which captures that baseline before its provider request.
+func (service *Service) prepareMarketHolderRefresh(ctx context.Context, project store.MarketProject, budget *int, expectedPreviousAt *time.Time) (store.MarketHolderRefreshParams, error) {
+	repository, ok := service.repository.(atomicHolderRepository)
+	if !ok {
+		return store.MarketHolderRefreshParams{}, fmt.Errorf("atomic holder observation repository is unavailable")
 	}
-	var priceUSD *string
-	if len(snapshots) > 0 {
-		priceUSD = snapshots[0].PriceUSD
-	}
-	pools, err := service.repository.ListMarketProjectPools(
-		ctx,
-		project.ID,
-		project.DeBoxUserID,
-	)
+	poolAddresses, err := repository.ListMarketHolderPoolAddresses(ctx, project.ChainID, project.TokenAddress)
 	if err != nil {
-		return err
+		return store.MarketHolderRefreshParams{}, err
 	}
-	exclusions := make(
-		map[string]string,
-		len(commonHolderExclusions)+len(bscHolderExclusions)+len(pools)+1,
-	)
+	exclusions := make(map[string]string, len(commonHolderExclusions)+len(bscHolderExclusions)+len(poolAddresses)+1)
 	for address, reason := range commonHolderExclusions {
 		exclusions[address] = reason
 	}
@@ -117,129 +102,147 @@ func (service *Service) refreshProjectHolders(
 			exclusions[address] = reason
 		}
 	}
-	exclusions[project.TokenAddress] = "token_contract"
-	for _, pool := range pools {
-		if pool.ChainID == project.ChainID && pool.PoolAddress != nil {
-			exclusions[strings.ToLower(*pool.PoolAddress)] = "market_pool"
-		}
+	exclusions[strings.ToLower(project.TokenAddress)] = "token_contract"
+	for _, address := range poolAddresses {
+		exclusions[strings.ToLower(address)] = "market_pool"
 	}
-
-	type rankedHolder struct {
-		address    string
-		balanceRaw string
+	keys := make([]string, 0, len(exclusions))
+	for address, reason := range exclusions {
+		keys = append(keys, address+":"+reason)
 	}
-	candidates := make([]rankedHolder, 0, len(page.Items))
-	for _, item := range page.Items {
-		address := strings.ToLower(item.OwnerAddress)
-		if _, excluded := exclusions[address]; excluded || isZeroInteger(item.BalanceRaw) {
+	sort.Strings(keys)
+	exclusionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(keys, "\n"))))
+	items, err := service.completeHolderSample(ctx, project, budget)
+	if err != nil {
+		return store.MarketHolderRefreshParams{}, err
+	}
+	candidates := make([]chain.TokenHolder, 0, len(items))
+	for _, item := range items {
+		if _, excluded := exclusions[strings.ToLower(item.OwnerAddress)]; excluded || isZeroInteger(item.BalanceRaw) {
 			continue
 		}
-		candidates = append(candidates, rankedHolder{
-			address:    address,
-			balanceRaw: item.BalanceRaw,
-		})
+		candidates = append(candidates, item)
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		left, _ := new(big.Int).SetString(candidates[i].balanceRaw, 10)
-		right, _ := new(big.Int).SetString(candidates[j].balanceRaw, 10)
-		return left.Cmp(right) > 0
+	sort.Slice(candidates, func(i, j int) bool {
+		left, _ := new(big.Int).SetString(candidates[i].BalanceRaw, 10)
+		right, _ := new(big.Int).SetString(candidates[j].BalanceRaw, 10)
+		if cmp := left.Cmp(right); cmp != 0 {
+			return cmp > 0
+		}
+		return candidates[i].OwnerAddress < candidates[j].OwnerAddress
 	})
-	if len(candidates) > defaultHolderRankLimit {
-		candidates = candidates[:defaultHolderRankLimit]
+	if len(candidates) > int(marketwindow.MaxHolderRank) {
+		candidates = candidates[:marketwindow.MaxHolderRank]
 	}
-	now := service.now()
-	currentAddresses := make([]string, 0, len(candidates))
-	currentSet := make(map[string]struct{}, len(candidates))
-	initialBaseline := len(oldHolders) == 0
+	oldHolders, snapshots, err := service.projectHolderBaseline(ctx, project)
+	if err != nil {
+		return store.MarketHolderRefreshParams{}, err
+	}
+	oldByAddress := map[string]store.MarketHolder{}
+	for _, holder := range oldHolders {
+		oldByAddress[strings.ToLower(holder.HolderAddress)] = holder
+	}
+	var valuationSnapshot *store.MarketSnapshot
+	if len(snapshots) > 0 {
+		valuationSnapshot = &snapshots[0]
+	}
+	now := service.now().UTC().Truncate(time.Microsecond)
+	params := store.MarketHolderRefreshParams{ChainKey: project.ChainKey, ChainID: project.ChainID, TokenAddress: project.TokenAddress, ObservedAt: now,
+		SourceComplete: true, SourceItemCount: int32(len(items)), CoveredTopN: marketwindow.MaxHolderRank, ExclusionHash: exclusionHash, Ranks: []store.MarketHolderRank{},
+		ExpectedBalances: map[string]string{}}
+	params.ExpectedPreviousAt = expectedPreviousAt
 	for index, candidate := range candidates {
+		address := strings.ToLower(candidate.OwnerAddress)
 		rank := int32(index + 1)
-		balance, err := chain.FormatUnits(candidate.balanceRaw, int(project.TokenDecimals))
-		if err != nil {
-			return err
-		}
-		supplyPercent := percentage(candidate.balanceRaw, project.TotalSupplyRaw)
-		old, existed := oldByAddress[candidate.address]
-		if _, err := service.repository.UpsertMarketHolder(
-			ctx,
-			store.UpsertMarketHolderParams{
-				ChainKey:       project.ChainKey,
-				ChainID:        project.ChainID,
-				TokenAddress:   project.TokenAddress,
-				HolderAddress:  candidate.address,
-				BalanceRaw:     candidate.balanceRaw,
-				Balance:        balance,
-				SupplyPercent:  supplyPercent,
-				Rank:           &rank,
-				AddressKind:    "wallet",
-				Source:         "nodit_holders",
-				SeenAt:         now,
-				RecordSnapshot: true,
-			},
-		); err != nil {
-			return err
-		}
-		currentAddresses = append(currentAddresses, candidate.address)
-		currentSet[candidate.address] = struct{}{}
-		if initialBaseline {
+		params.Ranks = append(params.Ranks, store.MarketHolderRank{HolderAddress: address, BalanceRaw: candidate.BalanceRaw, Rank: rank})
+		if index >= defaultHolderRankLimit {
 			continue
 		}
-		if existed {
-			if err := service.recordHolderBalanceChange(
-				ctx,
-				project,
-				old,
-				candidate.balanceRaw,
-				balance,
-				rank,
-				priceUSD,
-				now,
-			); err != nil {
-				return err
-			}
+		balance, err := chain.FormatUnits(candidate.BalanceRaw, int(project.TokenDecimals))
+		if err != nil {
+			return store.MarketHolderRefreshParams{}, err
 		}
-		if !existed || old.Rank == nil || *old.Rank > defaultHolderRankLimit {
-			if err := service.recordHolderRankEvent(
-				ctx,
-				project,
-				candidate.address,
-				"holder_rank_entered",
-				old.Rank,
-				&rank,
-				now,
-			); err != nil {
-				return err
+		params.Holders = append(params.Holders, store.UpsertMarketHolderParams{ChainKey: project.ChainKey, ChainID: project.ChainID, TokenAddress: project.TokenAddress,
+			HolderAddress: address, BalanceRaw: candidate.BalanceRaw, Balance: balance, SupplyPercent: percentage(candidate.BalanceRaw, project.TotalSupplyRaw), Rank: &rank, AddressKind: "wallet", Source: "nodit_holders", SeenAt: now})
+		if old, exists := oldByAddress[address]; exists {
+			event, err := holderBalanceChangeParams(project, old, candidate.BalanceRaw, balance, rank, valuationSnapshot, now)
+			if err != nil {
+				return store.MarketHolderRefreshParams{}, err
+			}
+			if event != nil {
+				params.BalanceEvents = append(params.BalanceEvents, *event)
+				params.ExpectedBalances[address] = old.BalanceRaw
 			}
 		}
 	}
-	if !initialBaseline {
-		for _, old := range oldHolders {
-			if old.Rank == nil || *old.Rank > defaultHolderRankLimit {
-				continue
-			}
-			if _, remains := currentSet[strings.ToLower(old.HolderAddress)]; remains {
-				continue
-			}
-			if err := service.recordHolderRankEvent(
-				ctx,
-				project,
-				old.HolderAddress,
-				"holder_rank_exited",
-				old.Rank,
-				nil,
-				now,
-			); err != nil {
-				return err
-			}
+	return params, nil
+}
+
+// The provider documents cursor traversal and total count, but no descending
+// order or same-block snapshot. Only a bounded complete enumeration proves a
+// sampled TopN. A large token is explicitly unavailable, never a sorted prefix.
+func (service *Service) completeHolderSample(ctx context.Context, project store.MarketProject, budget *int) ([]chain.TokenHolder, error) {
+	items := make([]chain.TokenHolder, 0, store.MarketHolderRefreshPageSize)
+	seenAddresses, seenCursors := map[string]bool{}, map[string]bool{}
+	cursor := ""
+	var total *int64
+	for pageNumber := 0; pageNumber < store.MarketHolderRefreshMaxPages; pageNumber++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		if budget == nil || *budget <= 0 {
+			return nil, &holderSamplingFailure{code: "source_capacity", cause: fmt.Errorf("holder request budget exhausted")}
+		}
+		*budget--
+		page, err := service.holders.TokenHoldersByContract(ctx, project.TokenAddress, project.ChainKey, "bsc", chain.TokenHoldersOptions{Cursor: cursor, RPP: store.MarketHolderRefreshPageSize, WithCount: true})
+		if err != nil {
+			return nil, &holderSamplingFailure{code: "source_error", cause: err}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if page.Count != nil && *page.Count > store.MarketHolderRefreshMaxHolders {
+			return nil, &holderSamplingFailure{code: "source_capacity", cause: fmt.Errorf("holder count exceeds %d complete-enumeration capacity", store.MarketHolderRefreshMaxHolders)}
+		}
+		if page.Count == nil || *page.Count < 0 || len(page.Items) > store.MarketHolderRefreshPageSize || total != nil && *total != *page.Count {
+			return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("missing or inconsistent holder count")}
+		}
+		if total == nil {
+			value := *page.Count
+			total = &value
+		}
+		for _, item := range page.Items {
+			if len(item.BalanceRaw) == 0 || len(item.BalanceRaw) > 78 {
+				return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("holder balance exceeds uint256 byte budget")}
+			}
+			for _, digit := range item.BalanceRaw {
+				if digit < '0' || digit > '9' {
+					return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("holder balance must be an unsigned decimal integer")}
+				}
+			}
+			address, err := chain.ValidateAddress(item.OwnerAddress)
+			raw, valid := new(big.Int).SetString(item.BalanceRaw, 10)
+			if err != nil || !valid || raw.Sign() < 0 || raw.BitLen() > 256 || seenAddresses[address] {
+				return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("invalid or repeated holder address/balance")}
+			}
+			seenAddresses[address] = true
+			item.OwnerAddress = address
+			item.BalanceRaw = raw.String()
+			items = append(items, item)
+		}
+		if int64(len(items)) > *total || len(items) > store.MarketHolderRefreshMaxHolders {
+			return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("holder count exceeded")}
+		}
+		if int64(len(items)) == *total {
+			return items, nil
+		}
+		if len(page.Items) == 0 || page.Cursor == "" || seenCursors[page.Cursor] {
+			return nil, &holderSamplingFailure{code: "source_incomplete", cause: fmt.Errorf("missing page or repeated cursor")}
+		}
+		seenCursors[page.Cursor] = true
+		cursor = page.Cursor
 	}
-	_, err = service.repository.ClearMarketHolderRanksOutsideSnapshot(
-		ctx,
-		project.ChainID,
-		project.TokenAddress,
-		currentAddresses,
-		now,
-	)
-	return err
+	return nil, &holderSamplingFailure{code: "source_capacity", cause: fmt.Errorf("holder pagination exceeds %d pages/%d addresses", store.MarketHolderRefreshMaxPages, store.MarketHolderRefreshMaxHolders)}
 }
 
 func (service *Service) projectHolderBaseline(
@@ -297,17 +300,34 @@ func (service *Service) recordHolderBalanceChange(
 	newRaw string,
 	newBalance string,
 	newRank int32,
-	priceUSD *string,
+	valuationSnapshot *store.MarketSnapshot,
 	occurredAt time.Time,
 ) error {
+	params, err := holderBalanceChangeParams(project, old, newRaw, newBalance, newRank, valuationSnapshot, occurredAt)
+	if err != nil || params == nil {
+		return err
+	}
+	_, _, err = service.repository.CreateMarketEvent(ctx, *params)
+	return err
+}
+
+func holderBalanceChangeParams(
+	project store.MarketProject,
+	old store.MarketHolder,
+	newRaw string,
+	newBalance string,
+	newRank int32,
+	valuationSnapshot *store.MarketSnapshot,
+	occurredAt time.Time,
+) (*store.CreateMarketEventParams, error) {
 	oldValue, oldOK := new(big.Int).SetString(old.BalanceRaw, 10)
 	newValue, newOK := new(big.Int).SetString(newRaw, 10)
 	if !oldOK || !newOK {
-		return fmt.Errorf("invalid holder balance")
+		return nil, fmt.Errorf("invalid holder balance")
 	}
 	comparison := newValue.Cmp(oldValue)
 	if comparison == 0 {
-		return nil
+		return nil, nil
 	}
 	eventType := "holder_increase"
 	delta := new(big.Int).Sub(newValue, oldValue)
@@ -317,40 +337,49 @@ func (service *Service) recordHolderBalanceChange(
 	}
 	formatted, err := chain.FormatUnits(delta.String(), int(project.TokenDecimals))
 	if err != nil {
-		return err
+		return nil, err
+	}
+	quote := marketquality.Quote{Status: marketquality.StatusUnknown}
+	valuationAt := occurredAt.UTC().Truncate(time.Microsecond)
+	var priceUSD *string
+	if valuationSnapshot != nil {
+		quote = valuationSnapshot.QuoteQuality.Clone()
+		if quote.AvailableAt(valuationAt) && positiveDecimal(valuationSnapshot.PriceUSD) {
+			priceUSD = valuationSnapshot.PriceUSD
+		}
 	}
 	metadata, _ := json.Marshal(map[string]any{
-		"holder_address": old.HolderAddress,
-		"old_balance":    old.Balance,
-		"new_balance":    newBalance,
-		"old_rank":       old.Rank,
-		"new_rank":       newRank,
+		"holder_address":           old.HolderAddress,
+		"old_balance":              old.Balance,
+		"new_balance":              newBalance,
+		"old_rank":                 old.Rank,
+		"new_rank":                 newRank,
+		"valuation_schema_version": 1,
+		"valuation_complete":       priceUSD != nil,
+		"valuation_quote_quality":  quote,
+		"valuation_at":             valuationAt,
 	})
 	wallet := strings.ToLower(old.HolderAddress)
 	raw := delta.String()
 	usdValue := multiplyDecimals(formatted, priceUSD)
 	eventKey := holderEventKey(project, wallet, eventType, occurredAt)
-	_, _, err = service.repository.CreateMarketEvent(
-		ctx,
-		store.CreateMarketEventParams{
-			ChainKey:       project.ChainKey,
-			ChainID:        project.ChainID,
-			TokenAddress:   project.TokenAddress,
-			EventType:      eventType,
-			EventKey:       eventKey,
-			WalletAddress:  &wallet,
-			TokenAmountRaw: &raw,
-			TokenAmount:    &formatted,
-			USDValue:       usdValue,
-			Source:         "nodit_holders",
-			Confidence:     "1.0000",
-			Confirmed:      true,
-			OccurredAt:     occurredAt,
-			Metadata:       metadata,
-			RawPayload:     metadata,
-		},
-	)
-	return err
+	return &store.CreateMarketEventParams{
+		ChainKey:       project.ChainKey,
+		ChainID:        project.ChainID,
+		TokenAddress:   project.TokenAddress,
+		EventType:      eventType,
+		EventKey:       eventKey,
+		WalletAddress:  &wallet,
+		TokenAmountRaw: &raw,
+		TokenAmount:    &formatted,
+		USDValue:       usdValue,
+		Source:         "nodit_holders",
+		Confidence:     "1.0000",
+		Confirmed:      true,
+		OccurredAt:     occurredAt,
+		Metadata:       metadata,
+		RawPayload:     metadata,
+	}, nil
 }
 
 func (service *Service) recordHolderRankEvent(

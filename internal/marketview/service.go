@@ -15,7 +15,9 @@ import (
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketdata"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketprotocol"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketquality"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketrules"
+	"github.com/ZanyK4502/DeBox-Asset-alert/internal/marketwindow"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/store"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/subscription"
@@ -26,6 +28,8 @@ const defaultChainKey = "bsc"
 var ErrPaidMarketAccessRequired = errors.New("同币验证和交易池查询仅支持标准版和专业版。")
 
 var ErrMarketDataUnavailable = errors.New("行情数据服务暂时繁忙，请稍后重试。")
+
+var ErrQuoteUnavailable = fmt.Errorf("%w：当前行情暂不可用于新推荐", ErrMarketDataUnavailable)
 
 type Repository interface {
 	ListMarketProjects(context.Context, string, bool) ([]store.MarketProject, error)
@@ -66,6 +70,7 @@ type Entitlements interface {
 
 type ChainService interface {
 	TokenMetadata(context.Context, string, string, string) (chain.TokenMetadata, error)
+	TokenDecimals(context.Context, string, string, string) (int32, error)
 	PoolTokens(context.Context, string, string, string) (string, string, error)
 	PoolFactory(context.Context, string, string, string) (string, error)
 }
@@ -150,10 +155,11 @@ type PoolPreview struct {
 }
 
 type TokenQueryResult struct {
-	ChainKey string              `json:"chain_key"`
-	ChainID  int64               `json:"chain_id"`
-	Token    chain.TokenMetadata `json:"token"`
-	Pools    []PoolPreview       `json:"pools"`
+	ChainKey           string              `json:"chain_key"`
+	ChainID            int64               `json:"chain_id"`
+	Token              chain.TokenMetadata `json:"token"`
+	Pools              []PoolPreview       `json:"pools"`
+	QuoteMaxAgeSeconds int64               `json:"quote_max_age_seconds"`
 }
 
 type MultiTokenQueryInput struct {
@@ -161,13 +167,14 @@ type MultiTokenQueryInput struct {
 }
 
 type ChainPoolGroup struct {
-	ChainKey       string              `json:"chain_key"`
-	ChainID        int64               `json:"chain_id"`
-	ChainName      string              `json:"chain_name"`
-	Token          chain.TokenMetadata `json:"token"`
-	FullMonitoring []PoolPreview       `json:"full_monitoring_pools"`
-	QuoteOnly      []PoolPreview       `json:"quote_only_pools"`
-	Error          string              `json:"error,omitempty"`
+	ChainKey           string              `json:"chain_key"`
+	ChainID            int64               `json:"chain_id"`
+	ChainName          string              `json:"chain_name"`
+	Token              chain.TokenMetadata `json:"token"`
+	FullMonitoring     []PoolPreview       `json:"full_monitoring_pools"`
+	QuoteOnly          []PoolPreview       `json:"quote_only_pools"`
+	Error              string              `json:"error,omitempty"`
+	QuoteMaxAgeSeconds int64               `json:"quote_max_age_seconds"`
 }
 
 type MultiTokenQueryResult struct {
@@ -176,6 +183,17 @@ type MultiTokenQueryResult struct {
 
 type RecommendationPreviewInput struct {
 	Deployments []RecommendationPreviewDeployment `json:"deployments"`
+}
+
+type RecommendationResult struct {
+	Recommendations    []marketrules.Recommendation `json:"recommendations"`
+	QuoteQuality       marketquality.Quote          `json:"quote_quality"`
+	QuoteMaxAgeSeconds int64                        `json:"quote_max_age_seconds"`
+	GeneratedAt        time.Time                    `json:"generated_at"`
+}
+
+type recommendationSampleRepository interface {
+	ListMarketRecommendationSamples(context.Context, int64, string, store.MarketSnapshot, time.Time, time.Time, int) ([]store.MarketRecommendationSample, error)
 }
 
 type RecommendationPreviewDeployment struct {
@@ -201,18 +219,50 @@ type CreateProjectDeploymentInput struct {
 	PrimaryPoolAddress string   `json:"primary_pool_address"`
 }
 
+type TradeRuleReadinessView struct {
+	RuleID           int64      `json:"rule_id"`
+	TargetKey        string     `json:"target_key"`
+	Status           string     `json:"status"`
+	Description      string     `json:"description"`
+	DescriptionEN    string     `json:"description_en"`
+	EligibilityAfter *time.Time `json:"eligibility_after,omitempty"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+func tradeRuleReadinessView(state store.MarketTradeReadiness) TradeRuleReadinessView {
+	result := TradeRuleReadinessView{RuleID: state.RuleID, TargetKey: state.TargetKey, Status: state.Status, EligibilityAfter: state.EligibilityAfter, UpdatedAt: state.UpdatedAt}
+	switch state.Status {
+	case "warming":
+		result.Description = "历史窗口数据不足，正在预热；数据完整后自动开始判断，预热期间不补发提醒。"
+		result.DescriptionEN = "Warming up: reliable window history is incomplete. Evaluation starts automatically when complete; warmup alerts are not sent later."
+	case "ready":
+		result.Description = "所需数据完整，按原规则判断。"
+		result.DescriptionEN = "Required data is available; evaluation follows the existing rule."
+	case "blocked":
+		result.Description = "当前交易数据、估值或读取暂不可用，已暂停判断并保留原进度。"
+		result.DescriptionEN = "Evaluation is paused because current trade data, valuation, or reads are unavailable. Existing progress is preserved."
+	default:
+		result.Description = "等待首轮有效数据检查。"
+		result.DescriptionEN = "Waiting for the first valid data check."
+	}
+	return result
+}
+
 type ProjectDetail struct {
-	Project        store.MarketProject                 `json:"project"`
-	Asset          *store.MarketAsset                  `json:"asset,omitempty"`
-	Pools          []store.MarketPoolView              `json:"pools"`
-	LatestSnapshot *store.MarketSnapshot               `json:"latest_snapshot"`
-	Snapshots      []store.MarketSnapshot              `json:"snapshots"`
-	Rules          []store.MarketRule                  `json:"rules"`
-	Combinations   []store.MarketCombinationRule       `json:"combinations"`
-	Holders        []store.MarketHolderView            `json:"holders"`
-	Labels         []store.MarketAddressLabel          `json:"labels"`
-	ProviderHealth []store.MarketProviderHealth        `json:"provider_health"`
-	Deployments    []store.MarketProjectDeploymentView `json:"deployments"`
+	Project             store.MarketProject                 `json:"project"`
+	Asset               *store.MarketAsset                  `json:"asset,omitempty"`
+	Pools               []store.MarketPoolView              `json:"pools"`
+	LatestSnapshot      *store.MarketSnapshot               `json:"latest_snapshot"`
+	Snapshots           []store.MarketSnapshot              `json:"snapshots"`
+	Rules               []store.MarketRule                  `json:"rules"`
+	TradeReadiness      []TradeRuleReadinessView            `json:"trade_readiness"`
+	Combinations        []store.MarketCombinationRule       `json:"combinations"`
+	Holders             []store.MarketHolderView            `json:"holders"`
+	HolderRefreshStates []store.MarketHolderRefreshState    `json:"holder_refresh_states"`
+	Labels              []store.MarketAddressLabel          `json:"labels"`
+	ProviderHealth      []store.MarketProviderHealth        `json:"provider_health"`
+	Deployments         []store.MarketProjectDeploymentView `json:"deployments"`
+	QuoteMaxAgeSeconds  int64                               `json:"quote_max_age_seconds"`
 }
 
 type EventFilterInput struct {
@@ -334,9 +384,10 @@ func (s *Service) QueryTokens(
 		}
 
 		group := ChainPoolGroup{
-			ChainKey:  profile.Key,
-			ChainID:   profile.ChainID,
-			ChainName: profile.Name,
+			ChainKey:           profile.Key,
+			ChainID:            profile.ChainID,
+			ChainName:          profile.Name,
+			QuoteMaxAgeSeconds: int64(marketquality.MaxAge / time.Second),
 		}
 		query, queryErr := s.queryToken(ctx, TokenQueryInput{
 			ChainKey:     profile.Key,
@@ -372,12 +423,21 @@ func (s *Service) PreviewRecommendations(
 	deboxUserID string,
 	input RecommendationPreviewInput,
 ) ([]marketrules.Recommendation, error) {
+	result, err := s.PreviewRecommendationsWithQuote(ctx, deboxUserID, input)
+	return result.Recommendations, err
+}
+
+func (s *Service) PreviewRecommendationsWithQuote(
+	ctx context.Context,
+	deboxUserID string,
+	input RecommendationPreviewInput,
+) (RecommendationResult, error) {
 	if err := s.requireMarketQuery(ctx, deboxUserID); err != nil {
-		return nil, err
+		return RecommendationResult{}, err
 	}
 	if len(input.Deployments) == 0 ||
 		len(input.Deployments) > len(chain.SupportedChains()) {
-		return nil, errors.New("请选择 1 到 6 条链上的监控池。")
+		return RecommendationResult{}, errors.New("请选择 1 到 6 条链上的监控池。")
 	}
 
 	var selectedPair *marketdata.Pair
@@ -388,24 +448,24 @@ func (s *Service) PreviewRecommendations(
 	for _, deployment := range input.Deployments {
 		profile, err := chain.ChainProfile(deployment.ChainKey, "")
 		if err != nil {
-			return nil, err
+			return RecommendationResult{}, err
 		}
 		if _, exists := seenChains[profile.Key]; exists {
-			return nil, errors.New("每条链只能提交一次推荐值查询。")
+			return RecommendationResult{}, errors.New("每条链只能提交一次推荐值查询。")
 		}
 		seenChains[profile.Key] = struct{}{}
 		tokenAddress, err := chain.ValidateAddress(deployment.TokenAddress)
 		if err != nil {
-			return nil, errors.New("代币合约地址无效。")
+			return RecommendationResult{}, errors.New("代币合约地址无效。")
 		}
 		if len(deployment.PoolAddresses) == 0 || len(deployment.PoolAddresses) > 20 {
-			return nil, errors.New("每条链请选择 1 到 20 个交易池。")
+			return RecommendationResult{}, errors.New("每条链请选择 1 到 20 个交易池。")
 		}
 		poolAddresses := make([]string, 0, len(deployment.PoolAddresses))
 		for _, address := range deployment.PoolAddresses {
 			normalized, normalizeErr := chain.ValidateAddress(address)
 			if normalizeErr != nil {
-				return nil, errors.New("交易池地址无效。")
+				return RecommendationResult{}, errors.New("交易池地址无效。")
 			}
 			poolAddresses = append(poolAddresses, normalized)
 		}
@@ -414,19 +474,30 @@ func (s *Service) PreviewRecommendations(
 		)
 		if err != nil {
 			if marketdata.IsTemporaryError(err) {
-				return nil, ErrMarketDataUnavailable
+				return RecommendationResult{}, ErrQuoteUnavailable
 			}
-			return nil, fmt.Errorf("刷新推荐行情失败：%w", err)
+			return RecommendationResult{}, fmt.Errorf("刷新推荐行情失败：%w", err)
 		}
 		for index := range pairs {
 			pair := &pairs[index]
+			if !pair.QuoteQuality.AvailableAt(time.Now().UTC()) {
+				continue
+			}
 			if !strings.EqualFold(pair.BaseToken.Address, tokenAddress) &&
 				!strings.EqualFold(pair.QuoteToken.Address, tokenAddress) {
 				continue
 			}
+			price := recommendationPairPrice(*pair, tokenAddress)
+			if price == nil {
+				continue
+			}
+			priceValue, validPrice := new(big.Rat).SetString(*price)
+			if !validPrice || priceValue.Sign() <= 0 {
+				continue
+			}
 			liquidity := new(big.Rat)
-			if _, ok := liquidity.SetString(pair.Liquidity.USD.String()); !ok {
-				liquidity.SetInt64(0)
+			if _, ok := liquidity.SetString(pair.Liquidity.USD.String()); !ok || liquidity.Sign() < 0 {
+				continue
 			}
 			if selectedPair == nil || liquidity.Cmp(selectedLiquidity) > 0 {
 				selectedPair = pair
@@ -437,12 +508,16 @@ func (s *Service) PreviewRecommendations(
 		}
 	}
 	if selectedPair == nil {
-		return nil, errors.New("暂时无法读取所选交易池的最新行情。")
+		return RecommendationResult{}, ErrQuoteUnavailable
 	}
 	snapshot := recommendationSnapshotFromPair(
 		*selectedPair, selectedToken, selectedProfile,
 	)
-	return marketrules.RecommendThresholds(snapshot, nil), nil
+	recommendations := marketrules.RecommendThresholdsAt(snapshot, nil, time.Now().UTC())
+	if len(recommendations) == 0 {
+		return RecommendationResult{}, ErrQuoteUnavailable
+	}
+	return recommendationResult(recommendations, snapshot.QuoteQuality), nil
 }
 
 func recommendationSnapshotFromPair(
@@ -451,9 +526,9 @@ func recommendationSnapshotFromPair(
 	profile chain.Profile,
 ) store.MarketSnapshot {
 	price := recommendationPairPrice(pair, tokenAddress)
-	buys5m, sells5m := recommendationTransactionPointers(pair.Transactions["m5"])
-	buys1h, sells1h := recommendationTransactionPointers(pair.Transactions["h1"])
-	buys24h, sells24h := recommendationTransactionPointers(pair.Transactions["h24"])
+	buys5m, sells5m := recommendationTransactionPointers(pair.Transactions, "m5")
+	buys1h, sells1h := recommendationTransactionPointers(pair.Transactions, "h1")
+	buys24h, sells24h := recommendationTransactionPointers(pair.Transactions, "h24")
 	return store.MarketSnapshot{
 		ChainKey:     profile.Key,
 		ChainID:      profile.ChainID,
@@ -475,6 +550,7 @@ func recommendationSnapshotFromPair(
 		Sells24h:     sells24h,
 		Source:       marketdata.SourceDexScreener,
 		CapturedAt:   time.Now().UTC(),
+		QuoteQuality: pair.QuoteQuality.Clone(),
 	}
 }
 
@@ -514,8 +590,13 @@ func recommendationDecimalPointer(value marketdata.Decimal) *string {
 }
 
 func recommendationTransactionPointers(
-	value marketdata.TransactionCounts,
+	values map[string]marketdata.TransactionCounts,
+	window string,
 ) (*int64, *int64) {
+	value, present := values[window]
+	if !present {
+		return nil, nil
+	}
 	buys, sells := value.Buys, value.Sells
 	return &buys, &sells
 }
@@ -593,10 +674,11 @@ func (s *Service) queryToken(
 		)
 	})
 	return TokenQueryResult{
-		ChainKey: chainKey,
-		ChainID:  profile.ChainID,
-		Token:    token,
-		Pools:    previews,
+		ChainKey:           chainKey,
+		ChainID:            profile.ChainID,
+		Token:              token,
+		Pools:              previews,
+		QuoteMaxAgeSeconds: int64(marketquality.MaxAge / time.Second),
 	}, nil
 }
 
@@ -614,6 +696,13 @@ func (s *Service) CreateProject(
 	deboxUserID string,
 	input CreateProjectInput,
 ) (ProjectDetail, error) {
+	plan, err := s.deps.Entitlements.ActivePlan(ctx, deboxUserID)
+	if err != nil {
+		return ProjectDetail{}, err
+	}
+	if err := validateCreateProjectMonitoringScope(plan, input); err != nil {
+		return ProjectDetail{}, err
+	}
 	if len(input.Deployments) > 0 {
 		return s.createMultiChainProject(ctx, deboxUserID, input)
 	}
@@ -622,6 +711,25 @@ func (s *Service) CreateProject(
 	})
 	if err != nil {
 		return ProjectDetail{}, err
+	}
+	selected := normalizedAddressSet(input.PoolAddresses)
+	if len(selected) == 0 {
+		for _, preview := range query.Pools {
+			if preview.Supported {
+				selected[preview.Pair.PairAddress] = struct{}{}
+				break
+			}
+		}
+	}
+	matched := make(map[string]bool, len(selected))
+	for _, preview := range query.Pools {
+		address := strings.ToLower(strings.TrimSpace(preview.Pair.PairAddress))
+		if _, exists := selected[address]; exists && preview.Supported {
+			matched[address] = true
+		}
+	}
+	if len(matched) != len(selected) {
+		return ProjectDetail{}, errors.New("所选交易池包含无效或仅支持行情查询的交易池。")
 	}
 	totalSupply := query.Token.TotalSupplyRaw
 	project, err := s.deps.Entitlements.CreateMarketProject(
@@ -642,34 +750,14 @@ func (s *Service) CreateProject(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
-	selected := normalizedAddressSet(input.PoolAddresses)
-	if len(selected) == 0 {
-		for _, preview := range query.Pools {
-			if preview.Supported {
-				selected[preview.Pair.PairAddress] = struct{}{}
-				break
-			}
-		}
-	}
-	if len(selected) > 0 {
-		matched := false
-		for _, preview := range query.Pools {
-			if _, exists := selected[preview.Pair.PairAddress]; exists && preview.Supported {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			_, _ = s.deps.Repository.SetMarketProjectStatus(
-				ctx, project.ID, deboxUserID, "archived", "no_supported_pool_selected",
-			)
-			return ProjectDetail{}, errors.New("没有选择可用于事件解析的交易池。")
-		}
-	}
 	primarySet := false
+	knownDecimals := make(map[string]int32)
 	for _, preview := range query.Pools {
-		pool, persistErr := s.persistPool(ctx, query.Token, preview)
+		pool, persistErr := s.persistPoolWithDecimals(ctx, query.Token, preview, knownDecimals)
 		if persistErr != nil {
+			if !preview.Supported && errors.Is(persistErr, errPoolTokenDecimalsUnavailable) {
+				continue
+			}
 			_, _ = s.deps.Repository.SetMarketProjectStatus(
 				ctx, project.ID, deboxUserID, "archived", "pool_setup_failed",
 			)
@@ -813,6 +901,7 @@ func (s *Service) createMultiChainProject(
 			[]store.CreateMultiChainMarketDeploymentParams, 0, len(query.Groups),
 		),
 	}
+	knownDecimals := make(map[string]int32)
 	for _, group := range query.Groups {
 		if group.Error != "" {
 			return ProjectDetail{}, errors.New(group.Error)
@@ -843,8 +932,11 @@ func (s *Service) createMultiChainProject(
 		}
 		for _, preview := range allPools {
 			pairAddress := strings.ToLower(strings.TrimSpace(preview.Pair.PairAddress))
-			pool, persistErr := s.persistPool(ctx, group.Token, preview)
+			pool, persistErr := s.persistPoolWithDecimals(ctx, group.Token, preview, knownDecimals)
 			if persistErr != nil {
+				if !preview.Supported && errors.Is(persistErr, errPoolTokenDecimalsUnavailable) {
+					continue
+				}
 				return ProjectDetail{}, persistErr
 			}
 			_, selected := selectedAddresses[pairAddress]
@@ -950,6 +1042,24 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
+	if project.FrozenAt == nil {
+		for index := range pools {
+			if pools[index].QuoteSnapshotID != nil {
+				continue
+			}
+			// The pool table's historical NOT NULL value defaults to zero. Only
+			// the provider payload establishes that this field actually existed.
+			// Snapshot-backed and frozen values come solely from that snapshot.
+			var evidence struct {
+				Liquidity struct {
+					USD marketdata.Decimal `json:"usd"`
+				} `json:"liquidity"`
+			}
+			if json.Unmarshal(pools[index].Metadata, &evidence) != nil || !evidence.Liquidity.USD.Valid() {
+				pools[index].LiquidityUSD = ""
+			}
+		}
+	}
 	var asset *store.MarketAsset
 	deployments := []store.MarketProjectDeploymentView{}
 	snapshots := []store.MarketSnapshot{}
@@ -984,6 +1094,9 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
+	for index := range rules {
+		rules[index].RuntimeIssues = marketwindow.RuntimeIssues(rules[index].RuleType, rules[index].WindowMinutes, rules[index].ThresholdValue)
+	}
 	if len(holderViews) == 0 && project.FrozenAt == nil {
 		holders, holderErr := s.deps.Repository.ListMarketHolders(
 			ctx, projectID, deboxUserID, true, 100,
@@ -1003,7 +1116,28 @@ func (s *Service) Project(
 	if err != nil {
 		return ProjectDetail{}, err
 	}
+	tradeReadiness := []TradeRuleReadinessView{}
+	if repository, ok := s.deps.Repository.(interface {
+		ListMarketProjectTradeReadiness(context.Context, int64, string) ([]store.MarketTradeReadiness, error)
+	}); ok {
+		states, readinessErr := repository.ListMarketProjectTradeReadiness(ctx, projectID, deboxUserID)
+		if readinessErr != nil {
+			return ProjectDetail{}, readinessErr
+		}
+		for _, state := range states {
+			tradeReadiness = append(tradeReadiness, tradeRuleReadinessView(state))
+		}
+	}
 	health := []store.MarketProviderHealth{}
+	holderRefreshStates := []store.MarketHolderRefreshState{}
+	if repository, ok := s.deps.Repository.(interface {
+		ListMarketHolderRefreshStatesForProject(context.Context, int64, string) ([]store.MarketHolderRefreshState, error)
+	}); ok {
+		holderRefreshStates, err = repository.ListMarketHolderRefreshStatesForProject(ctx, projectID, deboxUserID)
+		if err != nil {
+			return ProjectDetail{}, err
+		}
+	}
 	if project.FrozenAt == nil {
 		health, err = s.deps.Repository.ListMarketProviderHealth(ctx)
 		if err != nil {
@@ -1058,9 +1192,11 @@ func (s *Service) Project(
 	}
 	return ProjectDetail{
 		Project: *project, Asset: asset, Pools: pools,
-		LatestSnapshot: snapshot, Snapshots: snapshots, Rules: rules,
+		LatestSnapshot: snapshot, Snapshots: snapshots, Rules: rules, TradeReadiness: tradeReadiness,
 		Combinations: projectCombinations, Holders: holderViews,
-		Labels: labels, ProviderHealth: health, Deployments: deployments,
+		HolderRefreshStates: holderRefreshStates,
+		Labels:              labels, ProviderHealth: health, Deployments: deployments,
+		QuoteMaxAgeSeconds: int64(marketquality.MaxAge / time.Second),
 	}, nil
 }
 
@@ -1339,32 +1475,57 @@ func (s *Service) Recommendations(
 	deboxUserID string,
 	projectID int64,
 ) ([]marketrules.Recommendation, error) {
+	result, err := s.RecommendationsWithQuote(ctx, deboxUserID, projectID)
+	return result.Recommendations, err
+}
+
+func (s *Service) RecommendationsWithQuote(
+	ctx context.Context,
+	deboxUserID string,
+	projectID int64,
+) (RecommendationResult, error) {
 	project, err := s.deps.Repository.GetMarketProject(ctx, projectID, deboxUserID)
 	if err != nil {
-		return nil, err
+		return RecommendationResult{}, err
 	}
 	if project == nil {
-		return nil, store.ErrNotFound
+		return RecommendationResult{}, store.ErrNotFound
 	}
 	snapshot, err := s.deps.Repository.LatestMarketSnapshot(
 		ctx, project.ChainID, project.TokenAddress, project.MainPoolID,
 	)
 	if err != nil {
-		return nil, err
+		return RecommendationResult{}, err
 	}
-	if snapshot == nil {
-		snapshot = &store.MarketSnapshot{
-			ChainKey: project.ChainKey, ChainID: project.ChainID,
-			TokenAddress: project.TokenAddress,
+	if snapshot == nil || !snapshot.QuoteQuality.AvailableAt(time.Now().UTC()) {
+		return RecommendationResult{}, ErrQuoteUnavailable
+	}
+	var samples []store.MarketRecommendationSample
+	if repository, available := s.deps.Repository.(recommendationSampleRepository); available {
+		at := time.Now().UTC()
+		samples, err = repository.ListMarketRecommendationSamples(ctx, projectID, deboxUserID, *snapshot,
+			at.Add(-marketwindow.RecommendationLookback), at, marketwindow.MaxRecommendationSamples)
+		if err != nil {
+			if errors.Is(err, store.ErrMarketRecommendationUnavailable) {
+				return RecommendationResult{}, fmt.Errorf("%w: %w", ErrQuoteUnavailable, err)
+			}
+			return RecommendationResult{}, err
 		}
 	}
-	events, err := s.deps.Repository.ListMarketEvents(
-		ctx, projectID, deboxUserID, 0, 100,
-	)
-	if err != nil {
-		return nil, err
+	// An adapter without the scoped reader can use the original fresh-quote
+	// formulas, but must not manufacture samples from the newest insertion IDs.
+	recommendations := marketrules.RecommendThresholdsWithSamplesAt(*snapshot, samples, time.Now().UTC())
+	if len(recommendations) == 0 {
+		return RecommendationResult{}, ErrQuoteUnavailable
 	}
-	return marketrules.RecommendThresholds(*snapshot, events), nil
+	return recommendationResult(recommendations, snapshot.QuoteQuality), nil
+}
+
+func recommendationResult(recommendations []marketrules.Recommendation, quality marketquality.Quote) RecommendationResult {
+	return RecommendationResult{
+		Recommendations: recommendations, QuoteQuality: quality.Clone(),
+		QuoteMaxAgeSeconds: int64(marketquality.MaxAge / time.Second), GeneratedAt: time.Now().UTC(),
+	}
 }
 
 func (s *Service) Events(
@@ -1466,6 +1627,17 @@ func (s *Service) persistPool(
 	token chain.TokenMetadata,
 	preview PoolPreview,
 ) (store.MarketPool, error) {
+	return s.persistPoolWithDecimals(ctx, token, preview, make(map[string]int32))
+}
+
+var errPoolTokenDecimalsUnavailable = errors.New("交易池代币精度暂不可用")
+
+func (s *Service) persistPoolWithDecimals(
+	ctx context.Context,
+	token chain.TokenMetadata,
+	preview PoolPreview,
+	known map[string]int32,
+) (store.MarketPool, error) {
 	pair := preview.Pair
 	token0Address := pair.BaseToken.Address
 	token1Address := pair.QuoteToken.Address
@@ -1478,33 +1650,50 @@ func (s *Service) persistPool(
 		}
 		token0Address, token1Address = first, second
 	}
-	token0Symbol, token1Symbol := pair.BaseToken.Symbol, pair.QuoteToken.Symbol
-	token0Decimals, token1Decimals := int32(18), int32(18)
+	pairSymbol := func(address string) string {
+		if strings.EqualFold(address, pair.BaseToken.Address) {
+			return pair.BaseToken.Symbol
+		}
+		if strings.EqualFold(address, pair.QuoteToken.Address) {
+			return pair.QuoteToken.Symbol
+		}
+		return ""
+	}
+	token0Symbol, token1Symbol := pairSymbol(token0Address), pairSymbol(token1Address)
+	metadataKey := func(address string) string {
+		return preview.ChainKey + ":" + strings.ToLower(address)
+	}
+	if token.Decimals < 0 || token.Decimals > 255 {
+		return store.MarketPool{}, fmt.Errorf("%w：项目代币精度无效", errPoolTokenDecimalsUnavailable)
+	}
+	known[metadataKey(token.Address)] = token.Decimals
+	readDecimals := func(address string) (int32, error) {
+		if value, ok := known[metadataKey(address)]; ok {
+			return value, nil
+		}
+		value, err := s.deps.Chain.TokenDecimals(ctx, address, preview.ChainKey, preview.ChainKey)
+		if err != nil {
+			return 0, fmt.Errorf("%w：%v", errPoolTokenDecimalsUnavailable, err)
+		}
+		if value < 0 || value > 255 {
+			return 0, fmt.Errorf("%w：精度超出有效范围", errPoolTokenDecimalsUnavailable)
+		}
+		known[metadataKey(address)] = value
+		return value, nil
+	}
+	token0Decimals, err := readDecimals(token0Address)
+	if err != nil {
+		return store.MarketPool{}, err
+	}
+	token1Decimals, err := readDecimals(token1Address)
+	if err != nil {
+		return store.MarketPool{}, err
+	}
 	if token0Address == token.Address {
 		token0Symbol, token0Decimals = token.Symbol, token.Decimals
 	}
 	if token1Address == token.Address {
 		token1Symbol, token1Decimals = token.Symbol, token.Decimals
-	}
-	if preview.Supported {
-		if token0Address != token.Address {
-			metadata, err := s.deps.Chain.TokenMetadata(
-				ctx, token0Address, preview.ChainKey, preview.ChainKey,
-			)
-			if err != nil {
-				return store.MarketPool{}, fmt.Errorf("读取交易池 token0 信息失败：%w", err)
-			}
-			token0Symbol, token0Decimals = metadata.Symbol, metadata.Decimals
-		}
-		if token1Address != token.Address {
-			metadata, err := s.deps.Chain.TokenMetadata(
-				ctx, token1Address, preview.ChainKey, preview.ChainKey,
-			)
-			if err != nil {
-				return store.MarketPool{}, fmt.Errorf("读取交易池 token1 信息失败：%w", err)
-			}
-			token1Symbol, token1Decimals = metadata.Symbol, metadata.Decimals
-		}
 	}
 	var poolAddress *string
 	if value, err := chain.ValidateAddress(pair.PairAddress); err == nil {
@@ -1530,26 +1719,28 @@ func (s *Service) persistPool(
 		verification = "verified"
 	}
 	return s.deps.Repository.UpsertMarketPool(ctx, store.UpsertMarketPoolParams{
-		ChainKey:             preview.ChainKey,
-		ChainID:              preview.ChainID,
-		Protocol:             preview.Protocol,
-		ProtocolVersion:      preview.ProtocolVersion,
-		PoolKey:              pair.PairAddress,
-		PoolAddress:          poolAddress,
-		FactoryAddress:       factoryAddress,
-		FactoryVerified:      preview.Supported,
-		Token0Address:        token0Address,
-		Token0Symbol:         token0Symbol,
-		Token0Decimals:       token0Decimals,
-		Token1Address:        token1Address,
-		Token1Symbol:         token1Symbol,
-		Token1Decimals:       token1Decimals,
-		LiquidityUSD:         decimalOrZero(pair.Liquidity.USD),
-		SupportsEventParsing: preview.Supported,
-		ParserAdapter:        preview.ParserAdapter,
-		VerificationStatus:   verification,
-		Metadata:             raw,
-		SeenAt:               time.Now().UTC(),
+		ChainKey:               preview.ChainKey,
+		ChainID:                preview.ChainID,
+		Protocol:               preview.Protocol,
+		ProtocolVersion:        preview.ProtocolVersion,
+		PoolKey:                pair.PairAddress,
+		PoolAddress:            poolAddress,
+		FactoryAddress:         factoryAddress,
+		FactoryVerified:        preview.Supported,
+		Token0Address:          token0Address,
+		Token0Symbol:           token0Symbol,
+		Token0Decimals:         token0Decimals,
+		Token0DecimalsVerified: true,
+		Token1Address:          token1Address,
+		Token1Symbol:           token1Symbol,
+		Token1Decimals:         token1Decimals,
+		Token1DecimalsVerified: true,
+		LiquidityUSD:           decimalOrZero(pair.Liquidity.USD),
+		SupportsEventParsing:   preview.Supported,
+		ParserAdapter:          preview.ParserAdapter,
+		VerificationStatus:     verification,
+		Metadata:               raw,
+		SeenAt:                 time.Now().UTC(),
 	})
 }
 

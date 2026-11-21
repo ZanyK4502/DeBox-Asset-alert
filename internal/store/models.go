@@ -42,33 +42,34 @@ type DailySummaryTarget struct {
 }
 
 type WatchRule struct {
-	ID                    int64      `db:"id" json:"id"`
-	DeBoxUserID           string     `db:"debox_user_id" json:"debox_user_id"`
-	ChainKey              string     `db:"chain_key" json:"chain_key"`
-	ChainID               int32      `db:"chain_id" json:"chain_id"`
-	WalletAddress         string     `db:"wallet_address" json:"wallet_address"`
-	TokenAddress          *string    `db:"token_address" json:"token_address"`
-	TargetAddress         *string    `db:"target_address" json:"target_address"`
-	TargetLabel           string     `db:"target_label" json:"target_label"`
-	RuleType              string     `db:"rule_type" json:"rule_type"`
-	Threshold             string     `db:"threshold" json:"threshold"`
-	NotificationChatID    string     `db:"notification_chat_id" json:"notification_chat_id"`
-	NotificationChatType  string     `db:"notification_chat_type" json:"notification_chat_type"`
-	NotificationLabel     string     `db:"notification_label" json:"notification_label"`
-	NotificationLanguage  string     `db:"notification_language" json:"notification_language"`
-	RuleScope             string     `db:"rule_scope" json:"rule_scope"`
-	DeliveryMode          string     `db:"delivery_mode" json:"delivery_mode"`
-	CycleType             string     `db:"cycle_type" json:"cycle_type"`
-	CycleMinutes          int32      `db:"cycle_minutes" json:"cycle_minutes"`
-	TriggerCountThreshold int64      `db:"trigger_count_threshold" json:"trigger_count_threshold"`
-	AggregationAnchorAt   *time.Time `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
-	Enabled               int32      `db:"enabled" json:"enabled"`
-	RunStatus             string     `db:"run_status" json:"run_status"`
-	PauseReason           string     `db:"pause_reason" json:"pause_reason"`
-	LastValue             *string    `db:"last_value" json:"last_value"`
-	LastCheckedAt         *time.Time `db:"last_checked_at" json:"last_checked_at"`
-	CreatedAt             time.Time  `db:"created_at" json:"created_at"`
-	EffectivePlanCode     string     `db:"effective_plan_code" json:"effective_plan_code,omitempty"`
+	NotificationGeneration int64      `db:"notification_generation" json:"-"`
+	ID                     int64      `db:"id" json:"id"`
+	DeBoxUserID            string     `db:"debox_user_id" json:"debox_user_id"`
+	ChainKey               string     `db:"chain_key" json:"chain_key"`
+	ChainID                int32      `db:"chain_id" json:"chain_id"`
+	WalletAddress          string     `db:"wallet_address" json:"wallet_address"`
+	TokenAddress           *string    `db:"token_address" json:"token_address"`
+	TargetAddress          *string    `db:"target_address" json:"target_address"`
+	TargetLabel            string     `db:"target_label" json:"target_label"`
+	RuleType               string     `db:"rule_type" json:"rule_type"`
+	Threshold              string     `db:"threshold" json:"threshold"`
+	NotificationChatID     string     `db:"notification_chat_id" json:"notification_chat_id"`
+	NotificationChatType   string     `db:"notification_chat_type" json:"notification_chat_type"`
+	NotificationLabel      string     `db:"notification_label" json:"notification_label"`
+	NotificationLanguage   string     `db:"notification_language" json:"notification_language"`
+	RuleScope              string     `db:"rule_scope" json:"rule_scope"`
+	DeliveryMode           string     `db:"delivery_mode" json:"delivery_mode"`
+	CycleType              string     `db:"cycle_type" json:"cycle_type"`
+	CycleMinutes           int32      `db:"cycle_minutes" json:"cycle_minutes"`
+	TriggerCountThreshold  int64      `db:"trigger_count_threshold" json:"trigger_count_threshold"`
+	AggregationAnchorAt    *time.Time `db:"aggregation_anchor_at" json:"aggregation_anchor_at"`
+	Enabled                int32      `db:"enabled" json:"enabled"`
+	RunStatus              string     `db:"run_status" json:"run_status"`
+	PauseReason            string     `db:"pause_reason" json:"pause_reason"`
+	LastValue              *string    `db:"last_value" json:"last_value"`
+	LastCheckedAt          *time.Time `db:"last_checked_at" json:"last_checked_at"`
+	CreatedAt              time.Time  `db:"created_at" json:"created_at"`
+	EffectivePlanCode      string     `db:"effective_plan_code" json:"effective_plan_code,omitempty"`
 }
 
 type AggregationWindow struct {
@@ -108,6 +109,7 @@ type AggregateNotification struct {
 }
 
 type StageTriggerResult struct {
+	SkippedReason         string                 `json:"skipped_reason,omitempty"`
 	WindowID              int64                  `json:"window_id"`
 	TriggerEventID        int64                  `json:"trigger_event_id"`
 	TotalTriggerCount     int64                  `json:"total_trigger_count"`
@@ -122,11 +124,13 @@ type StageTriggerResult struct {
 }
 
 type StageTriggerEvent struct {
-	PreviousValue *string   `json:"previous_value,omitempty"`
-	CurrentValue  *string   `json:"current_value,omitempty"`
-	TokenSymbol   string    `json:"token_symbol,omitempty"`
-	Note          string    `json:"note,omitempty"`
-	OccurredAt    time.Time `json:"occurred_at"`
+	SourceOccurredAt *time.Time `json:"source_occurred_at,omitempty"`
+	SourceTimeBasis  string     `json:"source_time_basis,omitempty"`
+	PreviousValue    *string    `json:"previous_value,omitempty"`
+	CurrentValue     *string    `json:"current_value,omitempty"`
+	TokenSymbol      string     `json:"token_symbol,omitempty"`
+	Note             string     `json:"note,omitempty"`
+	OccurredAt       time.Time  `json:"occurred_at"`
 }
 
 type CombinationRule struct {
@@ -168,6 +172,7 @@ type CombinationMemberProgress struct {
 }
 
 type CombinationTriggerResult struct {
+	SkippedReason     string                      `json:"skipped_reason,omitempty"`
 	CombinationRuleID int64                       `json:"combination_rule_id"`
 	WindowID          int64                       `json:"window_id"`
 	TriggerEventID    int64                       `json:"trigger_event_id"`
@@ -308,6 +313,9 @@ type AuthSession struct {
 }
 
 type SummaryStatistics struct {
+	ValuationSchemaVersion        int32  `db:"valuation_schema_version" json:"valuation_schema_version,omitempty"`
+	MarketBuyValuedCount          int64  `db:"market_buy_valued_count" json:"market_buy_valued_count"`
+	MarketSellValuedCount         int64  `db:"market_sell_valued_count" json:"market_sell_valued_count"`
 	RuleCount                     int64  `db:"rule_count" json:"rule_count"`
 	WalletCount                   int64  `db:"wallet_count" json:"wallet_count"`
 	AssetRuleCount                int64  `db:"asset_rule_count" json:"asset_rule_count"`
@@ -336,6 +344,7 @@ type SummaryStatistics struct {
 }
 
 type MarketSummaryEvent struct {
+	ValuationStatus string    `db:"valuation_status" json:"valuation_status,omitempty"`
 	ID              int64     `db:"id" json:"id"`
 	MarketProjectID int64     `db:"market_project_id" json:"market_project_id"`
 	TokenName       string    `db:"token_name" json:"token_name"`
@@ -354,28 +363,32 @@ type MarketSummaryEvent struct {
 }
 
 type MarketProjectChainSummary struct {
-	MarketProjectID      int64   `db:"market_project_id" json:"market_project_id"`
-	TokenName            string  `db:"token_name" json:"token_name"`
-	TokenSymbol          string  `db:"token_symbol" json:"token_symbol"`
-	ChainKey             string  `db:"chain_key" json:"chain_key"`
-	ChainID              int64   `db:"chain_id" json:"chain_id"`
-	TokenAddress         string  `db:"token_address" json:"token_address"`
-	StartPriceUSD        *string `db:"start_price_usd" json:"start_price_usd"`
-	EndPriceUSD          *string `db:"end_price_usd" json:"end_price_usd"`
-	SnapshotCount        int64   `db:"snapshot_count" json:"snapshot_count"`
-	PriceSampleCount     int64   `db:"price_sample_count" json:"price_sample_count"`
-	LiquiditySampleCount int64   `db:"liquidity_sample_count" json:"liquidity_sample_count"`
-	VolumeSampleCount    int64   `db:"volume_sample_count" json:"volume_sample_count"`
-	TradeVolumeUSD       string  `db:"trade_volume_usd" json:"trade_volume_usd"`
-	BuyCount             int64   `db:"buy_count" json:"buy_count"`
-	BuyUSD               string  `db:"buy_usd" json:"buy_usd"`
-	SellCount            int64   `db:"sell_count" json:"sell_count"`
-	SellUSD              string  `db:"sell_usd" json:"sell_usd"`
-	LargeTradeCount      int64   `db:"large_trade_count" json:"large_trade_count"`
-	HolderIncreaseCount  int64   `db:"holder_increase_count" json:"holder_increase_count"`
-	HolderDecreaseCount  int64   `db:"holder_decrease_count" json:"holder_decrease_count"`
-	HolderRankEnterCount int64   `db:"holder_rank_enter_count" json:"holder_rank_enter_count"`
-	HolderRankExitCount  int64   `db:"holder_rank_exit_count" json:"holder_rank_exit_count"`
+	MarketProjectID        int64   `db:"market_project_id" json:"market_project_id"`
+	TokenName              string  `db:"token_name" json:"token_name"`
+	TokenSymbol            string  `db:"token_symbol" json:"token_symbol"`
+	ChainKey               string  `db:"chain_key" json:"chain_key"`
+	ChainID                int64   `db:"chain_id" json:"chain_id"`
+	TokenAddress           string  `db:"token_address" json:"token_address"`
+	StartPriceUSD          *string `db:"start_price_usd" json:"start_price_usd"`
+	EndPriceUSD            *string `db:"end_price_usd" json:"end_price_usd"`
+	SnapshotCount          int64   `db:"snapshot_count" json:"snapshot_count"`
+	PriceSampleCount       int64   `db:"price_sample_count" json:"price_sample_count"`
+	LiquiditySampleCount   int64   `db:"liquidity_sample_count" json:"liquidity_sample_count"`
+	VolumeSampleCount      int64   `db:"volume_sample_count" json:"volume_sample_count"`
+	TradeVolumeUSD         string  `db:"trade_volume_usd" json:"trade_volume_usd"`
+	BuyCount               int64   `db:"buy_count" json:"buy_count"`
+	BuyUSD                 string  `db:"buy_usd" json:"buy_usd"`
+	SellCount              int64   `db:"sell_count" json:"sell_count"`
+	SellUSD                string  `db:"sell_usd" json:"sell_usd"`
+	LargeTradeCount        int64   `db:"large_trade_count" json:"large_trade_count"`
+	HolderIncreaseCount    int64   `db:"holder_increase_count" json:"holder_increase_count"`
+	HolderDecreaseCount    int64   `db:"holder_decrease_count" json:"holder_decrease_count"`
+	HolderRankEnterCount   int64   `db:"holder_rank_enter_count" json:"holder_rank_enter_count"`
+	HolderRankExitCount    int64   `db:"holder_rank_exit_count" json:"holder_rank_exit_count"`
+	ValuationSchemaVersion int32   `db:"valuation_schema_version" json:"valuation_schema_version,omitempty"`
+	BuyValuedCount         int64   `db:"buy_valued_count" json:"buy_valued_count"`
+	SellValuedCount        int64   `db:"sell_valued_count" json:"sell_valued_count"`
+	QuoteUnavailableCount  int64   `db:"quote_unavailable_count" json:"quote_unavailable_count"`
 }
 
 type SummaryEvent struct {

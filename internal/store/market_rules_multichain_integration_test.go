@@ -123,6 +123,7 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 	} {
 		address := target.poolAddress
 		marketPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+			Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 			ChainKey: target.chainKey, ChainID: target.chainID,
 			Protocol: "integration", ProtocolVersion: "v2",
 			PoolKey: target.poolAddress, PoolAddress: &address,
@@ -170,6 +171,7 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 			"0x2222222222222222222222222222222222222222" {
 		t.Fatalf("Base collection targets = %#v, error = %v", baseTargets, err)
 	}
+	holderJobDemand(t, database, project.ID, userID)
 	dueBase, err := database.ListMarketProjectsDueHolderRefresh(
 		ctx,
 		8453,
@@ -184,6 +186,7 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 
 	discoveredAddress := "0x7777777777777777777777777777777777777777"
 	discoveredPool, err := database.UpsertMarketPool(ctx, UpsertMarketPoolParams{
+		Token0DecimalsVerified: true, Token1DecimalsVerified: true,
 		ChainKey: "base", ChainID: 8453,
 		Protocol: "integration", ProtocolVersion: "v2",
 		PoolKey: discoveredAddress, PoolAddress: &discoveredAddress,
@@ -329,6 +332,7 @@ func TestPostgresMultiChainMarketRuleTargetsAndCombinationLifecycle(t *testing.T
 	second, err := database.CreateMarketRuleWithinQuota(ctx, CreateMarketRuleParams{
 		DeBoxUserID: userID, MarketProjectID: project.ID,
 		RuleType: "market_volume_above", ThresholdValue: "1000",
+		WindowMinutes: pointerOf(int32(60)),
 		ThresholdUnit: "usd", DeploymentScope: "all", PoolScope: "primary",
 		CooldownScope: "project", NotificationChatID: userID,
 	}, policy)

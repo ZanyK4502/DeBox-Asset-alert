@@ -21,6 +21,21 @@ const (
 	maxWebhookPageSize          = 100
 )
 
+// WebhookHTTPError omits the provider's body, which may contain request details.
+type WebhookHTTPError struct{ Status int }
+
+func (e *WebhookHTTPError) Error() string {
+	return fmt.Sprintf("Nodit webhook API returned HTTP %d", e.Status)
+}
+
+func (e *WebhookHTTPError) DefinitelyRejected() bool {
+	switch e.Status {
+	case 400, 401, 403, 404, 405, 413, 414, 422, 429:
+		return true
+	}
+	return false
+}
+
 type WebhookNotification struct {
 	WebhookURL string `json:"webhookUrl"`
 }
@@ -51,6 +66,7 @@ type WebhookSubscription struct {
 	SigningKey       string              `json:"signingKey,omitempty"`
 	IsInstant        bool                `json:"isInstant"`
 	IsActive         bool                `json:"isActive"`
+	InstantReported  bool                `json:"-"`
 	Condition        json.RawMessage     `json:"condition"`
 	CreatedAt        *time.Time          `json:"createdAt,omitempty"`
 	UpdatedAt        *time.Time          `json:"updatedAt,omitempty"`
@@ -116,7 +132,12 @@ func (c *Client) CreateWebhook(
 	if err := validateWebhookCreateRequest(input); err != nil {
 		return WebhookSubscription{}, err
 	}
-	var result WebhookSubscription
+	// Allow a minimal creation response containing just the ID and one-time
+	// key. Preserve an explicitly returned false when checking optional echoes.
+	var result struct {
+		WebhookSubscription
+		Instant *bool `json:"isInstant"`
+	}
 	if err := c.doNoditJSON(
 		ctx,
 		http.MethodPost,
@@ -129,7 +150,11 @@ func (c *Client) CreateWebhook(
 	if strings.TrimSpace(result.SubscriptionID) == "" {
 		return WebhookSubscription{}, fmt.Errorf("unexpected Nodit webhook response")
 	}
-	return result, nil
+	if result.Instant != nil {
+		result.IsInstant = *result.Instant
+		result.InstantReported = true
+	}
+	return result.WebhookSubscription, nil
 }
 
 func (c *Client) ListWebhooks(
@@ -297,17 +322,12 @@ func (c *Client) doNoditJSON(
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= http.StatusBadRequest {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBodyLength))
-		return fmt.Errorf(
-			"Nodit webhook API error %d: %s",
-			response.StatusCode,
-			strings.TrimSpace(string(detail)),
-		)
+		return &WebhookHTTPError{Status: response.StatusCode}
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {
 		return nil
 	}
-	decoder := json.NewDecoder(response.Body)
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 8<<20))
 	decoder.UseNumber()
 	if err := decoder.Decode(output); err != nil {
 		return fmt.Errorf("unexpected Nodit webhook response: %w", err)

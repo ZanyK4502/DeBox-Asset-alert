@@ -12,14 +12,21 @@ import (
 )
 
 type addressNotificationSnapshotPayload struct {
-	SchemaVersion int                             `json:"schema_version"`
-	Rule          *store.WatchRule                `json:"rule,omitempty"`
-	AlertEvent    *store.AlertEvent               `json:"alert_event,omitempty"`
-	Stage         *store.StageTriggerResult       `json:"stage,omitempty"`
-	Combination   *store.CombinationTriggerResult `json:"combination,omitempty"`
-	TokenSymbol   string                          `json:"token_symbol,omitempty"`
-	Note          string                          `json:"note,omitempty"`
-	OccurredAt    *time.Time                      `json:"occurred_at,omitempty"`
+	SchemaVersion       int                             `json:"schema_version"`
+	Rule                *store.WatchRule                `json:"rule,omitempty"`
+	AlertEvent          *store.AlertEvent               `json:"alert_event,omitempty"`
+	Stage               *store.StageTriggerResult       `json:"stage,omitempty"`
+	Combination         *store.CombinationTriggerResult `json:"combination,omitempty"`
+	TokenSymbol         string                          `json:"token_symbol,omitempty"`
+	Note                string                          `json:"note,omitempty"`
+	OccurredAt          *time.Time                      `json:"occurred_at,omitempty"`
+	SourceOccurredAt    *time.Time                      `json:"source_occurred_at,omitempty"`
+	SourceTimeBasis     string                          `json:"source_time_basis,omitempty"`
+	ObservedFromAt      *time.Time                      `json:"observed_from_at,omitempty"`
+	ObservedThroughAt   *time.Time                      `json:"observed_through_at,omitempty"`
+	ReadObservedAt      *time.Time                      `json:"read_observed_at,omitempty"`
+	BalanceReadSource   string                          `json:"balance_read_source,omitempty"`
+	BalanceReadDecimals *int                            `json:"balance_read_decimals,omitempty"`
 }
 
 func (e *Executor) createAddressRealtimeSnapshot(

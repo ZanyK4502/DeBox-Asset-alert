@@ -79,7 +79,7 @@ func TestRunnerCleansAggregationHistoryOnlyOncePerInterval(t *testing.T) {
 
 	want := []string{
 		"expire_entitlements", "list", "cleanup",
-		"expire_entitlements", "list",
+		"list",
 	}
 	if len(repository.calls) != len(want) {
 		t.Fatalf("repository calls = %v, want %v", repository.calls, want)

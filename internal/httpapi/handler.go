@@ -173,10 +173,11 @@ func New(cfg config.Config, dependencies ...Dependencies) http.Handler {
 		deps = dependencies[0]
 	}
 	if deps.Catalog == nil {
-		deps.Catalog, _ = plans.NewCatalog(
+		deps.Catalog, _ = plans.NewCatalogWithQuotaLimits(
 			cfg.SubscriptionPrice,
 			cfg.SubscriptionDays,
 			cfg.SubscriptionTokenSymbol,
+			cfg.QuotaLimits,
 		)
 	}
 	h := handler{cfg: cfg, deps: deps}
@@ -292,6 +293,9 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	if writeResourceCapacityError(w, err) {
+		return
+	}
 	writeJSON(w, status, map[string]string{"detail": err.Error()})
 }
 

@@ -7,6 +7,7 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
+	clearResourceCapacityEnvironment(t)
 	staticDir := testStaticDir(t)
 	for _, name := range []string{
 		"APP_NAME",
@@ -27,15 +28,28 @@ func TestLoadDefaults(t *testing.T) {
 		"NODIT_API_KEY",
 		"NODIT_BASE_URL",
 		"NODIT_CU_PER_SECOND",
+		"DEBOX_SEND_PER_MINUTE",
+		"MARKET_TASK_LOCK_CONNECTIONS",
+		"MARKET_HYDRATION_CONCURRENCY",
+		"MARKET_RPC_FALLBACK_URLS_JSON",
+		"CHAIN_RPC_URL",
 		"SUBSCRIPTION_TOKEN_ADDRESS",
 		"SUBSCRIPTION_TOKEN_SYMBOL",
 		"SUBSCRIPTION_TOKEN_DECIMALS",
 		"SUBSCRIPTION_PRICE",
 		"SUBSCRIPTION_DAYS",
+		"QUOTA_FREE_RULE_LIMIT",
+		"QUOTA_STANDARD_RULE_LIMIT",
+		"QUOTA_PROFESSIONAL_RULE_LIMIT",
+		"QUOTA_PROFESSIONAL_INTERACTION_RULE_LIMIT",
+		"QUOTA_PROFESSIONAL_MARKET_PROJECT_LIMIT",
+		"QUOTA_STANDARD_MARKET_POOL_LIMIT",
+		"QUOTA_PROFESSIONAL_MARKET_POOL_LIMIT",
 		"PAYMENT_RECIPIENT_ADDRESS",
 		"PAYMENT_MODE",
 		"MARKET_COLLECTOR_ENABLED",
 		"MARKET_CHAIN_KEYS",
+		"MARKET_MONITORING_CHAIN_KEYS",
 		"MARKET_RULE_ENGINE_ENABLED",
 		"MARKET_RULE_INTERVAL",
 		"MARKET_HOLDER_REFRESH_INTERVAL",
@@ -76,6 +90,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Address() != "0.0.0.0:8000" {
 		t.Fatalf("Address() = %q, want %q", cfg.Address(), "0.0.0.0:8000")
 	}
+	if cfg.NoditMonthlyCULimit != 300_000_000 {
+		t.Fatalf("robot monthly CU metadata limit=%d, want 300000000", cfg.NoditMonthlyCULimit)
+	}
 	if cfg.ReceiveMode != defaultReceiveMode {
 		t.Fatalf("ReceiveMode = %q, want %q", cfg.ReceiveMode, defaultReceiveMode)
 	}
@@ -109,6 +126,13 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.NoditCUPerSecond != defaultNoditCUPerSecond {
 		t.Fatalf("NoditCUPerSecond = %d, want %d", cfg.NoditCUPerSecond, defaultNoditCUPerSecond)
+	}
+	if cfg.MarketScanBatchSize != 500 || cfg.MarketScanInterval.String() != "1m0s" ||
+		cfg.MarketConfirmationDepth != 15 || cfg.MarketHydrationConcurrency != 2 ||
+		cfg.NotificationSendLimit() != 100 || cfg.TaskLockConnections() != 8 {
+		t.Fatalf("unexpected performance defaults: batch=%d interval=%s depth=%d concurrency=%d quota=%d locks=%d",
+			cfg.MarketScanBatchSize, cfg.MarketScanInterval, cfg.MarketConfirmationDepth,
+			cfg.MarketHydrationConcurrency, cfg.NotificationSendLimit(), cfg.TaskLockConnections())
 	}
 	if cfg.SubscriptionTokenSymbol != defaultTokenSymbol {
 		t.Fatalf("SubscriptionTokenSymbol = %q, want %q", cfg.SubscriptionTokenSymbol, defaultTokenSymbol)

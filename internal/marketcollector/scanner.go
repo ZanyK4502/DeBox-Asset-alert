@@ -2,6 +2,7 @@ package marketcollector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,13 +26,37 @@ func (service *Service) ScanLogs(ctx context.Context) error {
 }
 
 func (service *Service) scanLogsOnce(ctx context.Context) error {
+	started := time.Now()
+	if service.settings.ScanBatchSize < 1 || service.settings.ScanBatchSize > MaxScanBatchSize ||
+		service.settings.HydrationConcurrency < 1 || service.settings.HydrationConcurrency > DefaultHydrationConcurrency {
+		return fmt.Errorf("market scan batch must be 1..1000 and hydration concurrency 1..2")
+	}
 	profile, err := chain.ChainProfile(service.settings.ChainKey, "")
 	if err != nil || service.settings.ChainID != profile.ChainID {
 		return ErrUnsupportedChain
 	}
+	// Read the lifecycle revision before either parser query. Activation's
+	// final compare-and-swap can then detect a committed idle/active transition
+	// even when the number of targets returns to its original value.
+	collectionState, err := service.observeScanCollection(ctx)
+	if err != nil {
+		return err
+	}
+	if collectionState != nil && collectionState.ActiveTargetCount == 0 {
+		return nil
+	}
 	parserContext, err := service.loadParserContext(ctx)
 	if err != nil {
 		return err
+	}
+	if collectionState != nil {
+		var projectCount int64
+		for _, projects := range parserContext.projectsByToken {
+			projectCount += int64(len(projects))
+		}
+		if collectionState.ActiveTargetCount != projectCount {
+			return store.ErrMarketCollectionStateChanged
+		}
 	}
 	if len(parserContext.targetTokens) == 0 {
 		return nil
@@ -44,6 +69,7 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get latest market block: %w", err)
 	}
+	safeObservedAt := time.Now().UTC()
 	if latest <= uint64(service.settings.ConfirmationDepth) {
 		return nil
 	}
@@ -56,6 +82,15 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	activationInitialized := false
+	if cursor == nil && collectionState != nil && collectionState.PendingIdle != nil {
+		var deferred bool
+		cursor, _, deferred, err = service.prepareCollectionActivation(ctx, *collectionState, nil, nil, safeBlock)
+		if err != nil || deferred {
+			return err
+		}
+		activationInitialized = true
+	}
 	if cursor == nil {
 		cursor, err = service.initializeCursor(ctx, safeBlock)
 		if err != nil {
@@ -63,18 +98,33 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 		}
 	}
 	if cursor.NextBlockNumber > safeBlock {
-		_, err := service.repository.MarkMarketBlockConfirmed(
-			ctx,
-			service.settings.ChainID,
-			safeBlock,
-		)
-		return err
+		// A cursor position is not canonical evidence. In particular, a later
+		// controlled forward move must not confirm an unverified old queue.
+		return nil
 	}
-	cursor, err = service.verifyCursorContinuity(ctx, *cursor)
+	cursor, previousHeader, err := service.verifyCursorContinuityWithHeader(ctx, *cursor)
 	if err != nil {
 		return err
 	}
 	fromBlock := cursor.NextBlockNumber
+	if fromBlock < 1 {
+		return store.ErrInvalidMarketCursor
+	}
+	if previousHeader == nil {
+		header, fetchErr := service.fetchBlockHeader(ctx, uint64(fromBlock-1))
+		if fetchErr != nil {
+			return fetchErr
+		}
+		previousHeader = &header
+	}
+	if !activationInitialized && collectionState != nil && collectionState.PendingIdle != nil {
+		var deferred bool
+		cursor, previousHeader, deferred, err = service.prepareCollectionActivation(ctx, *collectionState, cursor, previousHeader, safeBlock)
+		if err != nil || deferred {
+			return err
+		}
+		fromBlock = cursor.NextBlockNumber
+	}
 	toBlock := fromBlock + service.settings.ScanBatchSize - 1
 	if toBlock > safeBlock {
 		toBlock = safeBlock
@@ -89,47 +139,97 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 		_ = service.recordCursorError(ctx, *cursor, safeBlock, err)
 		return err
 	}
-
-	headers := make(map[uint64]blockHeader)
-	endHeader, err := service.fetchBlockHeader(ctx, uint64(toBlock))
+	expectedReceipts, err := expectedScannerReceipts(logs)
 	if err != nil {
-		_ = service.recordCursorError(ctx, *cursor, safeBlock, err)
 		return err
 	}
-	headers[endHeader.Number] = endHeader
+	denseBlocks := newScanBlockTransactions(service.settings.ChainKey, expectedReceipts)
+
+	numbers := []uint64{uint64(toBlock)}
+	seen := map[uint64]struct{}{uint64(toBlock): {}}
 	for _, log := range logs {
 		blockNumber, parseErr := parseHexQuantity(log.BlockNumber)
 		if parseErr != nil {
 			return parseErr
 		}
-		if _, exists := headers[blockNumber]; exists {
+		if blockNumber < uint64(fromBlock) || blockNumber > uint64(toBlock) {
+			return fmt.Errorf("market log lies outside the requested scan range")
+		}
+		if _, exists := seen[blockNumber]; exists {
 			continue
 		}
-		header, fetchErr := service.fetchBlockHeader(ctx, blockNumber)
-		if fetchErr != nil {
-			return fetchErr
-		}
-		headers[blockNumber] = header
+		seen[blockNumber] = struct{}{}
+		numbers = append(numbers, blockNumber)
 	}
+	headers := make(map[uint64]blockHeader, len(numbers)+1)
+	headers[previousHeader.Number] = *previousHeader
+	var batchedReceipts *scanReceiptCache
+	if reader := service.blockReceiptReader(); reader != nil {
+		batchedReceipts, err = service.fetchBatchedScanHeaders(ctx, reader, numbers, headers, expectedReceipts)
+		if err != nil {
+			_ = service.recordCursorError(ctx, *cursor, safeBlock, err)
+			return err
+		}
+	} else {
+		for i, number := range numbers {
+			header, fetchErr := service.fetchScanBlockHeader(ctx, number, denseBlocks)
+			if fetchErr != nil {
+				if i == 0 {
+					_ = service.recordCursorError(ctx, *cursor, safeBlock, fetchErr)
+				}
+				return fetchErr
+			}
+			headers[number] = header
+		}
+	}
+	endHeader := headers[uint64(toBlock)]
 	for _, log := range logs {
 		blockNumber, _ := parseHexQuantity(log.BlockNumber)
 		if header := headers[blockNumber]; header.Hash != strings.ToLower(log.BlockHash) {
 			return fmt.Errorf("market log block %d changed during scan", blockNumber)
 		}
 	}
+	changed, err := service.reconcilePartialScanRange(ctx, *cursor, *previousHeader, headers, fromBlock, toBlock)
+	if err != nil || changed {
+		return err
+	}
+	// A re-included logical parent requires canonical inclusion evidence before
+	// it may change placement. These rows only stage the checked headers: every
+	// scanner receipt below stays unconfirmed until the fresh end check passes.
+	if err := service.storeScanHeaders(ctx, headers); err != nil {
+		return err
+	}
 
 	transactionHashes := uniqueLogTransactionHashes(logs)
-	for _, transactionHash := range transactionHashes {
-		if err := service.hydrateParseAndPersist(
-			ctx,
-			transactionHash,
-			parserContext,
-			"nodit_log_scanner",
-			true,
-		); err != nil {
-			_ = service.recordCursorError(ctx, *cursor, safeBlock, err)
-			return err
+	persist := func(writeCtx context.Context, hydrated hydratedMarketTransaction) error {
+		// Fresh end-hash validation and bounded confirmation below remain the
+		// only publication point for the scanner.
+		return service.parseAndPersistMarketTransaction(writeCtx, hydrated, parserContext, "nodit_log_scanner", false)
+	}
+	if batchedReceipts != nil {
+		err = service.consumeBatchedScanTransactions(ctx, transactionHashes, headers, expectedReceipts, batchedReceipts, persist)
+	} else {
+		err = consumeOrderedMarketReads(ctx, len(transactionHashes), service.settings.HydrationConcurrency,
+			func(readCtx context.Context, index int) (hydratedMarketTransaction, error) {
+				hash := transactionHashes[index]
+				expected := expectedReceipts[hash]
+				header, exists := headers[expected.blockNumber]
+				if !exists {
+					return hydratedMarketTransaction{}, fmt.Errorf("scanner receipt lacks a verified range header")
+				}
+				return service.readMarketTransactionWithIdentity(readCtx, hash, &header, []receiptExpectation{expected}, denseBlocks.identity(hash))
+			}, func(writeCtx context.Context, _ int, hydrated hydratedMarketTransaction) error {
+				return persist(writeCtx, hydrated)
+			})
+	}
+	if err != nil {
+		if errors.Is(err, ErrParserScopeChanged) {
+			// A newly selected pool can have more trades later in this range.
+			// All read workers have been cancelled and joined before returning.
+			return nil
 		}
+		_ = service.recordCursorError(ctx, *cursor, safeBlock, err)
+		return err
 	}
 	unconfirmedBlocks, err := service.repository.ListUnconfirmedMarketEventBlocks(
 		ctx,
@@ -140,6 +240,7 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	additionalHeaders := make(map[uint64]blockHeader)
 	for _, blockNumber := range unconfirmedBlocks {
 		if _, exists := headers[uint64(blockNumber)]; !exists {
 			header, fetchErr := service.fetchBlockHeader(ctx, uint64(blockNumber))
@@ -147,6 +248,7 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 				return fetchErr
 			}
 			headers[header.Number] = header
+			additionalHeaders[header.Number] = header
 		}
 		header := headers[uint64(blockNumber)]
 		if _, err := service.repository.MarkMarketBlockReorged(
@@ -158,33 +260,51 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 			return err
 		}
 	}
-	headerNumbers := make([]uint64, 0, len(headers))
-	for number := range headers {
-		headerNumbers = append(headerNumbers, number)
+	freshEnd, err := service.fetchBlockHeader(ctx, uint64(toBlock))
+	if err != nil {
+		return err
 	}
-	sort.Slice(headerNumbers, func(left, right int) bool {
-		return headerNumbers[left] < headerNumbers[right]
-	})
-	for _, number := range headerNumbers {
-		header := headers[number]
-		timestamp := header.Timestamp
-		if _, err := service.repository.UpsertMarketScannedBlock(
-			ctx,
-			store.UpsertMarketScannedBlockParams{
-				ChainKey:       service.settings.ChainKey,
-				ChainID:        service.settings.ChainID,
-				CursorKey:      service.settings.CursorKey,
-				BlockNumber:    int64(header.Number),
-				BlockHash:      header.Hash,
-				ParentHash:     header.ParentHash,
-				BlockTimestamp: &timestamp,
-				ScannedAt:      service.now().UTC(),
-			},
-		); err != nil {
-			return err
+	if freshEnd.Hash != endHeader.Hash {
+		return service.rewindChangedScanRange(ctx, *cursor, *previousHeader)
+	}
+	if !freshEnd.Timestamp.Equal(endHeader.Timestamp) || freshEnd.ParentHash != endHeader.ParentHash {
+		return fmt.Errorf("market end header changed without a corresponding hash change")
+	}
+	// Headers first discovered in the unconfirmed queue must also have their
+	// canonical evidence stored before the bounded confirmation call.
+	if err := service.storeScanHeaders(ctx, additionalHeaders); err != nil {
+		return err
+	}
+	// Publish only after the stored canonical hashes have been checked, and do
+	// so before advancing. A failed confirmation must leave the range available
+	// for an idempotent retry rather than strand its receipts behind the cursor.
+	if _, err := service.repository.MarkMarketBlockConfirmed(ctx, service.settings.ChainID, toBlock); err != nil {
+		if errors.Is(err, store.ErrMarketTradeConfirmationPending) {
+			// The bounded batch committed, but verified receipts still remain.
+			// Retry on the next scheduled cycle without losing this range.
+			return nil
 		}
+		return err
 	}
-	if _, err := service.repository.AdvanceMarketChainCursor(
+	poolIDs := make([]int64, 0, len(parserContext.poolByID))
+	for id := range parserContext.poolByID {
+		poolIDs = append(poolIDs, id)
+	}
+	tokens := append([]string(nil), parserContext.targetTokens...)
+	if err := service.repository.RecordMarketScanCoverage(ctx, store.RecordMarketScanCoverageParams{
+		ChainID: service.settings.ChainID, CursorKey: service.settings.CursorKey, ParserVersion: 1,
+		ScopePoolIDs: poolIDs, ScopeTokenAddresses: tokens, FromBlock: fromBlock, ThroughBlock: toBlock,
+		AfterAt: previousHeader.Timestamp, AfterHash: previousHeader.Hash,
+		ThroughAt: endHeader.Timestamp, ThroughHash: endHeader.Hash,
+	}); err != nil {
+		if errors.Is(err, store.ErrMarketTradeConfirmationPending) {
+			// A webhook may have completed another receipt between confirmation
+			// and coverage publication. Keep this range for the next bounded pass.
+			return nil
+		}
+		return err
+	}
+	advanced, err := service.repository.AdvanceMarketChainCursor(
 		ctx,
 		store.AdvanceMarketChainCursorParams{
 			ChainKey:        service.settings.ChainKey,
@@ -196,15 +316,49 @@ func (service *Service) scanLogsOnce(ctx context.Context) error {
 			Status:          "active",
 			ScannedAt:       service.now().UTC(),
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
-	_, err = service.repository.MarkMarketBlockConfirmed(
-		ctx,
-		service.settings.ChainID,
-		toBlock,
-	)
-	return err
+	// Emit only after canonical verification, coverage publication and the
+	// cursor write all succeed. Empty or deferred rounds are not scan progress.
+	// This is one stdout record per completed range, with no extra reads.
+	if service.logger != nil {
+		service.logger.InfoContext(ctx, "market scan completed",
+			"chain_key", service.settings.ChainKey,
+			"chain_id", service.settings.ChainID,
+			"cursor_key", service.settings.CursorKey,
+			"from_block", fromBlock,
+			"through_block", toBlock,
+			"next_block", advanced.NextBlockNumber,
+			"safe_block", safeBlock,
+			"safe_observed_at", safeObservedAt,
+			"completed_at", time.Now().UTC(),
+			"work_duration_ms", time.Since(started).Milliseconds(),
+			"backlog_blocks", safeBlock-toBlock,
+		)
+	}
+	return nil
+}
+
+func (service *Service) storeScanHeaders(ctx context.Context, headers map[uint64]blockHeader) error {
+	numbers := make([]uint64, 0, len(headers))
+	for number := range headers {
+		numbers = append(numbers, number)
+	}
+	sort.Slice(numbers, func(i, j int) bool { return numbers[i] < numbers[j] })
+	for _, number := range numbers {
+		header := headers[number]
+		timestamp := header.Timestamp
+		if _, err := service.repository.UpsertMarketScannedBlock(ctx, store.UpsertMarketScannedBlockParams{
+			ChainKey: service.settings.ChainKey, ChainID: service.settings.ChainID, CursorKey: service.settings.CursorKey,
+			BlockNumber: int64(header.Number), BlockHash: header.Hash, ParentHash: header.ParentHash,
+			BlockTimestamp: &timestamp, ScannedAt: service.now().UTC(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (service *Service) initializeCursor(
@@ -258,18 +412,26 @@ func (service *Service) verifyCursorContinuity(
 	ctx context.Context,
 	cursor store.MarketChainCursor,
 ) (*store.MarketChainCursor, error) {
+	value, _, err := service.verifyCursorContinuityWithHeader(ctx, cursor)
+	return value, err
+}
+
+func (service *Service) verifyCursorContinuityWithHeader(
+	ctx context.Context,
+	cursor store.MarketChainCursor,
+) (*store.MarketChainCursor, *blockHeader, error) {
 	if cursor.NextBlockNumber <= 0 || cursor.LastBlockHash == nil {
-		return &cursor, nil
+		return &cursor, nil, nil
 	}
 	previousHeader, err := service.fetchBlockHeader(
 		ctx,
 		uint64(cursor.NextBlockNumber-1),
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if previousHeader.Hash == *cursor.LastBlockHash {
-		return &cursor, nil
+		return &cursor, &previousHeader, nil
 	}
 	candidates, err := service.repository.ListCanonicalMarketScannedBlocks(
 		ctx,
@@ -279,12 +441,12 @@ func (service *Service) verifyCursorContinuity(
 		service.settings.ReorgLookback,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, candidate := range candidates {
 		header, fetchErr := service.fetchBlockHeader(ctx, uint64(candidate.BlockNumber))
 		if fetchErr != nil {
-			return nil, fetchErr
+			return nil, nil, fetchErr
 		}
 		if header.Hash != candidate.BlockHash {
 			continue
@@ -302,11 +464,11 @@ func (service *Service) verifyCursorContinuity(
 			),
 		)
 		if reconcileErr != nil {
-			return nil, reconcileErr
+			return nil, nil, reconcileErr
 		}
-		return &reconciled.Cursor, nil
+		return &reconciled.Cursor, &header, nil
 	}
-	return nil, ErrNoCanonicalAncestor
+	return nil, nil, ErrNoCanonicalAncestor
 }
 
 func (service *Service) fetchLogsByAddressBatches(
@@ -344,6 +506,9 @@ func (service *Service) fetchLogsByAddressBatches(
 				err,
 			)
 		}
+		if len(logs) > maxMarketScannerLogs-len(result) {
+			return nil, fmt.Errorf("scanner log batch exceeds bounded capacity")
+		}
 		result = append(result, logs...)
 	}
 	return deduplicateRPCLogs(result), nil
@@ -366,6 +531,9 @@ func (service *Service) fetchCollectionLogs(
 		)
 		if err != nil {
 			return err
+		}
+		if len(logs) > maxMarketScannerLogs-len(result) {
+			return fmt.Errorf("scanner log batch exceeds bounded capacity")
 		}
 		result = append(result, logs...)
 		return nil
@@ -529,6 +697,10 @@ func (service *Service) fetchBlockHeader(
 	if err != nil {
 		return blockHeader{}, fmt.Errorf("get market block %d: %w", blockNumber, err)
 	}
+	return decodeRequestedBlockHeader(blockNumber, block)
+}
+
+func decodeRequestedBlockHeader(blockNumber uint64, block map[string]any) (blockHeader, error) {
 	header, err := decodeBlockHeader(block)
 	if err != nil {
 		return blockHeader{}, err

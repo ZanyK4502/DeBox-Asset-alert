@@ -23,16 +23,17 @@ func TestMessengerSendsHTMLNotificationWithOfficialSDK(t *testing.T) {
 		switch request.URL.Path {
 		case "/openapi/bot/getMe":
 			_, _ = io.WriteString(writer, `{"ok":true,"result":{"user_id":"bot-1","name":"Monitor"}}`)
-		case "/openapi/bot/sendMessage":
-			if err := request.ParseForm(); err != nil {
-				t.Errorf("ParseForm() error = %v", err)
+		case "/openapi/v2/bot/sendMessage":
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Errorf("decode v2 payload: %v", err)
 			}
-			chatType := request.Form.Get("chat_type")
+			chatType := payload["chat_type"].(string)
 			expectedID := map[string]string{"private": "user-1", "group": "group-1"}[chatType]
-			if request.Form.Get("chat_id") != expectedID ||
-				request.Form.Get("text") != "<b>Alert</b>" ||
-				request.Form.Get("parse_mode") != "HTML" {
-				encoded, _ := json.Marshal(request.Form)
+			if payload["chat_id"] != expectedID ||
+				payload["content"] != "<b>Alert</b>" ||
+				payload["parse_mode"] != "HTML" {
+				encoded, _ := json.Marshal(payload)
 				t.Errorf("unexpected message form: %s", encoded)
 			}
 			_, _ = io.WriteString(writer, `{"ok":true,"result":{"message_id":"message-`+chatType+`"}}`)
@@ -67,16 +68,18 @@ func TestMessengerSendsNotificationWithURLAction(t *testing.T) {
 		switch request.URL.Path {
 		case "/openapi/bot/getMe":
 			_, _ = io.WriteString(writer, `{"ok":true,"result":{"user_id":"bot-1","name":"Monitor"}}`)
-		case "/openapi/bot/sendMessage":
-			if err := request.ParseForm(); err != nil {
-				t.Errorf("ParseForm() error = %v", err)
+		case "/openapi/v2/bot/sendMessage":
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Errorf("decode v2 payload: %v", err)
 			}
-			markup := request.Form.Get("reply_markup")
-			if request.Form.Get("text") != "<b>Stage alert</b>" ||
-				request.Form.Get("parse_mode") != "HTML" ||
+			markupBytes, _ := json.Marshal(payload["reply_markup"])
+			markup := string(markupBytes)
+			if payload["content"] != "<b>Stage alert</b>" ||
+				payload["parse_mode"] != "HTML" ||
 				!strings.Contains(markup, "View all events") ||
 				!strings.Contains(markup, "https://app.example/#aggregateEventsSection") {
-				encoded, _ := json.Marshal(request.Form)
+				encoded, _ := json.Marshal(payload)
 				t.Errorf("unexpected action message form: %s", encoded)
 			}
 			_, _ = io.WriteString(writer, `{"ok":true,"result":{"message_id":"message-action"}}`)

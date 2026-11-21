@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/chain"
 	"github.com/ZanyK4502/DeBox-Asset-alert/internal/plans"
@@ -156,6 +157,9 @@ func (s *Service) prepareCombinationMember(
 	targetAddress := optionalString(input.TargetAddress)
 	var lastValue *string
 	var baseline any
+	var balanceReadSource string
+	var balanceReadDecimals *int
+	var balanceReadObservedAt *time.Time
 
 	switch input.RuleType {
 	case plans.ApprovalChange:
@@ -191,6 +195,7 @@ func (s *Service) prepareCombinationMember(
 		lastValue = stringPointer(value.Cursor)
 		baseline = value
 	default:
+		readAt := time.Now().UTC()
 		value, err := s.deps.Chain.Balance(
 			ctx,
 			walletAddress,
@@ -198,6 +203,10 @@ func (s *Service) prepareCombinationMember(
 			profile.Key,
 			s.deps.DefaultChainKey,
 		)
+		if err != nil {
+			return store.CreateWatchRuleParams{}, nil, err
+		}
+		balanceReadSource, balanceReadDecimals, balanceReadObservedAt, err = walletBalanceCreationEvidence(value, walletAddress, input.TokenAddress, profile.Key, readAt)
 		if err != nil {
 			return store.CreateWatchRuleParams{}, nil, err
 		}
@@ -210,17 +219,20 @@ func (s *Service) prepareCombinationMember(
 	}
 
 	return store.CreateWatchRuleParams{
-		DeBoxUserID:          deboxUserID,
-		ChainKey:             profile.Key,
-		ChainID:              int32(profile.ChainID),
-		WalletAddress:        walletAddress,
-		TokenAddress:         tokenAddress,
-		TargetAddress:        targetAddress,
-		TargetLabel:          strings.TrimSpace(input.TargetLabel),
-		RuleType:             input.RuleType,
-		Threshold:            threshold,
-		NotificationLanguage: input.NotificationLanguage,
-		LastValue:            lastValue,
+		DeBoxUserID:           deboxUserID,
+		ChainKey:              profile.Key,
+		ChainID:               int32(profile.ChainID),
+		WalletAddress:         walletAddress,
+		TokenAddress:          tokenAddress,
+		TargetAddress:         targetAddress,
+		TargetLabel:           strings.TrimSpace(input.TargetLabel),
+		RuleType:              input.RuleType,
+		Threshold:             threshold,
+		NotificationLanguage:  input.NotificationLanguage,
+		LastValue:             lastValue,
+		BalanceReadSource:     balanceReadSource,
+		BalanceReadDecimals:   balanceReadDecimals,
+		BalanceReadObservedAt: balanceReadObservedAt,
 	}, baseline, nil
 }
 

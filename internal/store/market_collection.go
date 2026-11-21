@@ -4,13 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var marketHashPattern = regexp.MustCompile(`^0x[0-9a-f]{64}$`)
@@ -121,73 +117,6 @@ const marketCollectionProjectColumns = `
 	mp.updated_at
 `
 
-// MarketTaskLock is connection scoped so multiple Railway instances cannot run
-// the same collector task concurrently.
-type MarketTaskLock struct {
-	conn *pgxpool.Conn
-	key  int64
-	once sync.Once
-}
-
-func (s *Store) TryMarketTaskLock(
-	ctx context.Context,
-	task string,
-) (*MarketTaskLock, bool, error) {
-	if s.pool == nil {
-		return nil, false, ErrPoolRequired
-	}
-	task = strings.TrimSpace(task)
-	if task == "" {
-		return nil, false, fmt.Errorf("market task name is required")
-	}
-	hasher := fnv.New64a()
-	_, _ = hasher.Write([]byte("debox-market-collector:" + task))
-	key := int64(hasher.Sum64())
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return nil, false, fmt.Errorf("acquire market task connection: %w", err)
-	}
-	var acquired bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired); err != nil {
-		conn.Release()
-		return nil, false, fmt.Errorf("try market task lock: %w", err)
-	}
-	if !acquired {
-		conn.Release()
-		return nil, false, nil
-	}
-	return &MarketTaskLock{conn: conn, key: key}, true, nil
-}
-
-func (lock *MarketTaskLock) Unlock(ctx context.Context) (err error) {
-	lock.once.Do(func() {
-		base := context.Background()
-		if ctx != nil {
-			base = context.WithoutCancel(ctx)
-		}
-		unlockCtx, cancel := context.WithTimeout(base, 5*time.Second)
-		defer cancel()
-		var unlocked bool
-		if scanErr := lock.conn.QueryRow(
-			unlockCtx,
-			"SELECT pg_advisory_unlock($1)",
-			lock.key,
-		).Scan(&unlocked); scanErr != nil {
-			raw := lock.conn.Hijack()
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			_ = raw.Close(closeCtx)
-			err = fmt.Errorf("unlock market task: %w", scanErr)
-			return
-		}
-		lock.conn.Release()
-		if !unlocked {
-			err = fmt.Errorf("unlock market task: lock was not held")
-		}
-	})
-	return err
-}
-
 func (s *Store) ListActiveMarketProjectsForCollection(
 	ctx context.Context,
 	chainID int64,
@@ -218,27 +147,18 @@ func (s *Store) ListMarketProjectsDueHolderRefresh(
 	notAfter time.Time,
 	limit int,
 ) ([]MarketProject, error) {
-	projects, err := collectMany[MarketProject](ctx, s.db, `
-		SELECT DISTINCT ON (mad.chain_id, mad.token_address)
-		       `+marketCollectionProjectColumns+`
-		FROM market_projects mp
-		JOIN market_project_deployments mpd
-		  ON mpd.market_project_id = mp.id
-		 AND mpd.status = 'active'
-		JOIN market_asset_deployments mad
-		  ON mad.id = mpd.market_asset_deployment_id
-		WHERE mad.chain_id = $1
-		  AND mp.status = 'active'
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM market_holders mh
-			WHERE mh.chain_id = mad.chain_id
-			  AND mh.token_address = mad.token_address
-			  AND mh.updated_at > $2
-		  )
-		ORDER BY mad.chain_id, mad.token_address, mp.created_at, mp.id
-		LIMIT $3
-	`, chainID, notAfter.UTC(), clamp(limit, 1, 500))
+	if !s.holderRefreshChainAllowed(chainID) {
+		return []MarketProject{}, nil
+	}
+	projects, err := collectMany[MarketProject](ctx, s.db, `WITH demand AS NOT MATERIALIZED (`+holderDemandSourceSQL()+`), chosen AS (
+ SELECT DISTINCT ON(demand.chain_id,demand.token_address) demand.*
+ FROM demand LEFT JOIN market_holder_refresh_states state ON state.chain_id=demand.chain_id AND state.token_address=demand.token_address
+ WHERE demand.chain_id=$1 AND(state.last_attempt_at IS NULL OR state.last_attempt_at<=$2)
+ ORDER BY demand.chain_id,demand.token_address,demand.created_at,demand.id,demand.market_project_deployment_id
+ ) SELECT chosen.* FROM chosen
+ LEFT JOIN market_holder_refresh_states state
+ ON state.chain_id=chosen.chain_id AND state.token_address=chosen.token_address
+ ORDER BY state.last_attempt_at NULLS FIRST,chosen.chain_id,chosen.token_address LIMIT $3`, chainID, notAfter.UTC(), clamp(limit, 1, 500))
 	if err != nil {
 		return nil, fmt.Errorf("list projects due holder refresh: %w", err)
 	}
@@ -273,9 +193,13 @@ func (s *Store) ListMarketCollectionTargets(
 		  AND p.chain_id = mad.chain_id
 		  AND mpp.selected = 1
 		ORDER BY p.id, mp.id
+		LIMIT 10001
 	`, chainID)
 	if err != nil {
 		return nil, fmt.Errorf("list market collection targets: %w", err)
+	}
+	if len(values) > 10000 {
+		return nil, fmt.Errorf("market collection target capacity exceeds 10000 rows")
 	}
 	return values, nil
 }
@@ -288,6 +212,23 @@ func (s *Store) EnsureMarketProjectPool(
 	params EnsureMarketProjectPoolParams,
 ) (MarketProjectPool, error) {
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketProjectPool, error) {
+		var policy QuotaPolicy
+		guardSelection := params.SelectIfNone && s.marketScopePolicies != nil
+		if guardSelection {
+			checkedCtx, cancel, err := s.beginResourceCapacityCheck(ctx, tx, params.DeBoxUserID)
+			if err != nil {
+				return MarketProjectPool{}, err
+			}
+			defer cancel()
+			ctx = checkedCtx
+			if err := lockUser(ctx, tx, params.DeBoxUserID); err != nil {
+				return MarketProjectPool{}, err
+			}
+			policy, err = s.marketScopePolicy(ctx, tx, params.DeBoxUserID, policy)
+			if err != nil {
+				return MarketProjectPool{}, err
+			}
+		}
 		var projectChainID, poolChainID int64
 		var projectDeploymentID *int64
 		var token, token0, token1 string
@@ -393,6 +334,14 @@ func (s *Store) EnsureMarketProjectPool(
 				return MarketProjectPool{}, fmt.Errorf("set discovered primary pool: %w", err)
 			}
 		}
+		if guardSelection && selectPool {
+			if err := validateMarketProjectScope(ctx, tx, params.MarketProjectID, params.DeBoxUserID, policy); err != nil {
+				return MarketProjectPool{}, err
+			}
+			if err := s.checkResourceCapacity(ctx, tx); err != nil {
+				return MarketProjectPool{}, err
+			}
+		}
 		return value, nil
 	})
 }
@@ -415,13 +364,22 @@ func (s *Store) UpsertMarketScannedBlock(
 		scannedAt = time.Now().UTC()
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketScannedBlock, error) {
-		if _, err := tx.Exec(ctx, `
+		if err := lockMarketTradeChain(ctx, tx, params.ChainID); err != nil {
+			return MarketScannedBlock{}, err
+		}
+		replaced, err := tx.Exec(ctx, `
 			UPDATE market_scanned_blocks
 			SET canonical = 0, updated_at = NOW()
 			WHERE chain_id = $1 AND cursor_key = $2 AND block_number = $3
 			  AND block_hash <> $4 AND canonical = 1
-		`, params.ChainID, params.CursorKey, params.BlockNumber, params.BlockHash); err != nil {
+		`, params.ChainID, params.CursorKey, params.BlockNumber, params.BlockHash)
+		if err != nil {
 			return MarketScannedBlock{}, fmt.Errorf("retire replaced market block: %w", err)
+		}
+		if replaced.RowsAffected() > 0 {
+			if err := rewindMarketScanCoverage(ctx, tx, params.ChainID, "", params.BlockNumber-1); err != nil {
+				return MarketScannedBlock{}, err
+			}
 		}
 		value, err := collectOne[MarketScannedBlock](ctx, tx, `
 			INSERT INTO market_scanned_blocks (
@@ -482,6 +440,9 @@ func (s *Store) ReconcileMarketReorg(
 		return MarketReorgResult{}, ErrInvalidMarketCursor
 	}
 	return withTxValue(ctx, s.db, func(tx DBTX) (MarketReorgResult, error) {
+		if err := lockMarketTradeChain(ctx, tx, chainID); err != nil {
+			return MarketReorgResult{}, err
+		}
 		blockTag, err := tx.Exec(ctx, `
 			UPDATE market_scanned_blocks
 			SET canonical = 0, updated_at = NOW()
@@ -501,14 +462,23 @@ func (s *Store) ReconcileMarketReorg(
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE market_rule_events mre
-			SET notification_status = 'skipped',
-			    notification_error = 'source event was removed by a chain reorganization'
+			SET notification_status='skipped',delivery_outcome=CASE WHEN notification_send_started_at IS NOT NULL OR(notification_lease_token=0 AND(notification_status='sending' OR(notification_status IN('pending','failed') AND delivery_outcome=''))) THEN 'unknown' ELSE 'cancelled' END,
+ notification_error=LEFT(CASE WHEN notification_error='' THEN 'source event was removed by a chain reorganization' ELSE notification_error||'; source event was removed by a chain reorganization' END,2000)
 			FROM market_events me
 			WHERE me.id = mre.market_event_id
 			  AND me.chain_id = $1 AND me.block_number > $2 AND me.reorged = 1
-			  AND mre.notification_status IN ('pending', 'sending', 'failed')
+			  AND mre.notification_status IN ('pending', 'sending', 'failed', 'staged', 'combined') AND mre.delivery_outcome<>'unknown'
 		`, chainID, ancestorBlock); err != nil {
 			return MarketReorgResult{}, fmt.Errorf("skip reorged market notifications: %w", err)
+		}
+		if err := retireMarketTradeReceipts(ctx, tx, chainID, ancestorBlock+1, nil, ""); err != nil {
+			return MarketReorgResult{}, err
+		}
+		if err := reconcileReorgedFourMemeTokens(ctx, tx, chainID, ancestorBlock+1, nil); err != nil {
+			return MarketReorgResult{}, err
+		}
+		if err := rewindMarketScanCoverage(ctx, tx, chainID, "", ancestorBlock); err != nil {
+			return MarketReorgResult{}, err
 		}
 		cursor, err := collectOne[MarketChainCursor](ctx, tx, `
 			UPDATE market_chain_cursors
@@ -879,6 +849,13 @@ func (s *Store) CleanupMarketCollectionData(
 	blockBefore time.Time,
 ) (int64, error) {
 	var removed int64
+	// Publish the retention boundary before deleting facts. An evaluator using
+	// a repeatable-read snapshot sees either the old facts or the new boundary.
+	if _, err := s.db.Exec(ctx, `UPDATE market_scan_coverage
+	 SET facts_retained_after=GREATEST(facts_retained_after,$1::timestamptz)
+	 WHERE facts_retained_after<$1`, eventBefore.UTC()); err != nil {
+		return 0, fmt.Errorf("record market fact retention boundary: %w", err)
+	}
 	for _, item := range []struct {
 		query string
 		arg   time.Time
@@ -887,6 +864,9 @@ func (s *Store) CleanupMarketCollectionData(
 		  WHERE received_at < $1 AND processing_status IN ('processed', 'dead')`, webhookBefore.UTC()},
 		{`DELETE FROM market_events
 		  WHERE occurred_at < $1
+		    AND NOT EXISTS (
+		        SELECT 1 FROM market_four_meme_states f WHERE f.source_event_id=market_events.id
+		    )
 		    AND NOT EXISTS (
 		        SELECT 1 FROM market_rule_events mre WHERE mre.market_event_id = market_events.id
 		    )`, eventBefore.UTC()},
@@ -899,5 +879,24 @@ func (s *Store) CleanupMarketCollectionData(
 		}
 		removed += tag.RowsAffected()
 	}
+	coverage, err := s.db.Exec(ctx, `WITH expired AS (
+	 SELECT id FROM market_scan_coverage WHERE through_at<$1 ORDER BY through_at,id LIMIT 1000 FOR UPDATE SKIP LOCKED
+	) DELETE FROM market_scan_coverage c USING expired e WHERE c.id=e.id`, eventBefore.UTC())
+	if err != nil {
+		return removed, fmt.Errorf("cleanup expired market scan coverage: %w", err)
+	}
+	removed += coverage.RowsAffected()
+	orphans, err := s.CleanupOrphanMarketTradeData(ctx, eventBefore)
+	if err != nil {
+		return removed, err
+	}
+	removed += orphans.ReceiptsDeleted + orphans.ScopesDeleted
+	// New holder change history has its own fixed 30-day policy. Existing
+	// unmanaged snapshots and frozen/reference facts are protected by the reader.
+	holders, err := s.CleanupManagedMarketHolderHistory(ctx, time.Now().UTC().Add(-30*24*time.Hour))
+	if err != nil {
+		return removed, err
+	}
+	removed += holders
 	return removed, nil
 }

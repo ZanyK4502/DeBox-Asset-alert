@@ -13,21 +13,25 @@ import (
 )
 
 type fakeRepository struct {
-	rules              []store.WatchRule
-	dailyEvents        int64
-	nextEventID        int64
-	calls              []string
-	lastValue          string
-	lastStatus         string
-	lastError          string
-	stageParams        store.RecordStageTriggerParams
-	stageResult        store.StageTriggerResult
-	combinationParams  store.RecordCombinationTriggerParams
-	combinationResult  store.CombinationTriggerResult
-	snapshots          []store.CreateNotificationDetailSnapshotParams
-	snapshotErr        error
-	expiredUsersPaused int64
-	expiryErr          error
+	rules                []store.WatchRule
+	dailyEvents          int64
+	nextEventID          int64
+	calls                []string
+	lastValue            string
+	lastStatus           string
+	lastError            string
+	stageParams          store.RecordStageTriggerParams
+	stageResult          store.StageTriggerResult
+	combinationParams    store.RecordCombinationTriggerParams
+	combinationResult    store.CombinationTriggerResult
+	snapshots            []store.CreateNotificationDetailSnapshotParams
+	snapshotErr          error
+	expiredUsersPaused   int64
+	expiryErr            error
+	walletQueue          []store.WalletNotificationOutbox
+	walletRules          map[int64]store.WatchRule
+	walletFinishErr      error
+	walletEligibilityErr error
 }
 
 func (f *fakeRepository) ApplyExpiredEntitlementFallbacks(
@@ -169,14 +173,41 @@ type fakeChain struct {
 }
 
 func (f *fakeChain) Balance(
-	context.Context,
-	string,
-	string,
-	string,
-	string,
+	_ context.Context,
+	wallet string,
+	token string,
+	chainKey string,
+	fallback string,
 ) (chain.BalanceResult, error) {
 	f.calls = append(f.calls, "balance")
-	return f.balance, nil
+	result := f.balance
+	// Legacy amount/threshold fixtures predate explicit source provenance. Give
+	// those fixtures valid evidence without changing their original amounts or
+	// assertions. Invalid-source tests use a separate raw source below.
+	if token != "" && result.ReadSource == "" && result.ReadDecimals == nil {
+		result.ReadSource = chain.WalletBalanceReadSource
+		decimals := result.Decimals
+		result.ReadDecimals = &decimals
+	}
+	if token != "" {
+		profile, err := chain.ChainProfile(chainKey, fallback)
+		if err != nil {
+			return chain.BalanceResult{}, err
+		}
+		if result.ChainKey == "" {
+			result.ChainKey = profile.Key
+		}
+		if result.ChainID == 0 {
+			result.ChainID = profile.ChainID
+		}
+		if result.WalletAddress == "" {
+			result.WalletAddress = wallet
+		}
+		if result.TokenAddress == nil {
+			result.TokenAddress = &token
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeChain) TokenAllowance(
@@ -689,11 +720,11 @@ func TestNotificationFailureIsRecorded(t *testing.T) {
 	if result.Status != "error" || !strings.Contains(result.Error, "DeBox unavailable") {
 		t.Fatalf("result = %#v", result)
 	}
-	if repository.lastStatus != "failed" || repository.lastError != "DeBox unavailable" {
+	if repository.lastStatus != "unknown" || repository.lastError != "DeBox unavailable" {
 		t.Fatalf("notification state = %q/%q", repository.lastStatus, repository.lastError)
 	}
 	wantCalls := []string{
-		"update_rule", "create_event", "create_snapshot", "send", "update_event_failed",
+		"update_rule", "create_event", "create_snapshot", "send", "update_event_unknown",
 	}
 	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
@@ -875,7 +906,7 @@ func TestAddressSnapshotFailurePreventsNotificationDelivery(t *testing.T) {
 		t.Fatalf("notification was sent without a snapshot: %q", notifier.message)
 	}
 	wantCalls := []string{
-		"update_rule", "create_event", "create_snapshot", "update_event_failed",
+		"update_rule", "create_event", "create_snapshot",
 	}
 	if strings.Join(repository.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %v, want %v", repository.calls, wantCalls)
